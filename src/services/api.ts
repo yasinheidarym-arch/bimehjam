@@ -205,8 +205,10 @@ export const aiPolicyService = {
   updatePolicy: async (
     id: string,
     data: {
+      goftinoTopicId?: string;
+      goftinoTopicTitle?: string;
+      insuranceCategoryId?: string;
       mode?: string;
-      priority?: string;
       fallbackMessage?: string;
       active?: boolean;
     }
@@ -216,6 +218,15 @@ export const aiPolicyService = {
       data
     );
   },
+  createPolicy: async (data: {
+    goftinoTopicId: string;
+    goftinoTopicTitle: string;
+    insuranceCategoryId: string;
+    mode: 'AI_ALLOWED' | 'HUMAN_ONLY';
+    active: boolean;
+    fallbackMessage?: string;
+  }) => apiClient.post('/settings/ai-response-policies', data),
+  deletePolicy: async (id: string) => apiClient.delete(`/settings/ai-response-policies/${id}`),
 };
 
 

@@ -368,7 +368,7 @@ export async function ensureTrainingCenterSeeded() {
 export async function retrieveRelevantKnowledgeFromTrainingCenter(params: {
   userMessage: string;
   conversationHistoryText?: string;
-  customerContext?: { name?: string; city?: string; pageUrl?: string; interestedInsuranceTypes?: string; categoryId?: string | null };
+  customerContext?: { name?: string; city?: string; pageUrl?: string; interestedInsuranceTypes?: string; categoryId?: string | null; restrictToCategory?: boolean };
   existingCollectedData?: Record<string, any>;
 }): Promise<ExtractedKnowledgePayload> {
   // Ensure database has seed data
@@ -485,7 +485,7 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
     ) || null;
   }
 
-  if (!matchedCategoryRaw && activeCategories.length > 0) {
+  if (!matchedCategoryRaw && !params.customerContext?.restrictToCategory && activeCategories.length > 0) {
     const scoredCategories = activeCategories
       .map((category) => ({
         category,
@@ -743,10 +743,9 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
   console.log("====================================");
 
   // 3. Fetch Strictly Relevant FAQs (Top 2 max)
-  const allFaqs = await prisma.fAQ.findMany({
-    where: { status: 'APPROVED' },
-    orderBy: { priority: 'desc' },
-  });
+  const allFaqs = params.customerContext?.restrictToCategory
+    ? []
+    : await prisma.fAQ.findMany({ where: { status: 'APPROVED' }, orderBy: { priority: 'desc' } });
 
   const relevantFaqs = allFaqs
     .filter((f) => {
@@ -784,9 +783,9 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
     }));
 
   // 5. Fetch Matched Customer Objections (if customer is hesitating / objecting)
-  const allObjections = await prisma.customerObjection.findMany({
-    where: { status: 'ACTIVE' },
-  });
+  const allObjections = params.customerContext?.restrictToCategory
+    ? []
+    : await prisma.customerObjection.findMany({ where: { status: 'ACTIVE' } });
 
   const isPriceObjection = fullContextText.includes('گران') || fullContextText.includes('تخفیف بیشتر') || fullContextText.includes('چرا قیمت نمیدید') || fullContextText.includes('چرا سوال میپرسید');
   const isInstallmentObjection = fullContextText.includes('چک') || fullContextText.includes('سفته') || fullContextText.includes('ضامن');

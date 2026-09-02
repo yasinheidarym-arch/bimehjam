@@ -139,8 +139,10 @@ export async function processBrainLayer(params: {
   conversation: any;
   userMessageContent: string;
   messageHistory: any[];
+  allowedCategoryId?: string;
+  goftinoPolicyTitle?: string;
 }): Promise<BrainResult> {
-  const { customer, conversation, userMessageContent, messageHistory } = params;
+  const { customer, conversation, userMessageContent, messageHistory, allowedCategoryId, goftinoPolicyTitle } = params;
 
   const historyText = messageHistory
     .map((m) => `${m.senderType === 'CUSTOMER' ? 'مشتری' : 'مشاور بیمه جم'}: ${m.content}`)
@@ -184,9 +186,8 @@ export async function processBrainLayer(params: {
       city: customer.city,
       pageUrl: typeof customerMetadata.lastUrl === 'string' ? customerMetadata.lastUrl : undefined,
       interestedInsuranceTypes: customer.interestedInsuranceTypes,
-      categoryId: typeof customerMetadata.goftinoCategoryId === 'string'
-        ? customerMetadata.goftinoCategoryId
-        : null,
+      categoryId: allowedCategoryId || null,
+      restrictToCategory: Boolean(allowedCategoryId),
     },
     existingCollectedData,
   });
@@ -225,6 +226,9 @@ export async function processBrainLayer(params: {
 
 شما نباید این موارد را دوباره تحلیل یا تغییر دهید.
 وظیفه شما فقط تولید بهترین پاسخ ممکن بر اساس Context ارائه شده است.
+
+${allowedCategoryId ? `رشتهٔ مجاز گفتینو: «${goftinoPolicyTitle || 'ثبت‌شده'}»
+فقط دانش و قوانین دستهٔ بیمهٔ مجازِ همین رشته و زیرمجموعه‌های آن را استفاده کن.` : ''}
 
 
 ==============================

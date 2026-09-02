@@ -10,7 +10,8 @@
     "clean": "rm -rf dist server.cjs",
     "lint": "tsc --noEmit",
     "verify": "node scripts/verify.mjs",
-    "test:category-knowledge": "tsx --test tests/categoryKnowledgeScope.test.ts"
+    "test:category-knowledge": "tsx --test tests/categoryKnowledgeScope.test.ts",
+    "test:goftino-ai-policies": "tsx --test tests/goftinoAiResponsePolicy.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
