@@ -168,6 +168,8 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     description: '',
     status: 'ACTIVE',
     sortOrder: 0,
+    aiKnowledgeArticle: '',
+    aiRules: '',
   });
 
   const [subCategoryForm, setSubCategoryForm] = useState({
@@ -853,6 +855,8 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
         description: category.description || '',
         status: category.status || 'ACTIVE',
         sortOrder: category.sortOrder || 0,
+        aiKnowledgeArticle: category.aiKnowledgeArticle || '',
+        aiRules: category.aiRules || '',
       });
     } else {
       setCategoryForm({
@@ -861,6 +865,8 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
         description: '',
         status: 'ACTIVE',
         sortOrder: insuranceCategories.length,
+        aiKnowledgeArticle: '',
+        aiRules: '',
       });
     }
 
@@ -2136,6 +2142,42 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                   rows={3}
                   placeholder="توضیح کوتاه درباره این رشته بیمه"
                   className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm resize-none focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-2">
+                  محتوای دانشی دسته اصلی
+                </label>
+                <textarea
+                  value={categoryForm.aiKnowledgeArticle}
+                  onChange={(e) =>
+                    setCategoryForm({
+                      ...categoryForm,
+                      aiKnowledgeArticle: e.target.value,
+                    })
+                  }
+                  rows={8}
+                  placeholder="پوشش‌ها، شرایط، استثناها و نکات معتبر این دسته را بنویسید. تا زمانی که زیرمجموعه مشخص نشده، AI فقط از این محتوا استفاده می‌کند."
+                  className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm resize-y focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-2">
+                  قوانین AI دسته اصلی
+                </label>
+                <textarea
+                  value={categoryForm.aiRules}
+                  onChange={(e) =>
+                    setCategoryForm({
+                      ...categoryForm,
+                      aiRules: e.target.value,
+                    })
+                  }
+                  rows={6}
+                  placeholder="قوانین رفتاری و محدودیت‌های AI برای تمام زیرمجموعه‌های این دسته"
+                  className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-sm resize-y focus:outline-none focus:border-indigo-500"
                 />
               </div>
 

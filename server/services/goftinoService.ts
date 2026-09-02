@@ -2,6 +2,7 @@ import prisma from '../db/client';
 import { runAiPipelineForMessage, createAiLog } from './aiPipelineService';
 import { getAiMode } from './settingService';
 import { getGoftinoUserData, getGoftinoVisitedPages } from './goftinoUserService';
+import { resolveGoftinoCategoryId } from './categoryKnowledgeScope';
 
 export interface GoftinoWebhookPayload {
   event?: string;
@@ -60,6 +61,27 @@ function mapGoftinoTopicToCategory(topic?: string | null) {
   if (topic.includes("مدیریت")) return "MANAGEMENT";
 
   return "OTHER";
+}
+
+async function resolveSelectedCategoryId(topic?: string | null) {
+  if (!topic) return null;
+
+  const categories = await prisma.insuranceCategory.findMany({
+    where: { status: 'ACTIVE' },
+    select: { id: true, slug: true, name: true },
+  });
+
+  return resolveGoftinoCategoryId(categories, topic);
+}
+
+function parseCustomerMetadata(value?: string | null): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return typeof parsed === 'object' && parsed !== null ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
 }
 
 export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
@@ -178,6 +200,7 @@ export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
 
   console.log('📱 Form Phone:', formPhone || 'none');
   console.log('🏷️ Selected Topic:', selectedTopic || 'none');
+  const selectedCategoryId = await resolveSelectedCategoryId(selectedTopic);
 
   // 4. Create or update Customer (isolated by userId / chatId)
   let customer = await prisma.customer.findFirst({
@@ -189,7 +212,8 @@ export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
     },
   });
 
-    if (customer) {
+  if (customer) {
+      const previousMetadata = parseCustomerMetadata(customer.metadata);
       customer = await prisma.customer.update({
         where: { id: customer.id },
         data: {
@@ -197,7 +221,13 @@ export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
           goftinoChatId: String(chatId),
           ...(formPhone && !customer.phone ? { phone: String(formPhone) } : {}),
           ...(selectedTopic
-            ? { interestedInsuranceTypes: JSON.stringify([selectedTopic]) }
+            ? {
+                interestedInsuranceTypes: JSON.stringify([selectedTopic]),
+                metadata: JSON.stringify({
+                  ...previousMetadata,
+                  goftinoCategoryId: selectedCategoryId,
+                }),
+              }
             : {}),
           ...(senderName && customer.name === 'مشتری گفتینو' ? { name: senderName } : {}),
         },
@@ -232,6 +262,7 @@ export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
               ip: goftinoUser?.ip || null,
               lastUrl: goftinoUser?.last_url || null,
               pageView: goftinoUser?.page_view || null,
+              goftinoCategoryId: selectedCategoryId,
             }),
             lastActivity: new Date(),
           },
@@ -266,6 +297,10 @@ export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
               ...(selectedTopic
                 ? {
                     interestedInsuranceTypes: JSON.stringify([selectedTopic]),
+                    metadata: JSON.stringify({
+                      ...parseCustomerMetadata(customer.metadata),
+                      goftinoCategoryId: selectedCategoryId,
+                    }),
                   }
                 : {}),
             },

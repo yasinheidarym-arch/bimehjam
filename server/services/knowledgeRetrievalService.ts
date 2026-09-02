@@ -1,4 +1,5 @@
 import prisma from '../db/client';
+import { categoryKnowledgeScope, composeScopedKnowledge } from './categoryKnowledgeScope';
 
 const CATEGORY_DB_MAP: Record<string, string> = {
   VEHICLE: 'خودرو',
@@ -61,6 +62,12 @@ export interface ExtractedKnowledgePayload {
   }>;
   promptFormattedKnowledge: string;
   promptFormattedRules: string;
+  productKnowledgeAvailable: boolean;
+  productSelectionRequired: boolean;
+  noRelevantKnowledge: boolean;
+  matchedCategory: string | null;
+  matchedSubCategory: string | null;
+  relevantArticles: Array<{ id: string; title: string; content: string }>;
 }
 
 /**
@@ -361,7 +368,7 @@ export async function ensureTrainingCenterSeeded() {
 export async function retrieveRelevantKnowledgeFromTrainingCenter(params: {
   userMessage: string;
   conversationHistoryText?: string;
-  customerContext?: { name?: string; city?: string; pageUrl?: string };
+  customerContext?: { name?: string; city?: string; pageUrl?: string; interestedInsuranceTypes?: string; categoryId?: string | null };
   existingCollectedData?: Record<string, any>;
 }): Promise<ExtractedKnowledgePayload> {
   // Ensure database has seed data
@@ -390,7 +397,7 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
   });
 
   // Filter or prioritize rules based on context
-  const appliedRules = activeRules.map((r) => ({
+  let appliedRules = activeRules.map((r) => ({
     id: r.id,
     title: r.title,
     directive: r.directive,
@@ -472,7 +479,13 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
   // Categories are resolved entirely from the database.
   // No hard-coded category names are used here.
   // ---------------------------------------------------------
-  if (activeCategories.length > 0) {
+  if (params.customerContext?.categoryId) {
+    matchedCategoryRaw = activeCategories.find(
+      (category) => category.id === params.customerContext?.categoryId,
+    ) || null;
+  }
+
+  if (!matchedCategoryRaw && activeCategories.length > 0) {
     const scoredCategories = activeCategories
       .map((category) => ({
         category,
@@ -487,6 +500,34 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
       matchedCategoryRaw = scoredCategories[0].category;
     }
   }
+
+  const categoryScope = matchedCategoryRaw
+    ? categoryKnowledgeScope(matchedCategoryRaw.id)
+    : null;
+  const relevantArticles = categoryScope
+    ? await prisma.knowledgeArticle.findMany({
+        where: { status: 'PUBLISHED', category: categoryScope },
+        orderBy: { updatedAt: 'desc' },
+      })
+    : [];
+
+  // Global rules always apply. Category rules are appended after them so they
+  // can provide more specific direction for the selected category.
+  appliedRules = appliedRules.filter((rule) =>
+    !rule.category.startsWith('CATEGORY_KNOWLEDGE:'),
+  );
+  const categoryRules = categoryScope
+    ? activeRules
+        .filter((rule) => rule.category === categoryScope)
+        .map((rule) => ({
+          id: rule.id,
+          title: rule.title,
+          directive: rule.directive,
+          enforcementLevel: rule.enforcementLevel,
+          category: rule.category,
+        }))
+    : [];
+  appliedRules.push(...categoryRules);
 
   // ---------------------------------------------------------
   // 2.4 Match dynamic sub-category
@@ -766,6 +807,12 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
 
   // 6. Build Formatted Knowledge Context String
   const knowledgeParts: string[] = [];
+  const scopedKnowledge = composeScopedKnowledge(
+    relevantArticles.map((article) => `📚 دانش دسته اصلی «${matchedCategoryRaw?.name}»:\n• ${article.title}\n${article.content}`),
+    matchedProduct?.aiKnowledgeArticle || '',
+  );
+
+  if (relevantArticles.length > 0) knowledgeParts.push(...scopedKnowledge.sections.slice(0, relevantArticles.length));
 
   if (matchedProduct) {
     knowledgeParts.push(
@@ -776,7 +823,7 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
 
     if (matchedProduct.aiKnowledgeArticle?.trim()) {
       knowledgeParts.push(
-        `📚 دانش تخصصی همین محصول:
+        `📚 دانش تخصصی زیرمجموعه/محصول (در تعارض با دانش دسته اصلی، این بخش اولویت دارد):
 ${matchedProduct.aiKnowledgeArticle.trim()}`
       );
     }
@@ -804,6 +851,9 @@ ${matchedProduct.aiRules.trim()}`
   }
 
   const promptFormattedKnowledge = knowledgeParts.join('\n\n');
+  const noRelevantKnowledge =
+    !scopedKnowledge.hasRelevantKnowledge &&
+    relevantFaqs.length === 0;
 
   // Format rules block
   const promptFormattedRules = appliedRules
@@ -816,6 +866,7 @@ ${matchedProduct.aiRules.trim()}`
 
     // Product context is only available after subcategory/product identification.
     productKnowledgeAvailable: !!matchedProduct,
+    noRelevantKnowledge,
 
     // If category is known but subcategory is missing,
     // AI should clarify the user's requested insurance type first.
@@ -826,6 +877,11 @@ ${matchedProduct.aiRules.trim()}`
     matchedSubCategory: matchedSubCategoryRaw?.name || null,
 
     relevantFaqs,
+    relevantArticles: relevantArticles.map((article) => ({
+      id: article.id,
+      title: article.title,
+      content: article.content,
+    })),
     matchedObjections,
     appliedRules,
     promptFormattedKnowledge,

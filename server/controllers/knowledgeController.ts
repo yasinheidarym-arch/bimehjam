@@ -15,6 +15,51 @@ import {
 } from '../services/productIntelligenceService';
 import { processBrainLayer } from '../services/brainLayerService';
 import { ensureTrainingCenterSeeded } from '../services/knowledgeRetrievalService';
+import { categoryKnowledgeScope } from '../services/categoryKnowledgeScope';
+
+async function attachCategoryKnowledge<T extends { id: string }>(categories: T[]) {
+  const scopes = categories.map((category) => categoryKnowledgeScope(category.id));
+  const [articles, rules] = await Promise.all([
+    prisma.knowledgeArticle.findMany({ where: { category: { in: scopes } } }),
+    prisma.aiRule.findMany({ where: { category: { in: scopes } } }),
+  ]);
+
+  return categories.map((category) => {
+    const scope = categoryKnowledgeScope(category.id);
+    return {
+      ...category,
+      aiKnowledgeArticle: articles.find((article) => article.category === scope)?.content || '',
+      aiRules: rules.find((rule) => rule.category === scope)?.directive || '',
+    };
+  });
+}
+
+async function saveCategoryKnowledge(category: { id: string; name: string }, articleContent?: unknown, rulesContent?: unknown) {
+  const scope = categoryKnowledgeScope(category.id);
+  const article = await prisma.knowledgeArticle.findFirst({ where: { category: scope } });
+  const rule = await prisma.aiRule.findFirst({ where: { category: scope } });
+  if (articleContent !== undefined) {
+    const content = String(articleContent || '').trim();
+    if (content) {
+      const data = { title: `دانش دسته: ${category.name}`, content, category: scope, tags: category.id, status: 'PUBLISHED' };
+      if (article) await prisma.knowledgeArticle.update({ where: { id: article.id }, data });
+      else await prisma.knowledgeArticle.create({ data });
+    } else if (article) {
+      await prisma.knowledgeArticle.delete({ where: { id: article.id } });
+    }
+  }
+
+  if (rulesContent !== undefined) {
+    const directive = String(rulesContent || '').trim();
+    if (directive) {
+      const data = { title: `قوانین AI دسته: ${category.name}`, directive, category: scope, status: 'ACTIVE', enforcementLevel: 'STRICT', sortOrder: 0 };
+      if (rule) await prisma.aiRule.update({ where: { id: rule.id }, data });
+      else await prisma.aiRule.create({ data });
+    } else if (rule) {
+      await prisma.aiRule.delete({ where: { id: rule.id } });
+    }
+  }
+}
 
 // Initial Seeding helper if DB is empty for Knowledge
 async function ensureSeedKnowledgeData() {
@@ -440,10 +485,11 @@ export async function getInsuranceCategories(req: Request, res: Response) {
       orderBy: { sortOrder: 'asc' },
     });
 
+    const data = await attachCategoryKnowledge(categories);
     return res.status(200).json({
       success: true,
-      count: categories.length,
-      data: categories,
+      count: data.length,
+      data,
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
@@ -452,7 +498,7 @@ export async function getInsuranceCategories(req: Request, res: Response) {
 
 export async function createInsuranceCategory(req: Request, res: Response) {
   try {
-    const { name, slug, description, status, sortOrder } = req.body;
+    const { name, slug, description, status, sortOrder, aiKnowledgeArticle, aiRules } = req.body;
 
     if (!name || !String(name).trim()) {
       return res.status(400).json({
@@ -481,9 +527,10 @@ export async function createInsuranceCategory(req: Request, res: Response) {
       },
     });
 
+    await saveCategoryKnowledge(category, aiKnowledgeArticle, aiRules);
     return res.status(201).json({
       success: true,
-      data: category,
+      data: (await attachCategoryKnowledge([category]))[0],
       message: 'دسته‌بندی با موفقیت ایجاد شد.',
     });
   } catch (error: any) {
@@ -494,7 +541,7 @@ export async function createInsuranceCategory(req: Request, res: Response) {
 export async function updateInsuranceCategory(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const { name, slug, description, status, sortOrder } = req.body;
+    const { name, slug, description, status, sortOrder, aiKnowledgeArticle, aiRules } = req.body;
 
     const category = await prisma.insuranceCategory.update({
       where: { id },
@@ -512,9 +559,10 @@ export async function updateInsuranceCategory(req: Request, res: Response) {
       },
     });
 
+    await saveCategoryKnowledge(category, aiKnowledgeArticle, aiRules);
     return res.status(200).json({
       success: true,
-      data: category,
+      data: (await attachCategoryKnowledge([category]))[0],
       message: 'دسته‌بندی با موفقیت به‌روزرسانی شد.',
     });
   } catch (error: any) {
@@ -548,9 +596,14 @@ export async function deleteInsuranceCategory(req: Request, res: Response) {
       });
     }
 
-    await prisma.insuranceCategory.delete({
+    const scope = categoryKnowledgeScope(id);
+    await prisma.$transaction([
+      prisma.knowledgeArticle.deleteMany({ where: { category: scope } }),
+      prisma.aiRule.deleteMany({ where: { category: scope } }),
+      prisma.insuranceCategory.delete({
       where: { id },
-    });
+      }),
+    ]);
 
     return res.status(200).json({
       success: true,

@@ -168,6 +168,13 @@ export async function processBrainLayer(params: {
   });
   console.log("============================================");
 
+  let customerMetadata: Record<string, unknown> = {};
+  try {
+    customerMetadata = customer.metadata ? JSON.parse(customer.metadata) : {};
+  } catch {
+    customerMetadata = {};
+  }
+
   // Step 1: Intelligent Knowledge Retrieval from AI Training Center (5 Sources)
   const extractedKnowledge = await retrieveRelevantKnowledgeFromTrainingCenter({
     userMessage: userMessageContent,
@@ -175,8 +182,11 @@ export async function processBrainLayer(params: {
     customerContext: {
       name: customer.name,
       city: customer.city,
-      pageUrl: customer.metadata ? JSON.parse(customer.metadata || '{}')?.lastUrl : undefined,
+      pageUrl: typeof customerMetadata.lastUrl === 'string' ? customerMetadata.lastUrl : undefined,
       interestedInsuranceTypes: customer.interestedInsuranceTypes,
+      categoryId: typeof customerMetadata.goftinoCategoryId === 'string'
+        ? customerMetadata.goftinoCategoryId
+        : null,
     },
     existingCollectedData,
   });
@@ -348,6 +358,14 @@ ${extractedKnowledge.productSelectionRequired
 `
   : extractedKnowledge.promptFormattedKnowledge || 'اطلاعات تخصصی مرتبطی در مرکز آموزش ثبت نشده است.'
 }
+
+${extractedKnowledge.noRelevantKnowledge
+  ? `
+⚠️ محتوای معتبر مرتبطی برای این دسته ثبت نشده است.
+هیچ ویژگی، پوشش، قیمت، شرط یا استثنای بیمه‌ای را حدس نزن.
+فقط یک سؤال روشن‌کننده و کوتاه برای مشخص‌شدن زیرمجموعه یا نیاز دقیق مشتری بپرس.
+`
+  : ''}
 
 
 ==============================
