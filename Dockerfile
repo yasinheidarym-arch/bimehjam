@@ -8,7 +8,10 @@ RUN apk add --no-cache openssl libc6-compat
 COPY package.json ./
 RUN npm install
 
-COPY prisma ./prisma
+# Keep versioned migrations in the build context explicitly. Runtime migrations
+# are deliberately explicit-only, but Prisma must be able to see their files.
+COPY prisma/schema.prisma ./prisma/schema.prisma
+COPY prisma/migrations ./prisma/migrations
 RUN npx prisma generate
 
 COPY . .
