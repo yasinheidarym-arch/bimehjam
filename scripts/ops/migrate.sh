@@ -27,6 +27,21 @@ git cat-file -e "${commit}^{commit}"
 git merge-base --is-ancestor "$commit" origin/main || { echo "Commit is not reachable from origin/main." >&2; exit 1; }
 git switch --detach --quiet "$commit"
 
+readonly SQLITE_VOLUME="bimehjam_data"
+image_id="$(docker compose images -q app)"
+[[ -n "$image_id" ]] || { echo "Migration image for app is not available; deploy the approved commit first." >&2; exit 1; }
+
+# The production volume is historically mounted at /app/prisma and masks the
+# versioned migration files shipped in the image. Mount the same SQLite volume
+# at /data in an isolated one-shot container so schema/migrations remain those
+# from the reviewed image. No application secrets or network access are used.
+run_prisma_migrate() {
+  docker run --rm --network none \
+    --volume "${SQLITE_VOLUME}:/data" \
+    --env DATABASE_URL="file:/data/dev.db" \
+    "$image_id" npx prisma "$@"
+}
+
 echo "Approved migration requested by: $approved_by"
 echo "Stopping application for an offline SQLite backup..."
 docker compose stop app
@@ -38,12 +53,11 @@ trap restart_app EXIT
 
 if [[ "$baseline_existing_schema" == true ]]; then
   echo "Recording the reviewed existing-schema baseline without changing application tables..."
-  docker compose run --rm --no-deps app \
-    npx prisma migrate resolve --applied 20260902000000_baseline_existing_schema
+  run_prisma_migrate migrate resolve --applied 20260902000000_baseline_existing_schema
 fi
 
 echo "Running explicit Prisma migration for $(git rev-parse --short HEAD)..."
-docker compose run --rm --no-deps app npx prisma migrate deploy
+run_prisma_migrate migrate deploy
 docker compose up --detach --no-deps app
 trap - EXIT
 
