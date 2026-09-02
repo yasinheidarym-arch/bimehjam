@@ -3,6 +3,7 @@ import { runAiPipelineForMessage, createAiLog } from './aiPipelineService';
 import { getAiMode } from './settingService';
 import { getGoftinoUserData, getGoftinoVisitedPages } from './goftinoUserService';
 import { resolveGoftinoAiPolicy } from './goftinoAiPolicyService';
+import { findGoftinoCatalogTopic } from './goftinoTopicCatalog';
 
 export interface GoftinoWebhookPayload {
   event?: string;
@@ -131,7 +132,12 @@ export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
   const isNonMessageEvent =
     eventName === 'click_button' || !hasRealCustomerContent;
 
-  const selectedTopic = extractGoftinoTopicSelection(payload);
+  const rawSelectedTopic = extractGoftinoTopicSelection(payload);
+  const catalogTopic = findGoftinoCatalogTopic(rawSelectedTopic.id, rawSelectedTopic.title);
+  const selectedTopic = {
+    id: catalogTopic?.id || rawSelectedTopic.id,
+    title: catalogTopic?.title || rawSelectedTopic.title,
+  };
 
   // Handle Event: close_chat
   if (eventName === 'close_chat') {

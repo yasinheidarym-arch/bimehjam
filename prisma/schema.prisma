@@ -181,7 +181,6 @@ model AiPrompt {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
-
 model InsuranceProduct {
   id                String              @id @default(uuid())
   name              String
@@ -492,7 +491,6 @@ model InsuranceCategory {
 
   subCategories InsuranceSubCategory[]
   products      InsuranceProduct[]
-  goftinoAiResponsePolicies GoftinoAiResponsePolicy[]
 }
 
 model InsuranceSubCategory {
@@ -555,20 +553,3 @@ model AiResponsePolicy {
   updatedAt DateTime @updatedAt
 }
 
-// Explicit allowlist for insurance responses that originate from Goftino.
-// The external identifier is supplied by Goftino (or registered manually by an
-// administrator when the integration does not expose a topic catalog).
-model GoftinoAiResponsePolicy {
-  id                  String            @id @default(uuid())
-  goftinoTopicId      String            @unique
-  goftinoTopicTitle   String
-  insuranceCategoryId String
-  insuranceCategory   InsuranceCategory @relation(fields: [insuranceCategoryId], references: [id], onDelete: Restrict)
-  mode                String            @default("AI_ALLOWED")
-  active              Boolean           @default(true)
-  fallbackMessage     String?
-  createdAt           DateTime          @default(now())
-  updatedAt           DateTime          @updatedAt
-
-  @@index([insuranceCategoryId])
-}

@@ -19,12 +19,8 @@ import UsersManagement from './components/UsersManagement';
 import { initialKnowledgeBase } from './data/knowledgeBase';
 
 import { GoftinoLogEntry, KnowledgeBaseData, AiMode } from './types';
-import {
-  settingService,
-  aiPolicyService
-} from './services/api';
+import { settingService } from './services/api';
 import { 
-  Shield, 
   Sparkles, 
   AlertCircle, 
   FileText, 
@@ -203,18 +199,12 @@ export default function App() {
   const [aiModeLoading, setAiModeLoading] = useState<boolean>(false);
   const [aiModeMessage, setAiModeMessage] = useState<string | null>(null);
 
-  // AI Response Policy State
-  const [aiPolicies, setAiPolicies] = useState<any[]>([]);
-  const [aiPoliciesLoading, setAiPoliciesLoading] = useState<boolean>(false);
-  const [aiPoliciesMessage, setAiPoliciesMessage] = useState<string | null>(null);
-
   // Fetch initial data from backend Express server
   useEffect(() => {
     fetchLogs();
     fetchKnowledgeBase();
     fetchRawWebhookLogs();
     fetchAiMode();
-    fetchAiPolicies();
   }, []);
 
   const fetchAiMode = async () => {
@@ -225,62 +215,6 @@ export default function App() {
       }
     } catch (err) {
       console.warn('Failed to fetch AI mode:', err);
-    }
-  };
-
-
-  const fetchAiPolicies = async () => {
-    try {
-      const data: any = await aiPolicyService.getPolicies();
-
-      console.log("AI POLICY RESPONSE:", data);
-
-      if (data?.success) {
-        setAiPolicies(data.data || []);
-      }
-    } catch (err) {
-      console.warn('Failed to fetch AI response policies:', err);
-    }
-  };
-
-
-  const handleUpdateAiPolicy = async (
-    id: string,
-    changes: any
-  ) => {
-    try {
-      setAiPoliciesLoading(true);
-      setAiPoliciesMessage(null);
-
-      const data: any = await aiPolicyService.updatePolicy(
-        id,
-        changes
-      );
-
-      if (data?.success) {
-        setAiPoliciesMessage(
-          'قانون پاسخگویی AI با موفقیت ذخیره شد.'
-        );
-
-        await fetchAiPolicies();
-      } else {
-        throw new Error(
-          data?.error || 'خطا در ذخیره تنظیمات'
-        );
-      }
-
-    } catch (err: any) {
-      console.error(
-        'Failed to update AI policy:',
-        err
-      );
-
-      setAiPoliciesMessage(
-        err.message || 'خطا در ذخیره تنظیمات'
-      );
-
-    } finally {
-      setAiPoliciesLoading(false);
     }
   };
 
@@ -573,97 +507,6 @@ export default function App() {
 
               {/* SECTION: AI RESPONSE POLICIES */}
               <GoftinoAiResponsePolicyPanel />
-
-              {/* Legacy policy panel retained below for compatibility with existing UI state. */}
-              {false && <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-5 max-w-5xl">
-
-                <div className="flex items-center gap-2 border-b border-slate-200 pb-3">
-                  <Shield className="w-5 h-5 text-indigo-600" />
-                  <div>
-                    <h4 className="font-extrabold text-slate-800 text-sm">
-                      قوانین پاسخگویی هوش مصنوعی بر اساس دسته
-                    </h4>
-                    <p className="text-xs text-slate-500 mt-1">
-                      تعیین کنید برای هر نوع درخواست، هوش مصنوعی پاسخ دهد یا گفتگو به کارشناس منتقل شود.
-                    </p>
-                  </div>
-                </div>
-
-                {aiPoliciesMessage && (
-                  <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold">
-                    {aiPoliciesMessage}
-                  </div>
-                )}
-
-                <div className="space-y-3">
-                  {aiPolicies.map((policy) => (
-                    <div
-                      key={policy.id}
-                      className="bg-white border border-slate-200 rounded-xl p-4 grid grid-cols-1 md:grid-cols-4 gap-4 items-center"
-                    >
-
-                      <div>
-                        <div className="font-bold text-sm text-slate-800">
-                          {policy.category}
-                        </div>
-                        <div className="text-xs text-slate-500 mt-1">
-                          {policy.fallbackMessage || 'بدون پیام جایگزین'}
-                        </div>
-                      </div>
-
-                      <select
-                        value={policy.mode}
-                        disabled={aiPoliciesLoading}
-                        onChange={(e) =>
-                          handleUpdateAiPolicy(policy.id, {
-                            mode: e.target.value,
-                          })
-                        }
-                        className="border rounded-lg p-2 text-xs"
-                      >
-                        <option value="AI_ALLOWED">
-                          AI پاسخ دهد
-                        </option>
-                        <option value="AI_ASSISTED">
-                          کمک AI + بررسی انسان
-                        </option>
-                        <option value="HUMAN_ONLY">
-                          فقط کارشناس انسانی
-                        </option>
-                      </select>
-
-                      <select
-                        value={policy.priority}
-                        disabled={aiPoliciesLoading}
-                        onChange={(e) =>
-                          handleUpdateAiPolicy(policy.id, {
-                            priority: e.target.value,
-                          })
-                        }
-                        className="border rounded-lg p-2 text-xs"
-                      >
-                        <option value="NORMAL">عادی</option>
-                        <option value="HIGH">بالا</option>
-                        <option value="URGENT">فوری</option>
-                      </select>
-
-                      <span
-                        className={`text-xs font-bold px-3 py-2 rounded-lg text-center ${
-                          policy.mode === 'HUMAN_ONLY'
-                            ? 'bg-rose-100 text-rose-700'
-                            : 'bg-emerald-100 text-emerald-700'
-                        }`}
-                      >
-                        {policy.mode === 'HUMAN_ONLY'
-                          ? 'انتقال به کارشناس'
-                          : 'AI فعال'}
-                      </span>
-
-                    </div>
-                  ))}
-                </div>
-
-              </div>}
 
               {/* SECTION: USER MANAGEMENT */}
               <UsersManagement />

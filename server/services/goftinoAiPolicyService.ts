@@ -1,27 +1,62 @@
 import prisma from '../db/client';
 import { decideGoftinoAiPolicy, GoftinoAiPolicyInput, GoftinoAiPolicyDecision } from './goftinoAiPolicyDecision';
+import { findCategoryForCatalogTopic, GOFTINO_TOPIC_CATALOG } from './goftinoTopicCatalog';
 
-export { decideGoftinoAiPolicy, GOFTINO_AI_ALLOWED, GOFTINO_HUMAN_ONLY } from './goftinoAiPolicyDecision';
+export { decideGoftinoAiPolicy } from './goftinoAiPolicyDecision';
 export type { GoftinoAiPolicyInput, GoftinoAiPolicyDecision } from './goftinoAiPolicyDecision';
 
+const SETTING_PREFIX = 'goftino_ai_enabled:';
+
+function settingKey(topicId: string) {
+  return `${SETTING_PREFIX}${topicId}`;
+}
+
 export async function resolveGoftinoAiPolicy(goftinoTopicId?: string | null): Promise<GoftinoAiPolicyDecision> {
-  if (!goftinoTopicId) return decideGoftinoAiPolicy([], goftinoTopicId);
+  const topic = GOFTINO_TOPIC_CATALOG.find((item) => item.id === goftinoTopicId) || null;
+  if (!topic) return decideGoftinoAiPolicy(null, false);
 
-  const policy = await prisma.goftinoAiResponsePolicy.findUnique({
-    where: { goftinoTopicId },
-    include: { insuranceCategory: { select: { id: true, status: true } } },
+  const [categories, setting] = await Promise.all([
+    prisma.insuranceCategory.findMany({ where: { status: 'ACTIVE' }, select: { id: true, slug: true, name: true, status: true } }),
+    prisma.systemSetting.findUnique({ where: { key: settingKey(topic.id) } }),
+  ]);
+  const category = findCategoryForCatalogTopic(topic, categories);
+  if (!category) return { kind: 'HANDOFF', policy: null, reason: 'INVALID_CATEGORY' };
+
+  return decideGoftinoAiPolicy({
+    goftinoTopicId: topic.id,
+    goftinoTopicTitle: topic.title,
+    insuranceCategoryId: category.id,
+  }, setting?.value === 'true');
+}
+
+export async function getGoftinoAiPolicyCatalog() {
+  const [categories, settings] = await Promise.all([
+    prisma.insuranceCategory.findMany({ where: { status: 'ACTIVE' }, select: { id: true, slug: true, name: true, status: true } }),
+    prisma.systemSetting.findMany({ where: { key: { startsWith: SETTING_PREFIX } }, select: { key: true, value: true } }),
+  ]);
+  const values = new Map(settings.map((setting) => [setting.key, setting.value]));
+  return GOFTINO_TOPIC_CATALOG.map((topic) => {
+    const category = findCategoryForCatalogTopic(topic, categories);
+    return {
+      id: topic.id,
+      title: topic.title,
+      category: category ? { id: category.id, name: category.name } : null,
+      enabled: Boolean(category) && values.get(settingKey(topic.id)) === 'true',
+      locked: !category,
+    };
   });
+}
 
-  if (!policy) return decideGoftinoAiPolicy([], goftinoTopicId);
+export async function setGoftinoAiPolicyEnabled(topicId: string, enabled: boolean) {
+  const rows = await getGoftinoAiPolicyCatalog();
+  const row = rows.find((item) => item.id === topicId);
+  if (!row) throw new Error('رشتهٔ گفتینو در catalog شناخته‌شده نیست.');
+  if (row.locked && enabled) throw new Error('این رشته دستهٔ بیمه‌ای معتبر ندارد و همیشه به کارشناس ارجاع می‌شود.');
 
-  const normalized: GoftinoAiPolicyInput = {
-    goftinoTopicId: policy.goftinoTopicId,
-    goftinoTopicTitle: policy.goftinoTopicTitle,
-    insuranceCategoryId: policy.insuranceCategoryId,
-    active: policy.active && policy.insuranceCategory.status === 'ACTIVE',
-    mode: policy.mode,
-    fallbackMessage: policy.fallbackMessage,
-  };
-
-  return decideGoftinoAiPolicy([normalized], goftinoTopicId);
+  await prisma.systemSetting.upsert({
+    where: { key: settingKey(topicId) },
+    create: { key: settingKey(topicId), value: String(enabled && !row.locked), description: `وضعیت پاسخ AI برای ${row.title}` },
+    update: { value: String(enabled && !row.locked) },
+  });
+  return { ...row, enabled: enabled && !row.locked };
 }

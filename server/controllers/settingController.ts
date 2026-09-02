@@ -9,6 +9,7 @@ import {
   saveAiConfig,
   testAiConnectionService,
 } from '../services/settingService';
+import { getGoftinoAiPolicyCatalog, setGoftinoAiPolicyEnabled } from '../services/goftinoAiPolicyService';
 
 // GET /api/ai/mode
 export async function getAiModeController(req: Request, res: Response) {
@@ -143,18 +144,7 @@ export async function getAiResponsePoliciesController(
   res: Response
 ) {
   try {
-    const prisma = (await import('../db/client')).default;
-
-    const policies = await prisma.goftinoAiResponsePolicy.findMany({
-      include: {
-        insuranceCategory: {
-          select: { id: true, name: true, slug: true, status: true },
-        },
-      },
-      orderBy: {
-        goftinoTopicTitle: 'asc',
-      },
-    });
+    const policies = await getGoftinoAiPolicyCatalog();
 
     return res.json({
       success: true,
@@ -169,114 +159,31 @@ export async function getAiResponsePoliciesController(
   }
 }
 
-// POST /api/settings/ai-response-policies
-export async function createAiResponsePolicyController(req: Request, res: Response) {
-  try {
-    const prisma = (await import('../db/client')).default;
-    const { goftinoTopicId, goftinoTopicTitle, insuranceCategoryId, mode, active, fallbackMessage } = req.body;
-
-    if (!String(goftinoTopicId || '').trim() || !String(goftinoTopicTitle || '').trim() || !String(insuranceCategoryId || '').trim()) {
-      return res.status(400).json({ success: false, error: 'شناسه و عنوان رشته گفتینو و دسته بیمه مقصد الزامی هستند.' });
-    }
-    if (!["AI_ALLOWED", "HUMAN_ONLY"].includes(mode || 'AI_ALLOWED')) {
-      return res.status(400).json({ success: false, error: 'حالت پاسخ‌گویی معتبر نیست.' });
-    }
-
-    const category = await prisma.insuranceCategory.findFirst({
-      where: { id: String(insuranceCategoryId), status: 'ACTIVE' },
-      select: { id: true },
-    });
-    if (!category) return res.status(400).json({ success: false, error: 'دستهٔ بیمهٔ مقصد فعال و معتبر نیست.' });
-
-    const policy = await prisma.goftinoAiResponsePolicy.create({
-      data: {
-        goftinoTopicId: String(goftinoTopicId).trim(),
-        goftinoTopicTitle: String(goftinoTopicTitle).trim(),
-        insuranceCategoryId: category.id,
-        mode: mode || 'AI_ALLOWED',
-        active: typeof active === 'boolean' ? active : true,
-        fallbackMessage: typeof fallbackMessage === 'string' && fallbackMessage.trim() ? fallbackMessage.trim() : null,
-      },
-      include: { insuranceCategory: { select: { id: true, name: true, slug: true, status: true } } },
-    });
-    return res.status(201).json({ success: true, data: policy, message: 'قانون گفتینو ایجاد شد.' });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, error: error.code === 'P2002' ? 'این شناسهٔ پایدار گفتینو قبلاً ثبت شده است.' : error.message });
-  }
-}
-
 // PUT /api/settings/ai-response-policies/:id
 export async function updateAiResponsePolicyController(
   req: Request,
   res: Response
 ) {
   try {
-    const prisma = (await import('../db/client')).default;
-
     const { id } = req.params;
-
-    const {
-      mode,
-      goftinoTopicId,
-      goftinoTopicTitle,
-      insuranceCategoryId,
-      fallbackMessage,
-      active,
-    } = req.body;
-
-
-    if (mode !== undefined && !['AI_ALLOWED', 'HUMAN_ONLY'].includes(mode)) {
-      return res.status(400).json({ success: false, error: 'حالت پاسخ‌گویی معتبر نیست.' });
-    }
-    if (insuranceCategoryId !== undefined) {
-      const category = await prisma.insuranceCategory.findFirst({
-        where: { id: String(insuranceCategoryId), status: 'ACTIVE' },
-        select: { id: true },
-      });
-      if (!category) return res.status(400).json({ success: false, error: 'دستهٔ بیمهٔ مقصد فعال و معتبر نیست.' });
+    const { enabled } = req.body;
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'وضعیت روشن/خاموش باید مشخص باشد.' });
     }
 
-    const updated = await prisma.goftinoAiResponsePolicy.update({
-      where: {
-        id,
-      },
-      data: {
-        ...(typeof goftinoTopicId === 'string' && goftinoTopicId.trim() ? { goftinoTopicId: goftinoTopicId.trim() } : {}),
-        ...(typeof goftinoTopicTitle === 'string' && goftinoTopicTitle.trim() ? { goftinoTopicTitle: goftinoTopicTitle.trim() } : {}),
-        ...(insuranceCategoryId !== undefined ? { insuranceCategoryId: String(insuranceCategoryId) } : {}),
-        ...(mode !== undefined ? { mode } : {}),
-        ...(typeof fallbackMessage !== 'undefined'
-          ? { fallbackMessage }
-          : {}),
-        ...(typeof active !== 'undefined'
-          ? { active }
-          : {}),
-      },
-      include: { insuranceCategory: { select: { id: true, name: true, slug: true, status: true } } },
-    });
+    const updated = await setGoftinoAiPolicyEnabled(id, enabled);
 
 
     return res.json({
       success: true,
       data: updated,
-      message: 'قانون پاسخگویی AI ذخیره شد.',
+      message: 'وضعیت پاسخ‌گویی AI ذخیره شد.',
     });
 
   } catch (error: any) {
-    return res.status(500).json({
+    return res.status(400).json({
       success: false,
       error: error.message,
     });
-  }
-}
-
-// DELETE /api/settings/ai-response-policies/:id
-export async function deleteAiResponsePolicyController(req: Request, res: Response) {
-  try {
-    const prisma = (await import('../db/client')).default;
-    await prisma.goftinoAiResponsePolicy.delete({ where: { id: req.params.id } });
-    return res.json({ success: true, message: 'قانون گفتینو حذف شد.' });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, error: error.message });
   }
 }

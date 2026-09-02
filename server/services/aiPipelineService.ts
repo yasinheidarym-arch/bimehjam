@@ -500,7 +500,7 @@ export async function runAiPipelineForMessage(params: {
 
     if (policyDecision.kind === 'HANDOFF') {
       brainResult = policyHandoffResult(
-        policyDecision.policy?.fallbackMessage || DEFAULT_GOFTINO_HANDOFF_MESSAGE,
+        DEFAULT_GOFTINO_HANDOFF_MESSAGE,
         `Goftino policy decision: ${policyDecision.reason}`,
       );
       await createAiLog({
