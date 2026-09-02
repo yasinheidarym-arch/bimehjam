@@ -4,6 +4,44 @@ import axios from 'axios';
 import { processBrainLayer } from './brainLayerService';
 import { getAiMode } from './settingService';
 import { createSystemTask } from './taskService';
+import { resolveGoftinoAiPolicy } from './goftinoAiPolicyService';
+
+const DEFAULT_GOFTINO_HANDOFF_MESSAGE = 'برای بررسی دقیق درخواست شما، همکاران متخصص بیمه جم ادامهٔ گفتگو را پیگیری می‌کنند. 🌹';
+
+function customerGoftinoTopicId(metadata?: string | null): string | null {
+  if (!metadata) return null;
+  try {
+    const parsed: unknown = JSON.parse(metadata);
+    return typeof parsed === 'object' && parsed !== null && typeof (parsed as Record<string, unknown>).goftinoTopicId === 'string'
+      ? (parsed as Record<string, unknown>).goftinoTopicId as string
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function policyHandoffResult(message: string, reason: string) {
+  return {
+    intent: 'Goftino Policy Handoff',
+    stage: 'Human Handoff',
+    missingInfo: '',
+    loadedKnowledgeSummary: 'Goftino policy blocked specialized retrieval.',
+    extractedKnowledge: { matchedProduct: null, relevantFaqs: [], relevantArticles: [], matchedObjections: [], quotationWorkflow: null },
+    appliedRules: [],
+    systemPrompt: '',
+    userPrompt: '',
+    finalPromptSnippet: '',
+    replyText: message,
+    collectedData: {},
+    promptTokens: 0,
+    completionTokens: 0,
+    validationResult: 'PASSED' as const,
+    validationReason: reason,
+    retryCount: 0,
+    modelUsed: 'Goftino Policy Allowlist',
+    policyHandoff: true,
+  };
+}
 
 // Helper to log steps to DB
 export async function createAiLog(data: {
@@ -453,10 +491,27 @@ export async function runAiPipelineForMessage(params: {
   let brainResult;
   try {
 
+    // Specialized insurance responses are allowed only for an active policy
+    // matched by Goftino's stable topic/department identifier.
+    const policyDecision = await resolveGoftinoAiPolicy(customerGoftinoTopicId(customer.metadata));
+
     const handoffRequestRegex = /کارشناس|اپراتور|انسان|تماس|مشاور تلفنی|وصل کن/i;
     const customerRequestedHuman = handoffRequestRegex.test(userMessageContent);
 
-    if (customerRequestedHuman && customer.phone) {
+    if (policyDecision.kind === 'HANDOFF') {
+      brainResult = policyHandoffResult(
+        policyDecision.policy?.fallbackMessage || DEFAULT_GOFTINO_HANDOFF_MESSAGE,
+        `Goftino policy decision: ${policyDecision.reason}`,
+      );
+      await createAiLog({
+        conversationId,
+        customerId,
+        messageId,
+        step: 'Goftino AI Policy Check',
+        status: 'WARNING',
+        details: `پاسخ تخصصی AI متوقف شد: ${policyDecision.reason}`,
+      });
+    } else if (customerRequestedHuman && customer.phone) {
       console.log("========== HUMAN HANDOFF BY BACKEND RULE ==========");
       console.log({
         customerPhone: customer.phone,
@@ -509,6 +564,8 @@ export async function runAiPipelineForMessage(params: {
         conversation,
         userMessageContent,
         messageHistory: messagesReversed,
+        allowedCategoryId: policyDecision.policy.insuranceCategoryId,
+        goftinoPolicyTitle: policyDecision.policy.goftinoTopicTitle,
       });
 
     }
@@ -683,7 +740,7 @@ export async function runAiPipelineForMessage(params: {
   await prisma.conversation.update({
     where: { id: conversation.id },
     data: {
-      status: 'AI_HANDLING',
+      status: brainResult.policyHandoff ? 'WAITING_OPERATOR' : 'AI_HANDLING',
       lastMessage: aiReplyText,
       lastMessageAt: new Date(),
       collectedData: updatedCollectedDataStr,

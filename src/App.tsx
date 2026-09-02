@@ -14,6 +14,7 @@ import { TaskManagerView } from './components/TaskManagerView';
 import { AutomationRuleBuilder } from './components/AutomationRuleBuilder';
 import { NotificationCenterView } from './components/NotificationCenterView';
 import { AiModelConfigCard } from './components/AiModelConfigCard';
+import { GoftinoAiResponsePolicyPanel } from './components/GoftinoAiResponsePolicyPanel';
 import UsersManagement from './components/UsersManagement';
 import { initialKnowledgeBase } from './data/knowledgeBase';
 
@@ -571,7 +572,10 @@ export default function App() {
 
 
               {/* SECTION: AI RESPONSE POLICIES */}
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-5 max-w-5xl">
+              <GoftinoAiResponsePolicyPanel />
+
+              {/* Legacy policy panel retained below for compatibility with existing UI state. */}
+              {false && <div className="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-5 max-w-5xl">
 
                 <div className="flex items-center gap-2 border-b border-slate-200 pb-3">
                   <Shield className="w-5 h-5 text-indigo-600" />
@@ -659,7 +663,7 @@ export default function App() {
                   ))}
                 </div>
 
-              </div>
+              </div>}
 
               {/* SECTION: USER MANAGEMENT */}
               <UsersManagement />

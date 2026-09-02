@@ -14,7 +14,9 @@ import {
   getSettingsController,
   updateSettingController,
   getAiResponsePoliciesController,
-  updateAiResponsePolicyController
+  createAiResponsePolicyController,
+  updateAiResponsePolicyController,
+  deleteAiResponsePolicyController
 } from '../controllers/settingController';
 import { authenticateToken } from '../middleware/auth';
 
@@ -90,11 +92,15 @@ router.get(
   getAiResponsePoliciesController
 );
 
+router.post('/settings/ai-response-policies', authenticateToken, createAiResponsePolicyController);
+
 router.put(
   '/settings/ai-response-policies/:id',
   authenticateToken,
   updateAiResponsePolicyController
 );
+
+router.delete('/settings/ai-response-policies/:id', authenticateToken, deleteAiResponsePolicyController);
 
 router.get(
   '/settings/ai-config',
