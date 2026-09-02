@@ -16,6 +16,10 @@ const requiredFiles = [
   'docker-compose.yml',
   'prisma/schema.prisma',
   'AGENTS.md',
+  'scripts/ops/deploy.sh',
+  'scripts/ops/rollback.sh',
+  'scripts/ops/backup-sqlite.sh',
+  'scripts/ops/migrate.sh',
 ];
 const failures = [];
 
@@ -58,6 +62,15 @@ try {
   if (!/^\s{2}app:\s*$/m.test(compose)) failures.push('docker-compose.yml has no app service.');
 } catch {
   failures.push('Unable to read docker-compose.yml.');
+}
+
+try {
+  const entrypoint = await readFile(path.join(root, 'docker-entrypoint.sh'), 'utf8');
+  if (/prisma\s+db\s+push/.test(entrypoint)) {
+    failures.push('docker-entrypoint.sh must not run prisma db push during normal startup.');
+  }
+} catch {
+  failures.push('Unable to read docker-entrypoint.sh.');
 }
 
 if (failures.length) {
