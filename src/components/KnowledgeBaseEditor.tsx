@@ -58,6 +58,18 @@ interface KnowledgeBaseEditorProps {
   onSave?: (updated: any) => void;
 }
 
+type ApiSuccessResponse = {
+  success: true;
+  data: unknown;
+};
+
+const isApiSuccessResponse = (value: unknown): value is ApiSuccessResponse => {
+  if (typeof value !== 'object' || value === null) return false;
+
+  const response = value as Record<string, unknown>;
+  return response.success === true && 'data' in response;
+};
+
 export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
   const [activeTab, setActiveTab] = useState<ModuleTab>('products');
   const [loading, setLoading] = useState<boolean>(false);
@@ -235,22 +247,22 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     try {
       if (activeTab === 'categories') {
         const res = await knowledgeService.getInsuranceCategories();
-        if (res.success && Array.isArray(res.data)) {
+        if (isApiSuccessResponse(res) && Array.isArray(res.data)) {
           setInsuranceCategories(res.data);
         }
       } else if (activeTab === 'products') {
         const res = await knowledgeService.getProducts();
-        if (res.success && Array.isArray(res.data)) {
+        if (isApiSuccessResponse(res) && Array.isArray(res.data)) {
           setProducts(res.data);
         }
       } else if (activeTab === 'faqs') {
         const res = await knowledgeService.getFaqs();
-        if (res.success && Array.isArray(res.data)) {
+        if (isApiSuccessResponse(res) && Array.isArray(res.data)) {
           setFaqs(res.data);
         }
       } else if (activeTab === 'ai-behavior') {
         const res = await knowledgeService.getAiBehavior();
-        if (res.success && Array.isArray(res.data)) {
+        if (isApiSuccessResponse(res) && Array.isArray(res.data)) {
           setAiBehaviorRules(res.data);
         }
       }
@@ -512,7 +524,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       });
       try {
         const res = await knowledgeService.getQuotationQuestions(product.id);
-        if (res.success && Array.isArray(res.data)) {
+        if (isApiSuccessResponse(res) && Array.isArray(res.data)) {
           setProductQuestions(res.data);
         } else {
           setProductQuestions(product.quotationQuestions || []);
@@ -716,7 +728,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       await knowledgeService.deleteQuotationQuestion(qId);
       if (editingItem?.id) {
         const res = await knowledgeService.getQuotationQuestions(editingItem.id);
-        if (res.success && Array.isArray(res.data)) {
+        if (isApiSuccessResponse(res) && Array.isArray(res.data)) {
           setProductQuestions(res.data);
         }
       }
@@ -889,7 +901,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       setEditingCategory(null);
 
       const res = await knowledgeService.getInsuranceCategories();
-      if (res.success && Array.isArray(res.data)) {
+      if (isApiSuccessResponse(res) && Array.isArray(res.data)) {
         setInsuranceCategories(res.data);
       }
     } catch (err: any) {
@@ -917,7 +929,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       await knowledgeService.deleteInsuranceCategory(category.id);
 
       const res = await knowledgeService.getInsuranceCategories();
-      if (res.success && Array.isArray(res.data)) {
+      if (isApiSuccessResponse(res) && Array.isArray(res.data)) {
         setInsuranceCategories(res.data);
       }
     } catch (err: any) {
@@ -981,7 +993,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       setSelectedCategoryForSub(null);
 
       const res = await knowledgeService.getInsuranceCategories();
-      if (res.success && Array.isArray(res.data)) {
+      if (isApiSuccessResponse(res) && Array.isArray(res.data)) {
         setInsuranceCategories(res.data);
       }
     } catch (err: any) {
@@ -1013,7 +1025,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       );
 
       const res = await knowledgeService.getInsuranceCategories();
-      if (res.success && Array.isArray(res.data)) {
+      if (isApiSuccessResponse(res) && Array.isArray(res.data)) {
         setInsuranceCategories(res.data);
       }
     } catch (err: any) {

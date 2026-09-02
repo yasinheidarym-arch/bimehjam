@@ -49,6 +49,52 @@ interface SmartSuggestion {
   urgency: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
 }
 
+type ApiSuccessResponse<T> = {
+  success: true;
+  data: T;
+};
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null;
+
+const isTaskItem = (value: unknown): value is TaskItem => {
+  if (!isRecord(value)) return false;
+
+  return (
+    typeof value.id === 'string' &&
+    typeof value.assignedUser === 'string' &&
+    typeof value.title === 'string' &&
+    typeof value.type === 'string' &&
+    ['LOW', 'MEDIUM', 'HIGH', 'URGENT'].includes(String(value.priority)) &&
+    ['New', 'In Progress', 'Completed', 'Cancelled', 'Expired'].includes(String(value.status)) &&
+    ['AI', 'Operator', 'Automation Rule', 'Admin'].includes(String(value.source)) &&
+    typeof value.createdAt === 'string'
+  );
+};
+
+const isSmartSuggestion = (value: unknown): value is SmartSuggestion => {
+  if (!isRecord(value)) return false;
+
+  return (
+    typeof value.action === 'string' &&
+    typeof value.title === 'string' &&
+    typeof value.reason === 'string' &&
+    ['LOW', 'MEDIUM', 'HIGH', 'URGENT'].includes(String(value.urgency))
+  );
+};
+
+function isSuccessfulArrayResponse<T>(
+  value: unknown,
+  itemGuard: (item: unknown) => item is T,
+): value is ApiSuccessResponse<T[]> {
+  return (
+    isRecord(value) &&
+    value.success === true &&
+    Array.isArray(value.data) &&
+    value.data.every(itemGuard)
+  );
+}
+
 export const TaskManagerView: React.FC = () => {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -89,7 +135,7 @@ export const TaskManagerView: React.FC = () => {
         type: typeFilter,
         source: sourceFilter,
       });
-      if (res.success) {
+      if (isSuccessfulArrayResponse(res, isTaskItem)) {
         setTasks(res.data);
       }
     } catch (err) {
@@ -103,7 +149,7 @@ export const TaskManagerView: React.FC = () => {
     setLoadingSuggestions(true);
     try {
       const res = await taskService.getSmartSuggestions();
-      if (res.success) {
+      if (isSuccessfulArrayResponse(res, isSmartSuggestion)) {
         setSuggestions(res.data);
       }
     } catch (err) {
@@ -116,7 +162,7 @@ export const TaskManagerView: React.FC = () => {
   const fetchCustomersList = async () => {
     try {
       const res = await customerService.getCustomers({ limit: 50 });
-      if (res.success) {
+      if (isSuccessfulArrayResponse(res, isRecord)) {
         setCustomers(res.data);
       }
     } catch (err) {
