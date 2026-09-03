@@ -5,6 +5,15 @@ import {
   retrieveRelevantKnowledgeFromTrainingCenter,
   ExtractedKnowledgePayload,
 } from './knowledgeRetrievalService';
+import { getOrCreateQuotationSession, processSessionAnswers } from './quotationWorkflowService';
+import {
+  captureCurrentQuestionAnswer,
+  isInsuranceQuotationRequest,
+  isExplicitQuotationFormRequest,
+  quotationCompletedReply,
+  quotationFormReply,
+  quotationQuestionReply,
+} from './quotationConversationFlow';
 
 
 export interface BrainResult {
@@ -25,6 +34,15 @@ export interface BrainResult {
   validationReason: string;
   retryCount: number;
   modelUsed: string;
+
+  quotationState?: {
+    sessionId: string;
+    productId: string;
+    productName: string;
+    currentQuestionFieldName: string | null;
+    remainingQuestions: string[];
+    isCompleted: boolean;
+  };
 
   task?: {
     create: boolean;
@@ -60,7 +78,7 @@ export function detectIntent(message: string, historyText: string): string {
   if (text.includes('تمدید') || text.includes('انقضا') || text.includes('سال قبل') || text.includes('بیمه قبلی') || text.includes('اتمام بیمه')) {
     return 'Policy Renewal';
   }
-  if (text.includes('قیمت') || text.includes('استعلام') || text.includes('چقدر میشه') || text.includes('هزینه') || text.includes('نرخ') || text.includes('محاسبه')) {
+  if (isInsuranceQuotationRequest(text)) {
     return 'Insurance Quotation';
   }
   if (text.includes('شکایت') || text.includes('ناراضی') || text.includes('چرا دیر') || text.includes('کاهش کیفیت')) {
@@ -206,6 +224,80 @@ export async function processBrainLayer(params: {
   // Step 2: Intent & Stage Detection
   const intent = detectIntent(userMessageContent, historyText);
   const stage = detectCustomerStage(messageHistory.length, intent, customer.leadScore || 50, historyText);
+  const explicitFormRequested = isExplicitQuotationFormRequest(userMessageContent);
+  let deterministicReply: string | null = null;
+  let quotationState: BrainResult['quotationState'];
+
+  if (explicitFormRequested && extractedKnowledge.matchedProduct) {
+    deterministicReply = quotationFormReply();
+  } else if (
+    extractedKnowledge.matchedProduct &&
+    (intent === 'Insurance Quotation' || conversation.currentProductId === extractedKnowledge.matchedProduct.id)
+  ) {
+    const product = extractedKnowledge.matchedProduct;
+    const session = await getOrCreateQuotationSession({
+      conversationId: conversation.id,
+      customerId: customer.id,
+      productId: product.id,
+    });
+    let evaluation = await processSessionAnswers(session.id, {}, 'customer');
+
+    // A message answers the pending question only after this conversation has
+    // already entered the deterministic workflow for the same product.
+    if (conversation.currentProductId === product.id && evaluation.nextQuestion) {
+      const answer = captureCurrentQuestionAnswer(evaluation.nextQuestion, userMessageContent);
+      if (Object.keys(answer).length > 0) {
+        evaluation = await processSessionAnswers(session.id, answer, 'customer');
+      }
+    }
+
+    const questions = session.workflow?.questions || [];
+    const answered = evaluation.collectedData as Record<string, string>;
+    const remainingQuestions = evaluation.remainingQuestions.map((question) => question.title);
+    const nextQuestion = evaluation.nextQuestion;
+
+    extractedKnowledge.quotationWorkflow = {
+      totalQuestions: evaluation.totalQuestionsCount,
+      allQuestions: questions.map((question) => ({
+        order: question.order,
+        title: question.title,
+        fieldName: question.fieldName,
+        aiQuestion: question.aiQuestion || question.title,
+        required: question.required,
+        type: question.type,
+        options: question.options && question.options !== '[]'
+          ? JSON.parse(question.options)
+          : undefined,
+      })),
+      answeredFields: answered,
+      nextQuestion: nextQuestion ? {
+        order: nextQuestion.order,
+        title: nextQuestion.title,
+        fieldName: nextQuestion.fieldName,
+        aiQuestion: nextQuestion.aiQuestion || nextQuestion.title,
+        options: nextQuestion.options && nextQuestion.options !== '[]'
+          ? JSON.parse(nextQuestion.options)
+          : undefined,
+      } : null,
+      isCompleted: evaluation.isCompleted,
+    };
+
+    quotationState = {
+      sessionId: evaluation.sessionId,
+      productId: product.id,
+      productName: product.name,
+      currentQuestionFieldName: nextQuestion?.fieldName || null,
+      remainingQuestions,
+      isCompleted: evaluation.isCompleted,
+    };
+
+    deterministicReply = nextQuestion
+      ? quotationQuestionReply(nextQuestion)
+      : evaluation.isCompleted
+        ? quotationCompletedReply()
+        : null;
+  }
+
   const missingInfo = detectMissingInfo(intent, userMessageContent, historyText, extractedKnowledge.quotationWorkflow);
 
   const productSelectionRequired =
@@ -530,26 +622,28 @@ Call Customer
 
   const aiConfig = await getAiConfig();
   const apiKey = aiConfig.openaiApiKey || process.env.OPENAI_API_KEY || "";
-  if (!apiKey) {
+  if (!apiKey && !deterministicReply) {
     throw new Error('OPENAI_API_KEY is not configured.');
   }
 
-  const openai = new OpenAI({ apiKey });
+  const openai = apiKey ? new OpenAI({ apiKey }) : null;
 
   let promptTokens = 0;
   let completionTokens = 0;
-  let finalReplyText = '';
+  let finalReplyText = deterministicReply || '';
   let newlyExtractedData: Record<string, any> = {};
   let generatedTask: any = undefined;
   let generatedOperatorSummary = '';
-  let validation = { valid: false, reason: '' };
+  let validation = deterministicReply
+    ? { valid: true, reason: 'Backend-enforced quotation workflow response' }
+    : { valid: false, reason: '' };
   let retryCount = 0;
   let validationStatus: 'PASSED' | 'REJECTED' | 'REGENERATED' = 'PASSED';
   const targetModel = aiConfig.openaiModel || 'gpt-5';
-  let modelUsed = targetModel;
+  let modelUsed = deterministicReply ? 'Deterministic Quotation Workflow' : targetModel;
 
   // Execution & Self-Correction Loop
-  while (retryCount <= 2) {
+  while (!deterministicReply && retryCount <= 2) {
     const currentMessages: any[] = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userPrompt },
@@ -569,7 +663,7 @@ Call Customer
       console.log("MESSAGES:", JSON.stringify(currentMessages, null, 2));
       console.log("======================================");
 
-      const response = await openai.chat.completions.create({
+      const response = await openai!.chat.completions.create({
         model: targetModel,
         messages: currentMessages,
         response_format: { type: 'json_object' },
@@ -594,7 +688,7 @@ Call Customer
       console.warn(`${targetModel} error in brain layer, attempting gpt-4o fallback:`, err.message);
       modelUsed = 'gpt-4o';
       try {
-        const fallbackResponse = await openai.chat.completions.create({
+        const fallbackResponse = await openai!.chat.completions.create({
           model: 'gpt-4o',
           messages: currentMessages,
           response_format: { type: 'json_object' },
@@ -613,7 +707,7 @@ Call Customer
         });
         console.warn('gpt-4o error, attempting gpt-4o-mini fallback:', fallbackErr.message);
         modelUsed = 'gpt-4o-mini';
-        const miniFallback = await openai.chat.completions.create({
+        const miniFallback = await openai!.chat.completions.create({
           model: 'gpt-4o-mini',
           messages: currentMessages,
           response_format: { type: 'json_object' },
@@ -672,6 +766,17 @@ Call Customer
   // Fallback if still invalid
   if (!validation.valid && !finalReplyText) {
     finalReplyText = `سلام، خوش آمدید. لطفاً بفرمایید در چه زمینه‌ای از خدمات بیمه‌ای نیاز به راهنمایی دارید تا دقیق‌تر راهنمایی‌تان کنم.`;
+  }
+
+  if (quotationState?.isCompleted) {
+    generatedTask = {
+      create: true,
+      title: `محاسبه قیمت ${quotationState.productName}`,
+      type: 'Prepare Quotation',
+      priority: 'HIGH',
+      description: `پرسش‌های استعلام محصول ${quotationState.productName} تکمیل شده است.`,
+    };
+    generatedOperatorSummary = `پرسش‌های استعلام ${quotationState.productName} تکمیل شد و آماده محاسبه قیمت است.`;
   }
 
   const loadedKnowledgeSummary = `[محصول]: ${extractedKnowledge.matchedProduct?.name || 'عمومی'} | [سوال بعدی]: ${extractedKnowledge.quotationWorkflow?.nextQuestion?.title || 'تکمیل'} | [تعداد قوانین فعال]: ${extractedKnowledge.appliedRules.length}`;
@@ -743,6 +848,7 @@ Call Customer
     validationReason: validation.reason,
     retryCount,
     modelUsed,
+    quotationState,
     task: generatedTask,
     operatorSummary: generatedOperatorSummary,
   };

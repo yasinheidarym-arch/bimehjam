@@ -759,10 +759,17 @@ export async function runAiPipelineForMessage(params: {
   await prisma.conversation.update({
     where: { id: conversation.id },
     data: {
-      status: brainResult.policyHandoff ? 'WAITING_OPERATOR' : 'AI_HANDLING',
+      status: brainResult.policyHandoff || brainResult.quotationState?.isCompleted
+        ? 'WAITING_OPERATOR'
+        : 'AI_HANDLING',
       lastMessage: aiReplyText,
       lastMessageAt: new Date(),
       collectedData: updatedCollectedDataStr,
+      ...(brainResult.quotationState ? {
+        currentProductId: brainResult.quotationState.productId,
+        currentProductName: brainResult.quotationState.productName,
+        remainingQuestions: JSON.stringify(brainResult.quotationState.remainingQuestions),
+      } : {}),
     },
   });
 

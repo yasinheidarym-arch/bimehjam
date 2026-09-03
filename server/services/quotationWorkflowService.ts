@@ -259,6 +259,41 @@ export async function deleteQuotationWorkflow(id: string) {
   return prisma.quotationWorkflow.delete({ where: { id } });
 }
 
+async function ensureProductQuotationWorkflow(productId: string) {
+  let workflow = await prisma.quotationWorkflow.findFirst({
+    where: { insuranceProductId: productId, status: 'ACTIVE' },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  if (!workflow) {
+    const product = await prisma.insuranceProduct.findUnique({
+      where: { id: productId },
+      select: { name: true },
+    });
+    if (!product) throw new Error('Quotation product not found');
+
+    workflow = await prisma.quotationWorkflow.create({
+      data: {
+        insuranceProductId: productId,
+        name: `گردش‌کار استعلام قیمت ${product.name}`,
+        status: 'ACTIVE',
+      },
+    });
+  }
+
+  // Questions managed in the product panel are authoritative for the product.
+  // Link all of them to the selected active workflow, preserving their order.
+  await prisma.quotationQuestion.updateMany({
+    where: { productId },
+    data: { workflowId: workflow.id },
+  });
+
+  return prisma.quotationWorkflow.findUnique({
+    where: { id: workflow.id },
+    include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }] } },
+  });
+}
+
 /**
  * Get or create Quotation Session for conversation & product
  */
@@ -267,18 +302,7 @@ export async function getOrCreateQuotationSession(params: {
   customerId?: string;
   productId: string;
 }) {
-  await seedDefaultQuotationWorkflows();
-
-  // Find active workflow for product
-  const workflow = await prisma.quotationWorkflow.findFirst({
-    where: {
-      insuranceProductId: params.productId,
-      status: 'ACTIVE',
-    },
-    include: {
-      questions: { orderBy: { order: 'asc' } },
-    },
-  });
+  const workflow = await ensureProductQuotationWorkflow(params.productId);
 
   // Check existing session
   let session = null;
@@ -291,7 +315,7 @@ export async function getOrCreateQuotationSession(params: {
       },
       include: {
         answers: { include: { question: true } },
-        workflow: { include: { questions: { orderBy: { order: 'asc' } } } },
+        workflow: { include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }] } } },
       },
     });
   }
@@ -309,7 +333,7 @@ export async function getOrCreateQuotationSession(params: {
       },
       include: {
         answers: { include: { question: true } },
-        workflow: { include: { questions: { orderBy: { order: 'asc' } } } },
+        workflow: { include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }] } } },
       },
     });
   }
@@ -385,7 +409,7 @@ export async function processSessionAnswers(
       answers: true,
       product: true,
       workflow: {
-        include: { questions: { orderBy: { order: 'asc' } } },
+        include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }] } },
       },
     },
   });
@@ -534,6 +558,7 @@ export async function processSessionAnswers(
     sessionId: session.id,
     isCompleted,
     nextQuestion,
+    remainingQuestions: missingQuestions,
     collectedData: updatedData,
     completedAnswersCount: activeQuestions.length - missingQuestions.length,
     totalQuestionsCount: activeQuestions.length,
