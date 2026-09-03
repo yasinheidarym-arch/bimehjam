@@ -1,0 +1,20 @@
+import { Response } from 'express';
+import { AuthRequest } from '../middleware/auth';
+import { addTaskType, getTaskTypeCatalog, removeOrArchiveTaskType } from '../services/taskTypeCatalogService';
+
+export async function listTaskTypes(req: AuthRequest, res: Response) {
+  try {
+    const includeArchived = req.query.includeArchived === 'true' && req.user?.role === 'ADMIN';
+    return res.json({ success: true, data: await getTaskTypeCatalog({ includeArchived }) });
+  } catch { return res.status(500).json({ success: false, error: 'دریافت انواع وظیفه ناموفق بود.' }); }
+}
+
+export async function createTaskType(req: AuthRequest, res: Response) {
+  try { return res.status(201).json({ success: true, data: await addTaskType(req.body?.label) }); }
+  catch (error) { return res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'ثبت نوع وظیفه ناموفق بود.' }); }
+}
+
+export async function deleteTaskType(req: AuthRequest, res: Response) {
+  try { return res.json({ success: true, data: await removeOrArchiveTaskType(req.params.id) }); }
+  catch (error) { return res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'حذف نوع وظیفه ناموفق بود.' }); }
+}

@@ -22,7 +22,7 @@ import {
   ArrowRight,
   ShieldAlert,
 } from 'lucide-react';
-import { taskService, customerService, taskSmsService } from '../services/api';
+import { taskService, customerService, taskSmsService, taskTypeService } from '../services/api';
 
 interface TaskItem {
   id: string;
@@ -60,9 +60,11 @@ interface TaskSmsSettings {
   enabled: boolean;
   selectedTaskTypes: string[];
   selectedRecipientUserIds: string[];
-  taskTypes: Array<{ id: string; label: string }>;
+  taskTypes: TaskTypeDefinition[];
   users: SmsUser[];
 }
+
+interface TaskTypeDefinition { id: string; label: string; active: boolean; builtin: boolean }
 
 export const TaskManagerView: React.FC = () => {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
@@ -91,6 +93,9 @@ export const TaskManagerView: React.FC = () => {
   const [smsSettings, setSmsSettings] = useState<TaskSmsSettings | null>(null);
   const [savingSms, setSavingSms] = useState(false);
   const [smsMessage, setSmsMessage] = useState('');
+  const [taskTypes, setTaskTypes] = useState<TaskTypeDefinition[]>([]);
+  const [newTaskTypeLabel, setNewTaskTypeLabel] = useState('');
+  const [taskTypeMessage, setTaskTypeMessage] = useState('');
   const currentRole = (() => {
     try { return JSON.parse(localStorage.getItem('bimeh_jam_user') || '{}')?.role; } catch { return null; }
   })();
@@ -106,6 +111,39 @@ export const TaskManagerView: React.FC = () => {
       .then((res: any) => res.success && setSmsSettings(res.data))
       .catch(() => undefined);
   }, []);
+
+  const loadTaskTypes = async () => {
+    try {
+      const res: any = await taskTypeService.getTypes(currentRole === 'ADMIN');
+      if (res.success) {
+        setTaskTypes(res.data);
+        const firstActive = res.data.find((item: TaskTypeDefinition) => item.active);
+        if (firstActive && !res.data.some((item: TaskTypeDefinition) => item.id === newTaskType && item.active)) setNewTaskType(firstActive.id);
+      }
+    } catch { setTaskTypeMessage('دریافت انواع وظیفه ناموفق بود.'); }
+  };
+
+  useEffect(() => { loadTaskTypes(); }, []);
+
+  const addTaskType = async () => {
+    if (!newTaskTypeLabel.trim()) return;
+    try {
+      await taskTypeService.createType(newTaskTypeLabel);
+      setNewTaskTypeLabel('');
+      setTaskTypeMessage('نوع وظیفه اضافه شد.');
+      await loadTaskTypes();
+    } catch (error) { setTaskTypeMessage(error instanceof Error ? error.message : 'ثبت ناموفق بود.'); }
+  };
+
+  const deleteTaskType = async (id: string) => {
+    try {
+      const res: any = await taskTypeService.deleteType(id);
+      setTaskTypeMessage(res.data?.mode === 'archived' ? 'نوع استفاده‌شده آرشیو شد.' : 'نوع بدون استفاده حذف شد.');
+      await loadTaskTypes();
+      const smsRes: any = await taskSmsService.getSettings();
+      if (smsRes.success) setSmsSettings(smsRes.data);
+    } catch (error) { setTaskTypeMessage(error instanceof Error ? error.message : 'حذف ناموفق بود.'); }
+  };
 
   const saveSmsSettings = async (next: TaskSmsSettings) => {
     setSmsSettings(next);
@@ -367,6 +405,25 @@ export const TaskManagerView: React.FC = () => {
         </div>
       )}
 
+      {currentRole === 'ADMIN' && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3">
+          <div><h3 className="font-black text-slate-800">مدیریت نوع وظیفه</h3><p className="text-xs text-slate-500 mt-1">نوع‌های استفاده‌شده برای حفظ تاریخچه آرشیو می‌شوند.</p></div>
+          <div className="flex gap-2">
+            <input value={newTaskTypeLabel} onChange={(e) => setNewTaskTypeLabel(e.target.value)} placeholder="عنوان نوع جدید" className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-xs" />
+            <button type="button" onClick={addTaskType} className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white">افزودن نوع</button>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {taskTypes.map((item) => (
+              <div key={item.id} className={`flex items-center justify-between rounded-xl border p-3 text-xs ${item.active ? 'border-slate-200' : 'border-slate-100 bg-slate-50 text-slate-400'}`}>
+                <span>{item.label}{!item.active && ' — آرشیوشده'}</span>
+                {item.active && <button type="button" onClick={() => deleteTaskType(item.id)} className="text-rose-600 font-bold">حذف</button>}
+              </div>
+            ))}
+          </div>
+          {taskTypeMessage && <div className="text-xs text-slate-600">{taskTypeMessage}</div>}
+        </div>
+      )}
+
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-xs flex items-center gap-3">
@@ -506,6 +563,12 @@ export const TaskManagerView: React.FC = () => {
             </select>
 
             {/* Source Filter */}
+            <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700">
+              <option value="ALL">تمام نوع‌ها</option>
+              {taskTypes.map((item) => <option key={item.id} value={item.id}>{item.label}{!item.active ? ' (آرشیو)' : ''}</option>)}
+            </select>
+
+            {/* Source Filter */}
             <select
               value={sourceFilter}
               onChange={(e) => setSourceFilter(e.target.value)}
@@ -552,7 +615,7 @@ export const TaskManagerView: React.FC = () => {
                       {getPriorityBadge(task.priority)}
                       {getSourceBadge(task.source)}
                       <span className="text-[11px] text-slate-400 bg-slate-100 px-2 py-0.5 rounded font-mono">
-                        نوع: {task.type}
+                        نوع: {taskTypes.find((item) => item.id === task.type)?.label || task.type}
                       </span>
                     </div>
 
@@ -652,15 +715,7 @@ export const TaskManagerView: React.FC = () => {
                     onChange={(e) => setNewTaskType(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800"
                   >
-                    <option value="Call Customer">Call Customer (تماس تلفنی)</option>
-                    <option value="Send Message">Send Message (ارسال پیام)</option>
-                    <option value="Prepare Quotation">Prepare Quotation (آماده‌سازی پیش‌نویس)</option>
-                    <option value="Collect Documents">Collect Documents (دریافت مدارک)</option>
-                    <option value="Review Request">Review Request (بررسی استعلام)</option>
-                    <option value="Follow Up Quote">Follow Up Quote (پیگیری پیشنهاد)</option>
-                    <option value="Renewal Reminder">Renewal Reminder (یادآوری تمدید)</option>
-                    <option value="Complaint Follow Up">Complaint Follow Up (پیگیری شکایت)</option>
-                    <option value="Other">سایر</option>
+                    {taskTypes.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
                   </select>
                 </div>
 

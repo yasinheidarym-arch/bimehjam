@@ -1,10 +1,3 @@
-export const TASK_SMS_TYPES = [
-  { id: 'Call Customer', label: 'تماس برای قیمت‌دهی' }, { id: 'Send Message', label: 'ارسال پیام' },
-  { id: 'Prepare Quotation', label: 'آماده‌سازی قیمت' }, { id: 'Collect Documents', label: 'دریافت مدارک' },
-  { id: 'Review Request', label: 'بررسی استعلام' }, { id: 'Follow Up Quote', label: 'پیگیری صدور' },
-  { id: 'Renewal Reminder', label: 'یادآوری تمدید' }, { id: 'Complaint Follow Up', label: 'پیگیری شکایت' },
-  { id: 'Other', label: 'سایر' },
-] as const;
 const FASTNOTIFY_ENDPOINT = 'https://services.fastnotify.ir/api/v1/message/single';
 export const FASTNOTIFY_SETTING_KEYS = { enabled: 'fastnotify_sms_enabled', taskTypes: 'fastnotify_sms_task_types', recipientUserIds: 'fastnotify_sms_recipient_user_ids' } as const;
 

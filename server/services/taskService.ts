@@ -1,5 +1,6 @@
 import prisma from '../db/client';
 import { dispatchTaskCreatedSms } from './fastNotifySmsService';
+import { assertActiveTaskType } from './taskTypeCatalogService';
 
 export async function createSystemTask(data: {
   customerId?: string;
@@ -13,6 +14,7 @@ export async function createSystemTask(data: {
   assignedUserId?: string;
 }) {
 
+  const type = await assertActiveTaskType(data.type);
   const task = await prisma.task.create({
     data: {
       customerId: data.customerId || null,
@@ -25,7 +27,7 @@ export async function createSystemTask(data: {
       title: data.title,
       description: data.description || null,
 
-      type: data.type || 'Call Customer',
+      type,
 
       priority: data.priority || 'MEDIUM',
 

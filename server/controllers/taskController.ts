@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import prisma from '../db/client';
 import { getSmartFollowUpSuggestions } from '../services/automationService';
 import { dispatchTaskCreatedSms } from '../services/fastNotifySmsService';
+import { assertActiveTaskType } from '../services/taskTypeCatalogService';
 
 export async function getTasks(req: Request, res: Response) {
   try {
@@ -58,6 +59,7 @@ export async function createTask(req: Request, res: Response) {
     if (assignedUserId && !selectedUser) {
       return res.status(400).json({ success: false, error: 'کاربر مسئول معتبر نیست.' });
     }
+    const validatedType = await assertActiveTaskType(type);
     const task = await prisma.task.create({
       data: {
         customerId: customerId || null,
@@ -67,7 +69,7 @@ export async function createTask(req: Request, res: Response) {
         assignedUserId: selectedUser?.id || null,
         title,
         description: description || null,
-        type: type || 'Call Customer',
+        type: validatedType,
         priority: priority || 'MEDIUM',
         status: 'New',
         source: source || 'Operator',

@@ -1,7 +1,7 @@
 import prisma from '../db/client';
 import { CreatedTaskForSms, dispatchTaskCreatedSmsCore, FASTNOTIFY_SETTING_KEYS, SmsDispatchResult } from './fastNotifySmsCore';
 
-export { FASTNOTIFY_SETTING_KEYS, normalizeIranianMobile, TASK_SMS_TYPES } from './fastNotifySmsCore';
+export { FASTNOTIFY_SETTING_KEYS, normalizeIranianMobile } from './fastNotifySmsCore';
 
 export async function dispatchTaskCreatedSms(task: CreatedTaskForSms): Promise<SmsDispatchResult> {
   return dispatchTaskCreatedSmsCore(task, {

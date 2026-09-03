@@ -222,6 +222,12 @@ export const taskSmsService = {
   }) => apiClient.put('/settings/task-sms', data),
 };
 
+export const taskTypeService = {
+  getTypes: async (includeArchived = false) => apiClient.get('/task-types', { params: { includeArchived } }),
+  createType: async (label: string) => apiClient.post('/task-types', { label }),
+  deleteType: async (id: string) => apiClient.delete(`/task-types/${encodeURIComponent(id)}`),
+};
+
 
 // Brain Layer Services
 export const brainService = {

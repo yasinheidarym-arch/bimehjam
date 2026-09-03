@@ -1,7 +1,8 @@
 import { Response } from 'express';
 import prisma from '../db/client';
 import { AuthRequest } from '../middleware/auth';
-import { FASTNOTIFY_SETTING_KEYS, TASK_SMS_TYPES } from '../services/fastNotifySmsService';
+import { FASTNOTIFY_SETTING_KEYS } from '../services/fastNotifySmsService';
+import { getTaskTypeCatalog } from '../services/taskTypeCatalogService';
 
 function parseStringList(value: string | undefined): string[] {
   try {
@@ -14,7 +15,7 @@ function parseStringList(value: string | undefined): string[] {
 
 export async function getTaskSmsSettings(_req: AuthRequest, res: Response) {
   try {
-    const [settings, users] = await Promise.all([
+    const [settings, users, taskTypes] = await Promise.all([
       prisma.systemSetting.findMany({
         where: { key: { in: Object.values(FASTNOTIFY_SETTING_KEYS) } },
         select: { key: true, value: true },
@@ -24,6 +25,7 @@ export async function getTaskSmsSettings(_req: AuthRequest, res: Response) {
         select: { id: true, name: true, role: true, mobile: true },
         orderBy: { name: 'asc' },
       }),
+      getTaskTypeCatalog(),
     ]);
     const values = new Map(settings.map((setting) => [setting.key, setting.value]));
     return res.json({
@@ -32,7 +34,7 @@ export async function getTaskSmsSettings(_req: AuthRequest, res: Response) {
         enabled: values.get(FASTNOTIFY_SETTING_KEYS.enabled) === 'true',
         selectedTaskTypes: parseStringList(values.get(FASTNOTIFY_SETTING_KEYS.taskTypes)),
         selectedRecipientUserIds: parseStringList(values.get(FASTNOTIFY_SETTING_KEYS.recipientUserIds)),
-        taskTypes: TASK_SMS_TYPES,
+        taskTypes,
         users,
       },
     });
@@ -47,7 +49,7 @@ export async function updateTaskSmsSettings(req: AuthRequest, res: Response) {
     if (typeof enabled !== 'boolean' || !Array.isArray(selectedTaskTypes) || !Array.isArray(selectedRecipientUserIds)) {
       return res.status(400).json({ success: false, error: 'تنظیمات اعلان پیامکی نامعتبر است.' });
     }
-    const allowedTypes = new Set(TASK_SMS_TYPES.map((item) => item.id as string));
+    const allowedTypes = new Set((await getTaskTypeCatalog()).map((item) => item.id));
     const taskTypes = [...new Set(selectedTaskTypes.filter((item): item is string => typeof item === 'string' && allowedTypes.has(item)))];
     const requestedUserIds = [...new Set(selectedRecipientUserIds.filter((item): item is string => typeof item === 'string'))];
     const eligibleUsers = await prisma.user.findMany({

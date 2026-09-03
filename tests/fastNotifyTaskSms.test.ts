@@ -83,6 +83,9 @@ test('eligible price-call task sends exactly one correct FastNotify POST', async
   const request = harness.requests[0];
   assert.equal(request.url, 'https://services.fastnotify.ir/api/v1/message/single');
   assert.equal(request.init?.method, 'POST');
+  const headers = request.init?.headers as Record<string, string>;
+  assert.equal(headers.apiKey, 'mock-api-key');
+  assert.equal(headers['Content-Type'], 'application/json');
   const body = JSON.parse(String(request.init?.body));
   assert.deepEqual(body.to, ['09120000000']);
   assert.equal(body.from, '50002635118000');

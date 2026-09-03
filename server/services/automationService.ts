@@ -1,6 +1,7 @@
 import prisma from '../db/client';
 import { GoogleGenAI } from '@google/genai';
 import { dispatchTaskCreatedSms } from './fastNotifySmsService';
+import { assertActiveTaskType } from './taskTypeCatalogService';
 
 const apiKey = process.env.GEMINI_API_KEY;
 const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
@@ -150,7 +151,7 @@ export async function triggerAutomationEvent(
             assignedUser: payloadObj.assignedUser || 'کارشناس فروش',
             title: payloadObj.taskTitle || 'پیگیری سیستم هوشمند',
             description: eventData.notes || payloadObj.description || 'ایجادشده به‌صورت خودکار بر اساس قوانین اتوماسیون',
-            type: payloadObj.taskType || 'Call Customer',
+            type: await assertActiveTaskType(payloadObj.taskType),
             priority: payloadObj.priority || 'HIGH',
             status: 'New',
             source: 'Automation Rule',

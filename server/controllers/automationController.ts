@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import prisma from '../db/client';
 import { seedDefaultAutomationRules, triggerAutomationEvent } from '../services/automationService';
+import { assertActiveTaskType } from '../services/taskTypeCatalogService';
 
 export async function getRules(req: Request, res: Response) {
   try {
@@ -27,6 +28,10 @@ export async function createRule(req: Request, res: Response) {
     if (!name || !event || !action) {
       return res.status(400).json({ success: false, error: 'نام، رویداد و اقدام الزامی هستند' });
     }
+    if (action === 'CREATE_TASK') {
+      const payload = typeof actionPayload === 'string' ? JSON.parse(actionPayload || '{}') : actionPayload || {};
+      await assertActiveTaskType(payload.taskType);
+    }
 
     const rule = await prisma.automationRule.create({
       data: {
@@ -51,6 +56,10 @@ export async function updateRule(req: Request, res: Response) {
     const { name, event, condition, action, actionPayload, active } = req.body;
 
     const dataToUpdate: any = {};
+    if (action === 'CREATE_TASK' && actionPayload !== undefined) {
+      const payload = typeof actionPayload === 'string' ? JSON.parse(actionPayload || '{}') : actionPayload || {};
+      await assertActiveTaskType(payload.taskType);
+    }
     if (name) dataToUpdate.name = name;
     if (event) dataToUpdate.event = event;
     if (condition !== undefined) {

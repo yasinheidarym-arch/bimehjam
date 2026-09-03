@@ -9,6 +9,7 @@ import { getOrCreateQuotationSession, processSessionAnswers, extractQuotationAns
 import { createTimelineEvent } from './timelineService';
 import { getAiConfig } from './settingService';
 import { dispatchTaskCreatedSms } from './fastNotifySmsService';
+import { assertActiveTaskType } from './taskTypeCatalogService';
 
 
 // Initialize Gemini Client with User-Agent
@@ -549,7 +550,7 @@ ${recentMessages
           description: `اطلاعات گردآوری شده: ${JSON.stringify(existingCollectedData)}`,
           status: 'Pending',
           priority: 'HIGH',
-          type: quotationCompleted ? 'Prepare Quotation' : 'Call Customer',
+          type: await assertActiveTaskType(quotationCompleted ? 'Prepare Quotation' : 'Call Customer'),
           source: 'AI',
           assignedUser: customer.assignedOperator || 'کارشناس فروش',
           assignedUserId: conversation.assignedUserId || null,

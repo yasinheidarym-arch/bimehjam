@@ -16,7 +16,7 @@ import {
   Layers,
   Sparkles,
 } from 'lucide-react';
-import { automationService } from '../services/api';
+import { automationService, taskTypeService } from '../services/api';
 
 interface AutomationRuleItem {
   id: string;
@@ -43,6 +43,8 @@ export const AutomationRuleBuilder: React.FC = () => {
   const [selectedAction, setSelectedAction] = useState('CREATE_TASK');
   const [taskTitle, setTaskTitle] = useState('تماس پیگیری فوری با مشتری');
   const [taskPriority, setTaskPriority] = useState('HIGH');
+  const [taskType, setTaskType] = useState('Call Customer');
+  const [taskTypes, setTaskTypes] = useState<Array<{ id: string; label: string }>>([]);
   const [taskAssignedUser, setTaskAssignedUser] = useState('کارشناس ارشد فروش');
   const [minLeadScore, setMinLeadScore] = useState<number>(80);
   const [inactiveDays, setInactiveDays] = useState<number>(3);
@@ -56,6 +58,12 @@ export const AutomationRuleBuilder: React.FC = () => {
   useEffect(() => {
     fetchRules();
     fetchExecutions();
+    taskTypeService.getTypes().then((res: any) => {
+      if (res.success) {
+        setTaskTypes(res.data);
+        if (res.data[0]) setTaskType(res.data[0].id);
+      }
+    }).catch(() => undefined);
   }, []);
 
   const fetchRules = async () => {
@@ -118,6 +126,7 @@ export const AutomationRuleBuilder: React.FC = () => {
       if (selectedAction === 'CREATE_TASK') {
         payloadObj = {
           taskTitle,
+          taskType,
           priority: taskPriority,
           assignedUser: taskAssignedUser,
         };
@@ -516,6 +525,12 @@ export const AutomationRuleBuilder: React.FC = () => {
                         onChange={(e) => setTaskTitle(e.target.value)}
                         className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs"
                       />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">نوع وظیفه</label>
+                      <select value={taskType} onChange={(e) => setTaskType(e.target.value)} className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs">
+                        {taskTypes.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
+                      </select>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div>
