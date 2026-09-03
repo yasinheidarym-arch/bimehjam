@@ -27,7 +27,10 @@ git cat-file -e "${commit}^{commit}"
 git merge-base --is-ancestor "$commit" origin/main || { echo "Commit is not reachable from origin/main." >&2; exit 1; }
 git switch --detach --quiet "$commit"
 
-readonly SQLITE_VOLUME="bimehjam_data"
+container_id="$(docker compose ps -a -q app)"
+[[ -n "$container_id" ]] || { echo "Cannot resolve the app container for migration." >&2; exit 1; }
+readonly SQLITE_VOLUME="$(docker inspect "$container_id" --format '{{range .Mounts}}{{if eq .Destination "/app/prisma"}}{{.Name}}{{end}}{{end}}')"
+[[ -n "$SQLITE_VOLUME" ]] || { echo "Cannot resolve the SQLite volume mounted at /app/prisma." >&2; exit 1; }
 image_id="$(docker compose images -q app 2>/dev/null || true)"
 if [[ -z "$image_id" ]] || ! docker image inspect "$image_id" >/dev/null 2>&1; then
   image_ref="$(docker compose config --images | sed -n '1p')"
