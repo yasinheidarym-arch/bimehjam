@@ -1,7 +1,7 @@
 import prisma from '../db/client';
 import OpenAI from 'openai';
 import { GoogleGenAI } from '@google/genai';
-import { AiMode, AiSchedule, DEFAULT_AI_SCHEDULE, resolveEffectiveAiMode, validateAiSchedule } from '../../shared/aiSchedule';
+import { AiMode, AiSchedule, DEFAULT_AI_SCHEDULE, isLegacyAiSchedule, resolveEffectiveAiMode, validateAiSchedule } from '../../shared/aiSchedule';
 
 export type { AiMode, AiSchedule } from '../../shared/aiSchedule';
 
@@ -52,13 +52,22 @@ export async function setAiMode(mode: AiMode): Promise<string> {
 }
 
 function defaultAiSchedule(): AiSchedule {
-  return { ...DEFAULT_AI_SCHEDULE, days: [...DEFAULT_AI_SCHEDULE.days] };
+  return {
+    ...DEFAULT_AI_SCHEDULE,
+    weekly: Object.fromEntries(Object.entries(DEFAULT_AI_SCHEDULE.weekly).map(([day, value]) => [day, { ...value }])) as AiSchedule['weekly'],
+  };
 }
 
 export async function getAiSchedule(): Promise<AiSchedule> {
   try {
     const setting = await prisma.systemSetting.findUnique({ where: { key: 'ai_response_schedule' }, select: { value: true } });
-    return setting?.value ? validateAiSchedule(JSON.parse(setting.value)) : defaultAiSchedule();
+    if (!setting?.value) return defaultAiSchedule();
+    const parsed = JSON.parse(setting.value) as unknown;
+    const schedule = validateAiSchedule(parsed);
+    if (isLegacyAiSchedule(parsed)) {
+      await prisma.systemSetting.update({ where: { key: 'ai_response_schedule' }, data: { value: JSON.stringify(schedule) } });
+    }
+    return schedule;
   } catch (error) {
     console.warn('Could not read AI response schedule, using disabled default:', error instanceof Error ? error.message : 'unknown error');
     return defaultAiSchedule();

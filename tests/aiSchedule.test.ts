@@ -2,57 +2,80 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   AiSchedule,
+  IRAN_WEEKDAYS,
   iranLocalDayAndMinute,
+  migrateLegacyAiSchedule,
   resolveEffectiveAiMode,
   shouldExecuteAi,
   validateAiSchedule,
 } from '../shared/aiSchedule';
 
-const activeSchedule: AiSchedule = {
-  enabled: true,
-  days: ['SATURDAY'],
-  startTime: '08:00',
-  endTime: '18:00',
-  allowedMode: 'ACTIVE',
-  timezone: 'Asia/Tehran',
-};
+function weeklySchedule(): AiSchedule {
+  const weekly = Object.fromEntries(IRAN_WEEKDAYS.map((day) => [day.id, { enabled: false, startTime: '08:00', endTime: '18:00' }])) as AiSchedule['weekly'];
+  weekly.SATURDAY = { enabled: true, startTime: '08:00', endTime: '12:00' };
+  weekly.THURSDAY = { enabled: true, startTime: '14:00', endTime: '20:00' };
+  return { enabled: true, weekly, allowedMode: 'ACTIVE', timezone: 'Asia/Tehran' };
+}
 
-test('disabled schedule preserves the current manual mode', () => {
-  assert.equal(resolveEffectiveAiMode('TEST_MODE', { ...activeSchedule, enabled: false }, new Date('2026-09-04T12:00:00Z')), 'TEST_MODE');
-  assert.equal(resolveEffectiveAiMode('OFF', { ...activeSchedule, enabled: false }, new Date('2026-09-05T05:00:00Z')), 'OFF');
+test('disabled weekly schedule preserves the current manual mode', () => {
+  const schedule = { ...weeklySchedule(), enabled: false };
+  assert.equal(resolveEffectiveAiMode('TEST_MODE', schedule, new Date('2026-09-04T12:00:00Z')), 'TEST_MODE');
+  assert.equal(resolveEffectiveAiMode('OFF', schedule, new Date('2026-09-05T05:00:00Z')), 'OFF');
 });
 
-test('unselected Iran weekday resolves to OFF before any AI execution', () => {
-  const mode = resolveEffectiveAiMode('ACTIVE', activeSchedule, new Date('2026-09-04T08:00:00Z'));
+test('Saturday uses its independent interval', () => {
+  const schedule = weeklySchedule();
+  assert.equal(resolveEffectiveAiMode('OFF', schedule, new Date('2026-09-05T05:00:00Z')), 'ACTIVE');
+  assert.equal(resolveEffectiveAiMode('ACTIVE', schedule, new Date('2026-09-05T09:00:00Z')), 'OFF');
+});
+
+test('Thursday uses a different independent interval', () => {
+  const schedule = weeklySchedule();
+  assert.equal(resolveEffectiveAiMode('ACTIVE', schedule, new Date('2026-09-03T09:00:00Z')), 'OFF');
+  assert.equal(resolveEffectiveAiMode('OFF', schedule, new Date('2026-09-03T11:00:00Z')), 'ACTIVE');
+});
+
+test('disabled Friday resolves to OFF before any AI execution', () => {
+  const mode = resolveEffectiveAiMode('ACTIVE', weeklySchedule(), new Date('2026-09-04T08:00:00Z'));
   assert.equal(mode, 'OFF');
   assert.equal(shouldExecuteAi(mode), false, 'OFF gate must stop LLM, Goftino response, task and AI automation execution');
 });
 
-test('times before and after the allowed interval resolve to OFF', () => {
-  assert.equal(resolveEffectiveAiMode('ACTIVE', activeSchedule, new Date('2026-09-05T04:29:00Z')), 'OFF');
-  assert.equal(resolveEffectiveAiMode('ACTIVE', activeSchedule, new Date('2026-09-05T14:30:00Z')), 'OFF');
+test('shared Test Mode applies inside each enabled day interval', () => {
+  const schedule = { ...weeklySchedule(), allowedMode: 'TEST_MODE' as const };
+  assert.equal(resolveEffectiveAiMode('ACTIVE', schedule, new Date('2026-09-03T11:00:00Z')), 'TEST_MODE');
 });
 
-test('selected day and time runs ACTIVE mode', () => {
-  assert.equal(resolveEffectiveAiMode('OFF', activeSchedule, new Date('2026-09-05T05:00:00Z')), 'ACTIVE');
-});
-
-test('selected Test Mode is effective only inside the interval', () => {
-  const schedule = { ...activeSchedule, allowedMode: 'TEST_MODE' as const };
-  assert.equal(resolveEffectiveAiMode('ACTIVE', schedule, new Date('2026-09-05T05:00:00Z')), 'TEST_MODE');
-});
-
-test('start boundary is inclusive and end boundary is exclusive', () => {
-  assert.equal(resolveEffectiveAiMode('ACTIVE', activeSchedule, new Date('2026-09-05T04:30:00Z')), 'ACTIVE');
-  assert.equal(resolveEffectiveAiMode('ACTIVE', activeSchedule, new Date('2026-09-05T14:29:59Z')), 'ACTIVE');
-  assert.equal(resolveEffectiveAiMode('ACTIVE', activeSchedule, new Date('2026-09-05T14:30:00Z')), 'OFF');
+test('daily start boundary is inclusive and end boundary is exclusive', () => {
+  const schedule = weeklySchedule();
+  assert.equal(resolveEffectiveAiMode('ACTIVE', schedule, new Date('2026-09-05T04:30:00Z')), 'ACTIVE');
+  assert.equal(resolveEffectiveAiMode('ACTIVE', schedule, new Date('2026-09-05T08:29:59Z')), 'ACTIVE');
+  assert.equal(resolveEffectiveAiMode('ACTIVE', schedule, new Date('2026-09-05T08:30:00Z')), 'OFF');
 });
 
 test('weekday and clock are calculated in Asia/Tehran across UTC day boundary', () => {
   assert.deepEqual(iranLocalDayAndMinute(new Date('2026-09-04T21:00:00Z')), { day: 'SATURDAY', minuteOfDay: 30 });
 });
 
-test('overnight or empty enabled schedules are rejected', () => {
-  assert.throws(() => validateAiSchedule({ ...activeSchedule, startTime: '18:00', endTime: '08:00' }), /بعد از ساعت شروع/);
-  assert.throws(() => validateAiSchedule({ ...activeSchedule, days: [] }), /حداقل یک روز/);
+test('legacy shared interval converts selected days without losing hours', () => {
+  const converted = migrateLegacyAiSchedule({
+    enabled: true,
+    days: ['SATURDAY', 'THURSDAY'],
+    startTime: '09:15',
+    endTime: '17:45',
+    allowedMode: 'TEST_MODE',
+  });
+  assert.deepEqual(converted.weekly.SATURDAY, { enabled: true, startTime: '09:15', endTime: '17:45' });
+  assert.deepEqual(converted.weekly.THURSDAY, { enabled: true, startTime: '09:15', endTime: '17:45' });
+  assert.deepEqual(converted.weekly.FRIDAY, { enabled: false, startTime: '09:15', endTime: '17:45' });
+  assert.equal(converted.allowedMode, 'TEST_MODE');
+});
+
+test('overnight daily interval or no enabled day is rejected', () => {
+  const overnight = weeklySchedule();
+  overnight.weekly.SATURDAY = { enabled: true, startTime: '18:00', endTime: '08:00' };
+  assert.throws(() => validateAiSchedule(overnight), /بعد از ساعت شروع/);
+  const empty = weeklySchedule();
+  for (const day of IRAN_WEEKDAYS) empty.weekly[day.id].enabled = false;
+  assert.throws(() => validateAiSchedule(empty), /حداقل یک روز/);
 });

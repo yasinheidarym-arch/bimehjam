@@ -205,7 +205,10 @@ export default function App() {
   const [aiMode, setAiMode] = useState<AiMode>('TEST_MODE');
   const [aiModeLoading, setAiModeLoading] = useState<boolean>(false);
   const [aiModeMessage, setAiModeMessage] = useState<string | null>(null);
-  const [aiSchedule, setAiSchedule] = useState<AiSchedule>({ ...DEFAULT_AI_SCHEDULE, days: [...DEFAULT_AI_SCHEDULE.days] });
+  const [aiSchedule, setAiSchedule] = useState<AiSchedule>({
+    ...DEFAULT_AI_SCHEDULE,
+    weekly: Object.fromEntries(Object.entries(DEFAULT_AI_SCHEDULE.weekly).map(([day, value]) => [day, { ...value }])) as AiSchedule['weekly'],
+  });
   const [effectiveAiMode, setEffectiveAiMode] = useState<AiMode>('TEST_MODE');
 
   // Fetch initial data from backend Express server
@@ -267,11 +270,8 @@ export default function App() {
     }
   };
 
-  const toggleScheduleDay = (day: AiSchedule['days'][number]) => {
-    setAiSchedule((current) => ({
-      ...current,
-      days: current.days.includes(day) ? current.days.filter((item) => item !== day) : [...current.days, day],
-    }));
+  const updateScheduleDay = (day: keyof AiSchedule['weekly'], update: Partial<AiSchedule['weekly'][typeof day]>) => {
+    setAiSchedule((current) => ({ ...current, weekly: { ...current.weekly, [day]: { ...current.weekly[day], ...update } } }));
   };
 
   const [e2eTesting, setE2eTesting] = useState(false);
@@ -670,29 +670,31 @@ export default function App() {
                     </label>
                   </div>
 
-                  <div>
-                    <div className="mb-2 text-[11px] font-bold text-slate-700">روزهای هفته</div>
-                    <div className="flex flex-wrap gap-2">
-                      {IRAN_WEEKDAYS.map((day) => {
-                        const selected = aiSchedule.days.includes(day.id);
-                        return <button key={day.id} type="button" onClick={() => toggleScheduleDay(day.id)} className={`rounded-lg border px-3 py-1.5 text-[11px] font-bold ${selected ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-500'}`}>{day.label}</button>;
-                      })}
+                  <div className="overflow-hidden rounded-xl border border-slate-200">
+                    <div className="grid grid-cols-[1fr_auto_1fr_1fr] gap-2 bg-slate-100 px-3 py-2 text-[10px] font-black text-slate-600">
+                      <span>روز</span><span>وضعیت</span><span>ساعت شروع</span><span>ساعت پایان</span>
                     </div>
+                    {IRAN_WEEKDAYS.map((day) => {
+                      const daySchedule = aiSchedule.weekly[day.id];
+                      return (
+                        <div key={day.id} className={`grid grid-cols-[1fr_auto_1fr_1fr] items-center gap-2 border-t border-slate-100 px-3 py-2 ${daySchedule.enabled ? 'bg-white' : 'bg-slate-50'}`}>
+                          <span className="text-xs font-bold text-slate-700">{day.label}</span>
+                          <input type="checkbox" checked={daySchedule.enabled} onChange={(event) => updateScheduleDay(day.id, { enabled: event.target.checked })} className="h-4 w-4 accent-indigo-600" aria-label={`فعال‌سازی ${day.label}`} />
+                          <input type="time" disabled={!daySchedule.enabled} value={daySchedule.startTime} onChange={(event) => updateScheduleDay(day.id, { startTime: event.target.value })} className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400" aria-label={`ساعت شروع ${day.label}`} />
+                          <input type="time" disabled={!daySchedule.enabled} value={daySchedule.endTime} onChange={(event) => updateScheduleDay(day.id, { endTime: event.target.value })} className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400" aria-label={`ساعت پایان ${day.label}`} />
+                        </div>
+                      );
+                    })}
                   </div>
 
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-                    <label className="text-[11px] font-bold text-slate-700">ساعت شروع
-                      <input type="time" value={aiSchedule.startTime} onChange={(event) => setAiSchedule({ ...aiSchedule, startTime: event.target.value })} className="mt-1 block w-full rounded-xl border border-slate-200 px-3 py-2 text-xs" />
-                    </label>
-                    <label className="text-[11px] font-bold text-slate-700">ساعت پایان
-                      <input type="time" value={aiSchedule.endTime} onChange={(event) => setAiSchedule({ ...aiSchedule, endTime: event.target.value })} className="mt-1 block w-full rounded-xl border border-slate-200 px-3 py-2 text-xs" />
-                    </label>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <label className="text-[11px] font-bold text-slate-700">حالت AI در ساعت‌های مجاز
                       <select value={aiSchedule.allowedMode} onChange={(event) => setAiSchedule({ ...aiSchedule, allowedMode: event.target.value as AiSchedule['allowedMode'] })} className="mt-1 block w-full rounded-xl border border-slate-200 px-3 py-2 text-xs">
                         <option value="ACTIVE">ACTIVE</option>
                         <option value="TEST_MODE">AI Test Mode</option>
                       </select>
                     </label>
+                    <div className="rounded-xl border border-indigo-100 bg-indigo-50 px-3 py-2 text-[11px] font-bold text-indigo-700">منطقه زمانی: ساعت ایران (Asia/Tehran)</div>
                   </div>
 
                   <div className="rounded-xl bg-slate-100 px-3 py-2 text-[11px] font-medium text-slate-600">

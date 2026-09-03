@@ -358,9 +358,7 @@ export const settingService = {
   },
   setAiSchedule: async (schedule: {
     enabled: boolean;
-    days: string[];
-    startTime: string;
-    endTime: string;
+    weekly: Record<string, { enabled: boolean; startTime: string; endTime: string }>;
     allowedMode: 'ACTIVE' | 'TEST_MODE';
     timezone: 'Asia/Tehran';
   }) => apiClient.put('/ai/schedule', schedule),
