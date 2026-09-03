@@ -55,15 +55,21 @@ export const AutomationRuleBuilder: React.FC = () => {
   const [testScore, setTestScore] = useState(85);
   const [testMessage, setTestMessage] = useState('');
 
-  useEffect(() => {
-    fetchRules();
-    fetchExecutions();
+  const loadTaskTypes = () => {
     taskTypeService.getTypes().then((res: any) => {
       if (res.success) {
         setTaskTypes(res.data);
-        if (res.data[0]) setTaskType(res.data[0].id);
+        setTaskType((current) => res.data.some((item: { id: string }) => item.id === current) ? current : (res.data[0]?.id || ''));
       }
     }).catch(() => undefined);
+  };
+
+  useEffect(() => {
+    fetchRules();
+    fetchExecutions();
+    loadTaskTypes();
+    window.addEventListener('bimehjam-task-types-updated', loadTaskTypes);
+    return () => window.removeEventListener('bimehjam-task-types-updated', loadTaskTypes);
   }, []);
 
   const fetchRules = async () => {

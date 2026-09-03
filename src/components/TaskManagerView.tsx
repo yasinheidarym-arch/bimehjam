@@ -81,6 +81,7 @@ export const TaskManagerView: React.FC = () => {
 
   // New task modal
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+  const [isTaskTypeModalOpen, setIsTaskTypeModalOpen] = useState(false);
   const [customers, setCustomers] = useState<any[]>([]);
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskDesc, setNewTaskDesc] = useState('');
@@ -106,11 +107,14 @@ export const TaskManagerView: React.FC = () => {
     fetchCustomersList();
   }, [statusFilter, priorityFilter, typeFilter, sourceFilter]);
 
-  useEffect(() => {
-    taskSmsService.getSettings()
-      .then((res: any) => res.success && setSmsSettings(res.data))
-      .catch(() => undefined);
-  }, []);
+  const loadSmsSettings = async () => {
+    try {
+      const res: any = await taskSmsService.getSettings();
+      if (res.success) setSmsSettings(res.data);
+    } catch { /* The task UI remains usable if SMS settings are unavailable. */ }
+  };
+
+  useEffect(() => { loadSmsSettings(); }, []);
 
   const loadTaskTypes = async () => {
     try {
@@ -131,7 +135,8 @@ export const TaskManagerView: React.FC = () => {
       await taskTypeService.createType(newTaskTypeLabel);
       setNewTaskTypeLabel('');
       setTaskTypeMessage('نوع وظیفه اضافه شد.');
-      await loadTaskTypes();
+      await Promise.all([loadTaskTypes(), loadSmsSettings()]);
+      window.dispatchEvent(new CustomEvent('bimehjam-task-types-updated'));
     } catch (error) { setTaskTypeMessage(error instanceof Error ? error.message : 'ثبت ناموفق بود.'); }
   };
 
@@ -139,9 +144,8 @@ export const TaskManagerView: React.FC = () => {
     try {
       const res: any = await taskTypeService.deleteType(id);
       setTaskTypeMessage(res.data?.mode === 'archived' ? 'نوع استفاده‌شده آرشیو شد.' : 'نوع بدون استفاده حذف شد.');
-      await loadTaskTypes();
-      const smsRes: any = await taskSmsService.getSettings();
-      if (smsRes.success) setSmsSettings(smsRes.data);
+      await Promise.all([loadTaskTypes(), loadSmsSettings()]);
+      window.dispatchEvent(new CustomEvent('bimehjam-task-types-updated'));
     } catch (error) { setTaskTypeMessage(error instanceof Error ? error.message : 'حذف ناموفق بود.'); }
   };
 
@@ -330,13 +334,16 @@ export const TaskManagerView: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={() => setIsModalOpen(true)}
-          className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-4 py-2.5 rounded-xl text-xs shadow-lg transition-transform hover:scale-105 flex items-center gap-2 shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          ثبت وظیفه جدید
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {currentRole === 'ADMIN' && (
+            <button onClick={() => setIsTaskTypeModalOpen(true)} className="bg-white/10 hover:bg-white/20 border border-white/20 text-white font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2">
+              <Tag className="w-4 h-4" /> مدیریت نوع وظیفه
+            </button>
+          )}
+          <button onClick={() => setIsModalOpen(true)} className="bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold px-4 py-2.5 rounded-xl text-xs shadow-lg transition-transform hover:scale-105 flex items-center gap-2 shrink-0">
+            <Plus className="w-4 h-4" /> ثبت وظیفه جدید
+          </button>
+        </div>
       </div>
 
       {currentRole === 'ADMIN' && smsSettings && (
@@ -402,25 +409,6 @@ export const TaskManagerView: React.FC = () => {
             </div>
           </div>
           {smsMessage && <div className="text-xs text-slate-600">{smsMessage}</div>}
-        </div>
-      )}
-
-      {currentRole === 'ADMIN' && (
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-3">
-          <div><h3 className="font-black text-slate-800">مدیریت نوع وظیفه</h3><p className="text-xs text-slate-500 mt-1">نوع‌های استفاده‌شده برای حفظ تاریخچه آرشیو می‌شوند.</p></div>
-          <div className="flex gap-2">
-            <input value={newTaskTypeLabel} onChange={(e) => setNewTaskTypeLabel(e.target.value)} placeholder="عنوان نوع جدید" className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-xs" />
-            <button type="button" onClick={addTaskType} className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white">افزودن نوع</button>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-            {taskTypes.map((item) => (
-              <div key={item.id} className={`flex items-center justify-between rounded-xl border p-3 text-xs ${item.active ? 'border-slate-200' : 'border-slate-100 bg-slate-50 text-slate-400'}`}>
-                <span>{item.label}{!item.active && ' — آرشیوشده'}</span>
-                {item.active && <button type="button" onClick={() => deleteTaskType(item.id)} className="text-rose-600 font-bold">حذف</button>}
-              </div>
-            ))}
-          </div>
-          {taskTypeMessage && <div className="text-xs text-slate-600">{taskTypeMessage}</div>}
         </div>
       )}
 
@@ -676,6 +664,30 @@ export const TaskManagerView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {isTaskTypeModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 space-y-4 max-h-[85vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div><h3 className="font-black text-slate-800">مدیریت نوع وظیفه</h3><p className="text-xs text-slate-500 mt-1">نوع‌های استفاده‌شده آرشیو و نوع‌های بدون استفاده حذف می‌شوند.</p></div>
+              <button type="button" onClick={() => setIsTaskTypeModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold">✕</button>
+            </div>
+            <div className="flex gap-2">
+              <input value={newTaskTypeLabel} onChange={(e) => setNewTaskTypeLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTaskType(); } }} placeholder="عنوان نوع جدید" className="flex-1 rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
+              <button type="button" onClick={addTaskType} className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white">افزودن</button>
+            </div>
+            <div className="space-y-2">
+              {taskTypes.map((item) => (
+                <div key={item.id} className={`flex items-center justify-between rounded-xl border p-3 text-xs ${item.active ? 'border-slate-200' : 'border-slate-100 bg-slate-50 text-slate-400'}`}>
+                  <span className="font-bold">{item.label}{!item.active && ' — آرشیوشده'}</span>
+                  {item.active && <button type="button" onClick={() => deleteTaskType(item.id)} className="text-rose-600 font-bold">حذف / آرشیو</button>}
+                </div>
+              ))}
+            </div>
+            {taskTypeMessage && <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">{taskTypeMessage}</div>}
+          </div>
+        </div>
+      )}
 
       {/* Modal Create Task */}
       {isModalOpen && (
