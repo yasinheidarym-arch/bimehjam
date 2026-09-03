@@ -24,6 +24,7 @@ import {
   AiSchedule,
   AiTimeRange,
   DEFAULT_AI_SCHEDULE,
+  describeAiRange,
   effectiveAiStatusLabel,
   IRAN_WEEKDAYS,
   resolveEffectiveAiMode,
@@ -287,7 +288,7 @@ export default function App() {
   };
 
   const addScheduleRange = (day: keyof AiSchedule['weekly']) => {
-    const range: AiTimeRange = { startTime: '08:00', endTime: '18:00', endDay: 'SAME_DAY', untilEndOfDay: false };
+    const range: AiTimeRange = { startTime: '08:00', endTime: '18:00' };
     setAiSchedule((current) => ({
       ...current,
       weekly: { ...current.weekly, [day]: { ranges: [...current.weekly[day].ranges, range] } },
@@ -731,28 +732,15 @@ export default function App() {
                           ) : (
                             <div className="divide-y divide-slate-100">
                               {ranges.map((range, index) => (
-                                <div key={`${day.id}-${index}`} className="grid grid-cols-1 items-end gap-2 px-3 py-3 md:grid-cols-[1fr_1fr_1.25fr_auto_auto]">
+                                <div key={`${day.id}-${index}`} className="grid grid-cols-1 items-end gap-2 px-3 py-3 md:grid-cols-[1fr_1fr_auto]">
                                   <label className="text-[10px] font-bold text-slate-600">ساعت شروع
                                     <input type="time" value={range.startTime} onChange={(event) => updateScheduleRange(day.id, index, { startTime: event.target.value })} className="mt-1 block w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" aria-label={`ساعت شروع ${day.label} بازه ${index + 1}`} />
                                   </label>
                                   <label className="text-[10px] font-bold text-slate-600">ساعت پایان
-                                    {range.untilEndOfDay ? (
-                                      <input type="text" value="24:00" disabled className="mt-1 block w-full rounded-lg border border-slate-200 bg-slate-100 px-2 py-1.5 text-xs text-slate-500" aria-label={`ساعت پایان ${day.label} بازه ${index + 1}`} />
-                                    ) : (
-                                      <input type="time" value={range.endTime} onChange={(event) => updateScheduleRange(day.id, index, { endTime: event.target.value })} className="mt-1 block w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" aria-label={`ساعت پایان ${day.label} بازه ${index + 1}`} />
-                                    )}
-                                  </label>
-                                  <label className="text-[10px] font-bold text-slate-600">روز پایان
-                                    <select disabled={range.untilEndOfDay} value={range.endDay} onChange={(event) => updateScheduleRange(day.id, index, { endDay: event.target.value as AiTimeRange['endDay'] })} className="mt-1 block w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs disabled:bg-slate-100 disabled:text-slate-400">
-                                      <option value="SAME_DAY">پایان در همان روز</option>
-                                      <option value="NEXT_DAY">پایان در روز بعد</option>
-                                    </select>
-                                  </label>
-                                  <label className="flex h-8 items-center gap-1.5 whitespace-nowrap text-[10px] font-bold text-slate-600">
-                                    <input type="checkbox" checked={range.untilEndOfDay} onChange={(event) => updateScheduleRange(day.id, index, event.target.checked ? { untilEndOfDay: true, endTime: '24:00', endDay: 'SAME_DAY' } : { untilEndOfDay: false, endTime: '18:00', endDay: 'SAME_DAY' })} className="h-4 w-4 accent-indigo-600" />
-                                    تا پایان روز
+                                    <input type="time" value={range.endTime} onChange={(event) => updateScheduleRange(day.id, index, { endTime: event.target.value })} className="mt-1 block w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" aria-label={`ساعت پایان ${day.label} بازه ${index + 1}`} />
                                   </label>
                                   <button type="button" onClick={() => removeScheduleRange(day.id, index)} className="h-8 rounded-lg border border-rose-200 px-3 text-[10px] font-bold text-rose-700 hover:bg-rose-50" aria-label={`حذف بازه ${index + 1} ${day.label}`}>حذف</button>
+                                  <p className="rounded-lg bg-indigo-50 px-3 py-2 text-[11px] font-bold text-indigo-700 md:col-span-3">{describeAiRange(day.id, range)}</p>
                                 </div>
                               ))}
                             </div>
