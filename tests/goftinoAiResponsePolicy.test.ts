@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { composeScopedKnowledge } from '../server/services/categoryKnowledgeScope.ts';
-import { decideGoftinoAiPolicy } from '../server/services/goftinoAiPolicyDecision.ts';
+import { decideGoftinoAiPolicy, goftinoAiResponseMode } from '../server/services/goftinoAiPolicyDecision.ts';
 import { findCategoryForCatalogTopic, findGoftinoCatalogTopic, GOFTINO_TOPIC_CATALOG } from '../server/services/goftinoTopicCatalog.ts';
 
 const responsibilityPolicy = {
@@ -39,6 +39,7 @@ test('responsibility maps from the Persian category identity and can be enabled 
   const disabled = decideGoftinoAiPolicy(responsibilityPolicy, false);
   assert.equal(disabled.kind, 'HANDOFF');
   if (disabled.kind === 'HANDOFF') assert.equal(disabled.reason, 'DISABLED');
+  assert.equal(goftinoAiResponseMode(disabled), 'SILENT');
 });
 
 test('fire maps to its category and can be enabled or disabled', () => {
@@ -55,6 +56,7 @@ test('fire maps to its category and can be enabled or disabled', () => {
   const disabled = decideGoftinoAiPolicy(firePolicy, false);
   assert.equal(disabled.kind, 'HANDOFF');
   if (disabled.kind === 'HANDOFF') assert.equal(disabled.reason, 'DISABLED');
+  assert.equal(goftinoAiResponseMode(disabled), 'SILENT');
 });
 
 test('responsibility category context is ordered before building-manager subcategory context', () => {
@@ -72,10 +74,11 @@ test('enabled topic without a specialized category is limited to the safe genera
   }
 });
 
-test('a disabled topic routes to handoff even when it has no specialized category', () => {
+test('a disabled topic stays silent even when it has no specialized category', () => {
   const decision = decideGoftinoAiPolicy(claimsPolicy, false);
   assert.equal(decision.kind, 'HANDOFF');
   if (decision.kind === 'HANDOFF') assert.equal(decision.reason, 'DISABLED');
+  assert.equal(goftinoAiResponseMode(decision), 'SILENT');
 });
 
 test('unknown topic always routes to handoff', () => {
@@ -83,6 +86,7 @@ test('unknown topic always routes to handoff', () => {
   const decision = decideGoftinoAiPolicy(null, true);
   assert.equal(decision.kind, 'HANDOFF');
   if (decision.kind === 'HANDOFF') assert.equal(decision.reason, 'UNKNOWN_TOPIC');
+  assert.equal(goftinoAiResponseMode(decision), 'HANDOFF_MESSAGE');
 });
 
 test('catalog contains exactly the ten uploaded Goftino topics', () => {

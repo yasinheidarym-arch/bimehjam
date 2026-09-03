@@ -5,6 +5,7 @@ import { processBrainLayer } from './brainLayerService';
 import { getAiMode } from './settingService';
 import { createSystemTask } from './taskService';
 import { resolveGoftinoAiPolicy } from './goftinoAiPolicyService';
+import { goftinoAiResponseMode } from './goftinoAiPolicyDecision';
 
 const DEFAULT_GOFTINO_HANDOFF_MESSAGE = 'برای بررسی دقیق درخواست شما، همکاران متخصص بیمه جم ادامهٔ گفتگو را پیگیری می‌کنند. 🌹';
 
@@ -349,7 +350,8 @@ export async function runAiPipelineForMessage(params: {
     typingStarted = false;
   };
 
-  if (goftinoChatIdForTyping) {
+  const scheduleGoftinoTyping = () => {
+    if (!goftinoChatIdForTyping || typingTimer || typingStarted) return;
     typingTimer = setTimeout(async () => {
       try {
         const result = await setGoftinoTyping(
@@ -385,7 +387,7 @@ export async function runAiPipelineForMessage(params: {
         );
       }
     }, 2500);
-  }
+  };
 
   try {
   // 1. Webhook Received
@@ -494,6 +496,22 @@ export async function runAiPipelineForMessage(params: {
     // Specialized insurance responses are allowed only for an active policy
     // matched by Goftino's stable topic/department identifier.
     const policyDecision = await resolveGoftinoAiPolicy(customerGoftinoTopicId(customer.metadata));
+    const responseMode = goftinoAiResponseMode(policyDecision);
+
+    if (responseMode === 'SILENT') {
+      await createAiLog({
+        conversationId,
+        customerId,
+        messageId,
+        step: 'Goftino AI Policy Check',
+        status: 'INFO',
+        details: 'رشتهٔ گفتینو خاموش است؛ بدون typing، تولید پاسخ، ذخیره پیام AI یا ارسال پیام به گفتینو متوقف شد.',
+        durationMs: Date.now() - brainStart,
+      });
+      return;
+    }
+
+    scheduleGoftinoTyping();
 
     const handoffRequestRegex = /کارشناس|اپراتور|انسان|تماس|مشاور تلفنی|وصل کن/i;
     const customerRequestedHuman = handoffRequestRegex.test(userMessageContent);
