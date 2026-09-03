@@ -564,8 +564,9 @@ export async function runAiPipelineForMessage(params: {
         conversation,
         userMessageContent,
         messageHistory: messagesReversed,
-        allowedCategoryId: policyDecision.policy.insuranceCategoryId,
+        allowedCategoryId: policyDecision.policy.insuranceCategoryId || undefined,
         goftinoPolicyTitle: policyDecision.policy.goftinoTopicTitle,
+        restrictKnowledgeScope: true,
       });
 
     }

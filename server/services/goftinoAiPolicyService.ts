@@ -20,12 +20,11 @@ export async function resolveGoftinoAiPolicy(goftinoTopicId?: string | null): Pr
     prisma.systemSetting.findUnique({ where: { key: settingKey(topic.id) } }),
   ]);
   const category = findCategoryForCatalogTopic(topic, categories);
-  if (!category) return { kind: 'HANDOFF', policy: null, reason: 'INVALID_CATEGORY' };
 
   return decideGoftinoAiPolicy({
     goftinoTopicId: topic.id,
     goftinoTopicTitle: topic.title,
-    insuranceCategoryId: category.id,
+    insuranceCategoryId: category?.id || null,
   }, setting?.value === 'true');
 }
 
@@ -41,8 +40,7 @@ export async function getGoftinoAiPolicyCatalog() {
       id: topic.id,
       title: topic.title,
       category: category ? { id: category.id, name: category.name } : null,
-      enabled: Boolean(category) && values.get(settingKey(topic.id)) === 'true',
-      locked: !category,
+      enabled: values.get(settingKey(topic.id)) === 'true',
     };
   });
 }
@@ -51,12 +49,11 @@ export async function setGoftinoAiPolicyEnabled(topicId: string, enabled: boolea
   const rows = await getGoftinoAiPolicyCatalog();
   const row = rows.find((item) => item.id === topicId);
   if (!row) throw new Error('رشتهٔ گفتینو در catalog شناخته‌شده نیست.');
-  if (row.locked && enabled) throw new Error('این رشته دستهٔ بیمه‌ای معتبر ندارد و همیشه به کارشناس ارجاع می‌شود.');
 
   await prisma.systemSetting.upsert({
     where: { key: settingKey(topicId) },
-    create: { key: settingKey(topicId), value: String(enabled && !row.locked), description: `وضعیت پاسخ AI برای ${row.title}` },
-    update: { value: String(enabled && !row.locked) },
+    create: { key: settingKey(topicId), value: String(enabled), description: `وضعیت پاسخ AI برای ${row.title}` },
+    update: { value: String(enabled) },
   });
-  return { ...row, enabled: enabled && !row.locked };
+  return { ...row, enabled };
 }

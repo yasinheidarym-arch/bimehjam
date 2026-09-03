@@ -141,8 +141,9 @@ export async function processBrainLayer(params: {
   messageHistory: any[];
   allowedCategoryId?: string;
   goftinoPolicyTitle?: string;
+  restrictKnowledgeScope?: boolean;
 }): Promise<BrainResult> {
-  const { customer, conversation, userMessageContent, messageHistory, allowedCategoryId, goftinoPolicyTitle } = params;
+  const { customer, conversation, userMessageContent, messageHistory, allowedCategoryId, goftinoPolicyTitle, restrictKnowledgeScope } = params;
 
   const historyText = messageHistory
     .map((m) => `${m.senderType === 'CUSTOMER' ? 'مشتری' : 'مشاور بیمه جم'}: ${m.content}`)
@@ -187,7 +188,7 @@ export async function processBrainLayer(params: {
       pageUrl: typeof customerMetadata.lastUrl === 'string' ? customerMetadata.lastUrl : undefined,
       interestedInsuranceTypes: customer.interestedInsuranceTypes,
       categoryId: allowedCategoryId || null,
-      restrictToCategory: Boolean(allowedCategoryId),
+      restrictToCategory: Boolean(restrictKnowledgeScope),
     },
     existingCollectedData,
   });
@@ -228,7 +229,8 @@ export async function processBrainLayer(params: {
 وظیفه شما فقط تولید بهترین پاسخ ممکن بر اساس Context ارائه شده است.
 
 ${allowedCategoryId ? `رشتهٔ مجاز گفتینو: «${goftinoPolicyTitle || 'ثبت‌شده'}»
-فقط دانش و قوانین دستهٔ بیمهٔ مجازِ همین رشته و زیرمجموعه‌های آن را استفاده کن.` : ''}
+فقط دانش و قوانین دستهٔ بیمهٔ مجازِ همین رشته و زیرمجموعه‌های آن را استفاده کن.` : restrictKnowledgeScope ? `رشتهٔ گفتینو «${goftinoPolicyTitle || 'ثبت‌شده'}» دستهٔ تخصصی ندارد.
+فقط قواعد عمومیِ ایمن را استفاده کن؛ به دانش هیچ دسته یا محصول بیمه‌ای دسترسی نداری. اطلاعات تخصصی را حدس نزن و در صورت نیاز سؤال روشن‌کننده بپرس.` : ''}
 
 
 ==============================

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { LockKeyhole, ToggleLeft, ToggleRight } from 'lucide-react';
+import { ToggleLeft, ToggleRight } from 'lucide-react';
 import { aiPolicyService } from '../services/api';
 
 type CatalogRow = {
@@ -7,7 +7,6 @@ type CatalogRow = {
   title: string;
   category: { id: string; name: string } | null;
   enabled: boolean;
-  locked: boolean;
 };
 
 export function GoftinoAiResponsePolicyPanel() {
@@ -31,7 +30,6 @@ export function GoftinoAiResponsePolicyPanel() {
   useEffect(() => { void load(); }, []);
 
   const toggle = async (row: CatalogRow) => {
-    if (row.locked) return;
     setUpdatingId(row.id);
     setMessage(null);
     try {
@@ -77,13 +75,13 @@ export function GoftinoAiResponsePolicyPanel() {
                   {row.category ? (
                     <span className="font-bold text-slate-700">{row.category.name}</span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 font-bold text-amber-700"><LockKeyhole className="h-3.5 w-3.5" />ارجاع ثابت به کارشناس</span>
+                    <span className="font-bold text-slate-500">بدون دسته تخصصی</span>
                   )}
                 </td>
                 <td className="p-3 text-center">
                   <button
                     type="button"
-                    disabled={row.locked || updatingId === row.id}
+                    disabled={updatingId === row.id}
                     onClick={() => void toggle(row)}
                     aria-label={`پاسخ AI برای ${row.title}`}
                     aria-pressed={row.enabled}

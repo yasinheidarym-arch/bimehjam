@@ -1,12 +1,12 @@
 export type GoftinoAiPolicyInput = {
   goftinoTopicId: string;
   goftinoTopicTitle: string;
-  insuranceCategoryId: string;
+  insuranceCategoryId: string | null;
 };
 
 export type GoftinoAiPolicyDecision =
-  | { kind: 'ALLOW'; policy: GoftinoAiPolicyInput }
-  | { kind: 'HANDOFF'; policy: GoftinoAiPolicyInput | null; reason: 'UNKNOWN_TOPIC' | 'DISABLED' | 'INVALID_CATEGORY' };
+  | { kind: 'ALLOW'; scope: 'CATEGORY' | 'GENERAL'; policy: GoftinoAiPolicyInput }
+  | { kind: 'HANDOFF'; policy: GoftinoAiPolicyInput | null; reason: 'UNKNOWN_TOPIC' | 'DISABLED' };
 
 /** Resolves only a stable identifier; titles never authorize insurance access. */
 export function decideGoftinoAiPolicy(
@@ -14,7 +14,6 @@ export function decideGoftinoAiPolicy(
   enabled: boolean,
 ): GoftinoAiPolicyDecision {
   if (!policy) return { kind: 'HANDOFF', policy: null, reason: 'UNKNOWN_TOPIC' };
-  if (!policy.insuranceCategoryId) return { kind: 'HANDOFF', policy, reason: 'INVALID_CATEGORY' };
   if (!enabled) return { kind: 'HANDOFF', policy, reason: 'DISABLED' };
-  return { kind: 'ALLOW', policy };
+  return { kind: 'ALLOW', scope: policy.insuranceCategoryId ? 'CATEGORY' : 'GENERAL', policy };
 }
