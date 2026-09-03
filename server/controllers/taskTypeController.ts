@@ -1,12 +1,17 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
-import { addTaskType, getTaskTypeCatalog, removeOrArchiveTaskType, updateTaskType } from '../services/taskTypeCatalogService';
+import { addTaskType, getManagedTaskTypeCatalog, getTaskTypeCatalog, removeOrArchiveTaskType, restoreTaskType, updateTaskType } from '../services/taskTypeCatalogService';
 
 export async function listTaskTypes(req: AuthRequest, res: Response) {
   try {
     const includeArchived = req.query.includeArchived === 'true' && req.user?.role === 'ADMIN';
-    return res.json({ success: true, data: await getTaskTypeCatalog({ includeArchived }) });
+    return res.json({ success: true, data: includeArchived ? await getManagedTaskTypeCatalog() : await getTaskTypeCatalog() });
   } catch { return res.status(500).json({ success: false, error: 'دریافت انواع وظیفه ناموفق بود.' }); }
+}
+
+export async function restoreArchivedTaskType(req: AuthRequest, res: Response) {
+  try { return res.json({ success: true, data: await restoreTaskType(req.params.id) }); }
+  catch (error) { return res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'بازگردانی نوع وظیفه ناموفق بود.' }); }
 }
 
 export async function createTaskType(req: AuthRequest, res: Response) {

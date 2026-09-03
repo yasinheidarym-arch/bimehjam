@@ -88,6 +88,23 @@ export function advanceHumanHandoffName(input: {
   return { action: 'CREATE_TASK', fullName: null, reason: input.state.reason, nameStatus: 'NOT_PROVIDED' };
 }
 
+export function resolveHumanHandoffNameRule(input: {
+  ruleActive: boolean;
+  reason: HumanHandoffReason;
+  existingCustomerName?: string | null;
+  message?: string;
+  state?: HumanHandoffNameState | null;
+}): HumanHandoffNameResult {
+  if (input.ruleActive) return advanceHumanHandoffName(input);
+  const fullName = validStoredFullName(input.existingCustomerName);
+  return {
+    action: 'CREATE_TASK',
+    fullName,
+    reason: input.state?.reason || input.reason,
+    nameStatus: fullName ? 'RECORDED' : 'NOT_PROVIDED',
+  };
+}
+
 export function handoffReasonLabel(reason: HumanHandoffReason): string {
   return reason === 'QUOTATION_COMPLETED' ? 'تکمیل استعلام قیمت' : 'درخواست مستقیم کارشناس';
 }

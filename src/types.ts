@@ -139,6 +139,8 @@ export interface AiBehaviorRule {
   directive: string;
   sortOrder: number;
   status: 'ACTIVE' | 'INACTIVE';
+  category?: string;
+  enforcementLevel?: string;
   createdAt?: string;
   updatedAt?: string;
 }

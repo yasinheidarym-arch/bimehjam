@@ -50,6 +50,7 @@ import {
 } from 'lucide-react';
 import { knowledgeService } from '../services/api';
 import { AiBehaviorRule } from '../types';
+import { FULL_NAME_HANDOFF_RULE_CATEGORY } from '../../shared/humanHandoffRule';
 
 type ModuleTab = 'categories' | 'products' | 'faqs' | 'ai-behavior';
 
@@ -1762,7 +1763,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                 </span>
               </div>
               <p className="text-xs text-slate-300 leading-relaxed">
-                تمامی قوانین فعال به ترتیب اولویت تعیین‌شده توسط شما ترکیب شده و قبل از هر پاسخ هوش مصنوعی اعمال می‌شوند. هیچ قانون یا فیلد سخت‌کد شده‌ای وجود ندارد؛ شما می‌توانید هر تعداد قانون جدید ایجاد، ویرایش، حذف، جا‌به‌جا یا فعال/غیرفعال کنید.
+                تمامی قوانین فعال به ترتیب اولویت تعیین‌شده توسط شما اعمال می‌شوند. قوانین سیستمی متصل به runtime قابل فعال/غیرفعال‌کردن هستند و قوانین سفارشی را می‌توانید ایجاد، ویرایش، حذف یا جابه‌جا کنید.
               </p>
             </div>
 
@@ -1831,6 +1832,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                 )
                 .map((rule, idx) => {
                   const isActive = rule.status === 'ACTIVE';
+                  const isFullNameHandoffRule = rule.category === FULL_NAME_HANDOFF_RULE_CATEGORY;
                   const isFirst = idx === 0;
                   const isLast = idx === aiBehaviorRules.length - 1;
 
@@ -1866,6 +1868,11 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                         <div className="space-y-1 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <h4 className="font-bold text-slate-900 text-sm">{rule.title}</h4>
+                            {isFullNameHandoffRule && (
+                              <span className="rounded-full bg-indigo-100 px-2.5 py-0.5 text-[10px] font-bold text-indigo-700">
+                                متصل به مسیر واقعی گفتینو
+                              </span>
+                            )}
 
                             {/* Status Badge */}
                             <button
@@ -1932,22 +1939,22 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                         </button>
 
                         {/* Edit Button */}
-                        <button
+                        {!isFullNameHandoffRule && <button
                           onClick={() => handleOpenEditBehaviorModal(rule)}
                           className="p-2 text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors"
                           title="ویرایش قانون"
                         >
                           <Edit3 className="w-4 h-4" />
-                        </button>
+                        </button>}
 
                         {/* Delete Button */}
-                        <button
+                        {!isFullNameHandoffRule && <button
                           onClick={() => handleDeleteBehaviorRule(rule.id)}
                           className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors"
                           title="حذف قانون"
                         >
                           <Trash2 className="w-4 h-4" />
-                        </button>
+                        </button>}
                       </div>
                     </div>
                   );

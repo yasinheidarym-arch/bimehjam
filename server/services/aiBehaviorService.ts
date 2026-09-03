@@ -1,4 +1,10 @@
 import prisma from '../db/client';
+import {
+  FULL_NAME_HANDOFF_RULE_CATEGORY,
+  FULL_NAME_HANDOFF_RULE_DIRECTIVE,
+  FULL_NAME_HANDOFF_RULE_ID,
+  FULL_NAME_HANDOFF_RULE_TITLE,
+} from '../../shared/humanHandoffRule';
 
 export interface AiBehaviorRuleItem {
   id: string;
@@ -6,6 +12,8 @@ export interface AiBehaviorRuleItem {
   directive: string;
   sortOrder: number;
   status: 'ACTIVE' | 'INACTIVE';
+  category?: string;
+  enforcementLevel?: string;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -17,7 +25,7 @@ const DEFAULT_INITIAL_RULES = [
   { title: 'عبارات ممنوعه', directive: 'از کلمات عامیانه سخیف، تضمین‌های غیرواقعی، و حدس زدن قیمت بدون مشخصات اکیداً خودداری کنید.', sortOrder: 4, status: 'ACTIVE' },
   { title: 'سیاست اعلام قیمت', directive: 'استعلام قیمت را پس از اخذ مشخصات اعلام نموده و امکان پرداخت اقساطی بدون سود را یادآوری کنید.', sortOrder: 5, status: 'ACTIVE' },
   { title: 'سیاست پیشنهاد پوشش', directive: 'پوشش‌های مکمل و ضروری (مانند سرقت، حوادث یا مسئولیت) را متناسب با نیاز مشتری پیشنهاد دهید.', sortOrder: 6, status: 'ACTIVE' },
-  { title: 'ارجاع به کارشناس', directive: 'پیش از ارجاع پس از تکمیل استعلام یا درخواست مستقیم کارشناس، نام و نام خانوادگی مشتری را بپرسید مگر اینکه قبلاً معتبر ثبت شده باشد؛ سپس پرونده را ارجاع دهید.', sortOrder: 7, status: 'ACTIVE' },
+  { title: 'ارجاع به کارشناس', directive: 'پس از استخراج تمامی پاسخ‌های استعلام، پرونده را جهت محاسبه و اعلام قیمت به کارشناس ارجاع دهید.', sortOrder: 7, status: 'ACTIVE' },
   { title: 'سوال پیگیری', directive: 'در انتهای هر پاسخ، فقط یک سوال مشخص مربوط به مرحله بعد استعلام از مشتری بپرسید.', sortOrder: 8, status: 'ACTIVE' },
 ];
 
@@ -40,6 +48,40 @@ async function ensureSeedRules() {
       });
     }
   }
+  const existingSystemRule = await prisma.aiRule.findFirst({
+    where: { OR: [{ id: FULL_NAME_HANDOFF_RULE_ID }, { category: FULL_NAME_HANDOFF_RULE_CATEGORY }, { title: FULL_NAME_HANDOFF_RULE_TITLE }] },
+  });
+  if (!existingSystemRule) {
+    const aggregate = await prisma.aiRule.aggregate({ _max: { sortOrder: true } });
+    await prisma.aiRule.create({
+      data: {
+        id: FULL_NAME_HANDOFF_RULE_ID,
+        title: FULL_NAME_HANDOFF_RULE_TITLE,
+        directive: FULL_NAME_HANDOFF_RULE_DIRECTIVE,
+        sortOrder: (aggregate._max.sortOrder || 0) + 1,
+        status: 'ACTIVE',
+        category: FULL_NAME_HANDOFF_RULE_CATEGORY,
+        enforcementLevel: 'STRICT',
+      },
+    }).catch(async (error: { code?: string }) => {
+      if (error.code !== 'P2002') throw error;
+    });
+  } else if (
+    existingSystemRule.title !== FULL_NAME_HANDOFF_RULE_TITLE ||
+    existingSystemRule.directive !== FULL_NAME_HANDOFF_RULE_DIRECTIVE ||
+    existingSystemRule.category !== FULL_NAME_HANDOFF_RULE_CATEGORY
+  ) {
+    await prisma.aiRule.update({
+      where: { id: existingSystemRule.id },
+      data: { title: FULL_NAME_HANDOFF_RULE_TITLE, directive: FULL_NAME_HANDOFF_RULE_DIRECTIVE, category: FULL_NAME_HANDOFF_RULE_CATEGORY, enforcementLevel: 'STRICT' },
+    });
+  }
+}
+
+export async function isFullNameHandoffRuleActive(): Promise<boolean> {
+  await ensureSeedRules();
+  const rule = await prisma.aiRule.findFirst({ where: { category: FULL_NAME_HANDOFF_RULE_CATEGORY }, select: { status: true } });
+  return rule?.status === 'ACTIVE';
 }
 
 /**
@@ -57,6 +99,8 @@ export async function getAllBehaviorRules(): Promise<AiBehaviorRuleItem[]> {
     directive: r.directive,
     sortOrder: r.sortOrder,
     status: r.status === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE',
+    category: r.category,
+    enforcementLevel: r.enforcementLevel,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
   }));
@@ -127,10 +171,16 @@ export async function updateBehaviorRule(
   }>
 ): Promise<AiBehaviorRuleItem> {
   const updateData: any = {};
+  const existing = await prisma.aiRule.findUnique({ where: { id } });
+  if (!existing) throw new Error('قانون رفتار یافت نشد.');
+  if (existing.category === FULL_NAME_HANDOFF_RULE_CATEGORY) {
+    if (data.status !== undefined) updateData.status = data.status;
+  } else {
   if (data.title !== undefined) updateData.title = data.title.trim();
   if (data.directive !== undefined) updateData.directive = data.directive.trim();
   if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
   if (data.status !== undefined) updateData.status = data.status;
+  }
 
   const updated = await prisma.aiRule.update({
     where: { id },
@@ -143,6 +193,8 @@ export async function updateBehaviorRule(
     directive: updated.directive,
     sortOrder: updated.sortOrder,
     status: updated.status === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE',
+    category: updated.category,
+    enforcementLevel: updated.enforcementLevel,
     createdAt: updated.createdAt,
     updatedAt: updated.updatedAt,
   };
@@ -152,6 +204,8 @@ export async function updateBehaviorRule(
  * Delete an AI Behavior Rule
  */
 export async function deleteBehaviorRule(id: string): Promise<boolean> {
+  const existing = await prisma.aiRule.findUnique({ where: { id }, select: { category: true } });
+  if (existing?.category === FULL_NAME_HANDOFF_RULE_CATEGORY) throw new Error('این قانون سیستمی قابل حذف نیست؛ می‌توانید آن را غیرفعال کنید.');
   await prisma.aiRule.delete({
     where: { id },
   });

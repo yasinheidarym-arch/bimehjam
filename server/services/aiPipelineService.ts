@@ -7,11 +7,12 @@ import { createSystemTask } from './taskService';
 import { resolveGoftinoAiPolicy } from './goftinoAiPolicyService';
 import { goftinoAiResponseMode } from './goftinoAiPolicyDecision';
 import {
-  advanceHumanHandoffName,
   handoffReasonLabel,
   HumanHandoffNameState,
   HumanHandoffReason,
+  resolveHumanHandoffNameRule,
 } from './humanHandoffNameFlow';
+import { isFullNameHandoffRuleActive } from './aiBehaviorService';
 
 const DEFAULT_GOFTINO_HANDOFF_MESSAGE = 'برای بررسی دقیق درخواست شما، همکاران متخصص بیمه جم ادامهٔ گفتگو را پیگیری می‌کنند. 🌹';
 
@@ -551,9 +552,11 @@ export async function runAiPipelineForMessage(params: {
     const pendingHandoff = existingCollectedData.humanHandoff?.pending === true
       ? existingCollectedData.humanHandoff as HumanHandoffNameState
       : null;
+    const fullNameHandoffRuleActive = await isFullNameHandoffRuleActive();
 
     if (pendingHandoff) {
-      const decision = advanceHumanHandoffName({
+      const decision = resolveHumanHandoffNameRule({
+        ruleActive: fullNameHandoffRuleActive,
         reason: pendingHandoff.reason,
         existingCustomerName: customer.name,
         message: userMessageContent,
@@ -601,7 +604,7 @@ export async function runAiPipelineForMessage(params: {
         details: `پاسخ تخصصی AI متوقف شد: ${policyDecision.reason}`,
       });
     } else if (customerRequestedHuman) {
-      const decision = advanceHumanHandoffName({ reason: 'DIRECT_HUMAN_REQUEST', existingCustomerName: customer.name });
+      const decision = resolveHumanHandoffNameRule({ ruleActive: fullNameHandoffRuleActive, reason: 'DIRECT_HUMAN_REQUEST', existingCustomerName: customer.name });
       if (decision.action === 'ASK_NAME') {
         brainResult = humanHandoffResult({
           replyText: decision.replyText,
@@ -640,7 +643,7 @@ export async function runAiPipelineForMessage(params: {
       });
 
       if (brainResult.quotationState?.isCompleted && brainResult.task?.create) {
-        const decision = advanceHumanHandoffName({ reason: 'QUOTATION_COMPLETED', existingCustomerName: customer.name });
+        const decision = resolveHumanHandoffNameRule({ ruleActive: fullNameHandoffRuleActive, reason: 'QUOTATION_COMPLETED', existingCustomerName: customer.name });
         if (decision.action === 'ASK_NAME') {
           brainResult.replyText = decision.replyText;
           brainResult.task = undefined;

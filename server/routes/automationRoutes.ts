@@ -18,7 +18,7 @@ import {
   triggerEvent,
   getExecutions,
 } from '../controllers/automationController';
-import { createTaskType, deleteTaskType, editTaskType, listTaskTypes } from '../controllers/taskTypeController';
+import { createTaskType, deleteTaskType, editTaskType, listTaskTypes, restoreArchivedTaskType } from '../controllers/taskTypeController';
 import { requireRole } from '../middleware/auth';
 
 const router = Router();
@@ -31,6 +31,7 @@ router.get('/tasks/smart-suggestions', getSmartSuggestions);
 router.get('/task-types', listTaskTypes);
 router.post('/task-types', requireRole(['ADMIN']), createTaskType);
 router.put('/task-types/:id', requireRole(['ADMIN']), editTaskType);
+router.post('/task-types/:id/restore', requireRole(['ADMIN']), restoreArchivedTaskType);
 router.delete('/task-types/:id', requireRole(['ADMIN']), deleteTaskType);
 
 // Notifications API

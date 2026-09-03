@@ -28,11 +28,12 @@ export async function getTaskSmsSettings(_req: AuthRequest, res: Response) {
       getTaskTypeCatalog(),
     ]);
     const values = new Map(settings.map((setting) => [setting.key, setting.value]));
+    const activeTaskTypeIds = new Set(taskTypes.map((item) => item.id));
     return res.json({
       success: true,
       data: {
         enabled: values.get(FASTNOTIFY_SETTING_KEYS.enabled) === 'true',
-        selectedTaskTypes: parseStringList(values.get(FASTNOTIFY_SETTING_KEYS.taskTypes)),
+        selectedTaskTypes: parseStringList(values.get(FASTNOTIFY_SETTING_KEYS.taskTypes)).filter((id) => activeTaskTypeIds.has(id)),
         selectedRecipientUserIds: parseStringList(values.get(FASTNOTIFY_SETTING_KEYS.recipientUserIds)),
         taskTypes,
         users,

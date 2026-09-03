@@ -23,6 +23,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { taskService, customerService, taskSmsService, taskTypeService } from '../services/api';
+import { taskTypeRemovalMessage } from '../../shared/taskTypeLifecycle';
 
 interface TaskItem {
   id: string;
@@ -64,7 +65,16 @@ interface TaskSmsSettings {
   users: SmsUser[];
 }
 
-interface TaskTypeDefinition { id: string; label: string; active: boolean; builtin: boolean; smsTemplate: string }
+interface TaskTypeDefinition {
+  id: string;
+  label: string;
+  active: boolean;
+  builtin: boolean;
+  smsTemplate: string;
+  usageCount?: number;
+  automationUsage?: boolean;
+  canDelete?: boolean;
+}
 
 const DEFAULT_TASK_SMS_TEMPLATE = 'بیمه جم: وظیفه «{{taskType}}» برای {{customerFullName}} ثبت شد. عنوان: {{taskTitle}} | اولویت: {{priority}} | شناسه: {{taskId}} | {{taskLink}}';
 const TASK_SMS_VARIABLES = ['{{taskType}}', '{{taskTitle}}', '{{priority}}', '{{customerFullName}}', '{{taskId}}', '{{taskLink}}'];
@@ -126,8 +136,10 @@ export const TaskManagerView: React.FC = () => {
       const res: any = await taskTypeService.getTypes(currentRole === 'ADMIN');
       if (res.success) {
         setTaskTypes(res.data);
-        const firstActive = res.data.find((item: TaskTypeDefinition) => item.active);
+        const activeTypes = res.data.filter((item: TaskTypeDefinition) => item.active);
+        const firstActive = activeTypes[0];
         if (firstActive && !res.data.some((item: TaskTypeDefinition) => item.id === newTaskType && item.active)) setNewTaskType(firstActive.id);
+        setTypeFilter((current) => current === 'ALL' || activeTypes.some((item: TaskTypeDefinition) => item.id === current) ? current : 'ALL');
       }
     } catch { setTaskTypeMessage('دریافت انواع وظیفه ناموفق بود.'); }
   };
@@ -173,13 +185,26 @@ export const TaskManagerView: React.FC = () => {
     taskLink: 'https://bimehjam.com/admin/tasks?taskId=TASK-123',
   }[key] || ''));
 
-  const deleteTaskType = async (id: string) => {
+  const deleteTaskType = async (item: TaskTypeDefinition) => {
+    const prompt = item.canDelete
+      ? `نوع «${item.label}» هیچ وابستگی ندارد و برای همیشه حذف می‌شود. ادامه می‌دهید؟`
+      : `نوع «${item.label}» برای حفظ تاریخچه و وابستگی‌ها آرشیو می‌شود. ادامه می‌دهید؟`;
+    if (!window.confirm(prompt)) return;
     try {
-      const res: any = await taskTypeService.deleteType(id);
-      setTaskTypeMessage(res.data?.mode === 'archived' ? 'نوع استفاده‌شده آرشیو شد.' : 'نوع بدون استفاده حذف شد.');
+      const res: any = await taskTypeService.deleteType(item.id);
+      setTaskTypeMessage(taskTypeRemovalMessage({ mode: res.data?.mode, usageCount: res.data?.usageCount || 0 }));
       await Promise.all([loadTaskTypes(), loadSmsSettings()]);
       window.dispatchEvent(new CustomEvent('bimehjam-task-types-updated'));
     } catch (error) { setTaskTypeMessage(error instanceof Error ? error.message : 'حذف ناموفق بود.'); }
+  };
+
+  const restoreTaskType = async (item: TaskTypeDefinition) => {
+    try {
+      await taskTypeService.restoreType(item.id);
+      setTaskTypeMessage(`نوع «${item.label}» به فهرست فعال بازگردانده شد.`);
+      await Promise.all([loadTaskTypes(), loadSmsSettings()]);
+      window.dispatchEvent(new CustomEvent('bimehjam-task-types-updated'));
+    } catch (error) { setTaskTypeMessage(error instanceof Error ? error.message : 'بازگردانی ناموفق بود.'); }
   };
 
   const saveSmsSettings = async (next: TaskSmsSettings) => {
@@ -586,7 +611,7 @@ export const TaskManagerView: React.FC = () => {
             {/* Source Filter */}
             <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700">
               <option value="ALL">تمام نوع‌ها</option>
-              {taskTypes.map((item) => <option key={item.id} value={item.id}>{item.label}{!item.active ? ' (آرشیو)' : ''}</option>)}
+              {taskTypes.filter((item) => item.active).map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
             </select>
 
             {/* Source Filter */}
@@ -723,16 +748,33 @@ export const TaskManagerView: React.FC = () => {
               </div>
             </div>
             <div className="space-y-2">
-              {taskTypes.map((item) => (
-                <div key={item.id} className={`flex items-center justify-between rounded-xl border p-3 text-xs ${item.active ? 'border-slate-200' : 'border-slate-100 bg-slate-50 text-slate-400'}`}>
-                  <span className="font-bold">{item.label}{!item.active && ' — آرشیوشده'}</span>
+              <div className="text-xs font-black text-slate-700">نوع‌های فعال</div>
+              {taskTypes.filter((item) => item.active).map((item) => (
+                <div key={item.id} className="flex items-center justify-between rounded-xl border border-slate-200 p-3 text-xs">
+                  <div>
+                    <span className="font-bold">{item.label}</span>
+                    {typeof item.usageCount === 'number' && <span className="mr-2 text-[10px] text-slate-400">{item.usageCount} وظیفه ثبت‌شده</span>}
+                  </div>
                   <div className="flex gap-3">
                     <button type="button" onClick={() => startEditingTaskType(item)} className="font-bold text-blue-600">ویرایش</button>
-                    {item.active && <button type="button" onClick={() => deleteTaskType(item.id)} className="text-rose-600 font-bold">حذف / آرشیو</button>}
+                    <button type="button" onClick={() => deleteTaskType(item)} className="text-rose-600 font-bold">{item.canDelete ? 'حذف' : 'آرشیو'}</button>
                   </div>
                 </div>
               ))}
+              {taskTypes.filter((item) => item.active).length === 0 && <div className="rounded-xl bg-slate-50 p-3 text-xs text-slate-500">نوع فعالی وجود ندارد.</div>}
             </div>
+            <details className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <summary className="cursor-pointer text-xs font-black text-slate-700">نوع‌های آرشیوشده ({taskTypes.filter((item) => !item.active).length})</summary>
+              <div className="mt-3 space-y-2">
+                {taskTypes.filter((item) => !item.active).map((item) => (
+                  <div key={item.id} className="flex items-center justify-between rounded-xl border border-slate-100 bg-white p-3 text-xs text-slate-500">
+                    <span className="font-bold">{item.label}</span>
+                    <button type="button" onClick={() => restoreTaskType(item)} className="font-bold text-emerald-600">بازگردانی</button>
+                  </div>
+                ))}
+                {taskTypes.filter((item) => !item.active).length === 0 && <div className="text-xs text-slate-400">نوع آرشیوشده‌ای وجود ندارد.</div>}
+              </div>
+            </details>
             {taskTypeMessage && <div className="rounded-xl bg-slate-50 px-3 py-2 text-xs text-slate-600">{taskTypeMessage}</div>}
           </div>
         </div>

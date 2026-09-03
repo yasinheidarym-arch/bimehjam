@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import prisma from '../db/client';
 import { DEFAULT_TASK_SMS_TEMPLATE, validateTaskSmsTemplate } from './taskSmsTemplate';
+import { taskTypeRemovalMode } from '../../shared/taskTypeLifecycle';
 
 const SETTING_KEY = 'task_type_catalog';
 
@@ -10,6 +11,12 @@ export type TaskTypeDefinition = {
   active: boolean;
   builtin: boolean;
   smsTemplate: string;
+};
+
+export type ManagedTaskTypeDefinition = TaskTypeDefinition & {
+  usageCount: number;
+  automationUsage: boolean;
+  canDelete: boolean;
 };
 
 const INITIAL_TASK_TYPES: TaskTypeDefinition[] = [
@@ -59,6 +66,35 @@ export async function getTaskTypeCatalog(options: { includeArchived?: boolean } 
   return options.includeArchived ? catalog : catalog.filter((item) => item.active);
 }
 
+async function taskTypeDependencies() {
+  const [taskGroups, automationRules] = await Promise.all([
+    prisma.task.groupBy({ by: ['type'], _count: { _all: true } }),
+    prisma.automationRule.findMany({ select: { action: true, actionPayload: true } }),
+  ]);
+  const usageCounts = new Map(taskGroups.map((group) => [group.type, group._count._all]));
+  const automationTypeIds = new Set<string>();
+  for (const rule of automationRules) {
+    if (rule.action !== 'CREATE_TASK') continue;
+    try {
+      const taskType = JSON.parse(rule.actionPayload || '{}')?.taskType;
+      if (typeof taskType === 'string') automationTypeIds.add(taskType);
+    } catch { /* Invalid legacy automation payloads are ignored here. */ }
+  }
+  return { usageCounts, automationTypeIds };
+}
+
+export async function getManagedTaskTypeCatalog(): Promise<ManagedTaskTypeDefinition[]> {
+  const [catalog, dependencies] = await Promise.all([
+    getTaskTypeCatalog({ includeArchived: true }),
+    taskTypeDependencies(),
+  ]);
+  return catalog.map((item) => {
+    const usageCount = dependencies.usageCounts.get(item.id) || 0;
+    const automationUsage = dependencies.automationTypeIds.has(item.id);
+    return { ...item, usageCount, automationUsage, canDelete: taskTypeRemovalMode({ builtin: item.builtin, usageCount, automationUsage }) === 'deleted' };
+  });
+}
+
 export async function addTaskType(labelInput: unknown, smsTemplateInput: unknown = DEFAULT_TASK_SMS_TEMPLATE) {
   const label = typeof labelInput === 'string' ? labelInput.trim().replace(/\s+/g, ' ') : '';
   if (label.length < 2 || label.length > 80) throw new Error('عنوان نوع وظیفه باید بین ۲ تا ۸۰ کاراکتر باشد.');
@@ -90,20 +126,24 @@ export async function removeOrArchiveTaskType(id: string) {
   const catalog = await getTaskTypeCatalog({ includeArchived: true });
   const target = catalog.find((item) => item.id === id);
   if (!target) throw new Error('نوع وظیفه یافت نشد.');
-  const [taskUsage, automationRules] = await Promise.all([
-    prisma.task.count({ where: { type: id } }),
-    prisma.automationRule.findMany({ select: { action: true, actionPayload: true } }),
-  ]);
-  const automationUsage = automationRules.some((rule) => {
-    if (rule.action !== 'CREATE_TASK') return false;
-    try { return JSON.parse(rule.actionPayload || '{}')?.taskType === id; } catch { return false; }
-  });
-  const archive = target.builtin || taskUsage > 0 || automationUsage;
-  const next = archive
+  const dependencies = await taskTypeDependencies();
+  const taskUsage = dependencies.usageCounts.get(id) || 0;
+  const automationUsage = dependencies.automationTypeIds.has(id);
+  const mode = taskTypeRemovalMode({ builtin: target.builtin, usageCount: taskUsage, automationUsage });
+  const next = mode === 'archived'
     ? catalog.map((item) => item.id === id ? { ...item, active: false } : item)
     : catalog.filter((item) => item.id !== id);
   await saveCatalog(next);
-  return { mode: archive ? 'archived' as const : 'deleted' as const, item: { ...target, active: false } };
+  return { mode, usageCount: taskUsage, automationUsage, item: { ...target, active: false } };
+}
+
+export async function restoreTaskType(id: string) {
+  const catalog = await getTaskTypeCatalog({ includeArchived: true });
+  const target = catalog.find((item) => item.id === id);
+  if (!target) throw new Error('نوع وظیفه یافت نشد.');
+  const restored = { ...target, active: true };
+  await saveCatalog(catalog.map((item) => item.id === id ? restored : item));
+  return restored;
 }
 
 export async function assertActiveTaskType(id: unknown) {
