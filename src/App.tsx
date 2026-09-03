@@ -22,10 +22,12 @@ import { GoftinoLogEntry, KnowledgeBaseData, AiMode } from './types';
 import { settingService } from './services/api';
 import {
   AiSchedule,
+  AiTimeRange,
   DEFAULT_AI_SCHEDULE,
   effectiveAiStatusLabel,
   IRAN_WEEKDAYS,
   resolveEffectiveAiMode,
+  validateAiSchedule,
 } from '../shared/aiSchedule';
 import { 
   Sparkles, 
@@ -207,7 +209,10 @@ export default function App() {
   const [aiModeMessage, setAiModeMessage] = useState<string | null>(null);
   const [aiSchedule, setAiSchedule] = useState<AiSchedule>({
     ...DEFAULT_AI_SCHEDULE,
-    weekly: Object.fromEntries(Object.entries(DEFAULT_AI_SCHEDULE.weekly).map(([day, value]) => [day, { ...value }])) as AiSchedule['weekly'],
+    weekly: Object.fromEntries(Object.entries(DEFAULT_AI_SCHEDULE.weekly).map(([day, value]) => [
+      day,
+      { ranges: value.ranges.map((range) => ({ ...range })) },
+    ])) as AiSchedule['weekly'],
   });
   const [effectiveAiMode, setEffectiveAiMode] = useState<AiMode>('TEST_MODE');
 
@@ -238,7 +243,11 @@ export default function App() {
     try {
       const res: any = await settingService.setAiMode(newMode);
       setAiMode(newMode);
-      setEffectiveAiMode(resolveEffectiveAiMode(newMode, aiSchedule));
+      try {
+        setEffectiveAiMode(resolveEffectiveAiMode(newMode, aiSchedule));
+      } catch {
+        // Keep the last server-confirmed status while the schedule form is incomplete.
+      }
       setAiModeMessage(res?.message || 'وضعیت هوش مصنوعی با موفقیت ذخیره شد.');
       setTimeout(() => setAiModeMessage(null), 4000);
     } catch (err: any) {
@@ -250,7 +259,13 @@ export default function App() {
   };
 
   useEffect(() => {
-    const updateEffectiveMode = () => setEffectiveAiMode(resolveEffectiveAiMode(aiMode, aiSchedule));
+    const updateEffectiveMode = () => {
+      try {
+        setEffectiveAiMode(resolveEffectiveAiMode(aiMode, aiSchedule));
+      } catch {
+        // Editing can temporarily produce an invalid range; validation is shown on save.
+      }
+    };
     const timer = window.setInterval(updateEffectiveMode, 30_000);
     return () => window.clearInterval(timer);
   }, [aiMode, aiSchedule]);
@@ -259,9 +274,10 @@ export default function App() {
     setAiModeLoading(true);
     setAiModeMessage(null);
     try {
-      const res: any = await settingService.setAiSchedule(aiSchedule);
+      const normalizedSchedule = validateAiSchedule(aiSchedule);
+      const res: any = await settingService.setAiSchedule(normalizedSchedule);
       if (res?.data?.schedule) setAiSchedule(res.data.schedule);
-      setEffectiveAiMode(res?.data?.effectiveMode || resolveEffectiveAiMode(aiMode, aiSchedule));
+      setEffectiveAiMode(res?.data?.effectiveMode || resolveEffectiveAiMode(aiMode, normalizedSchedule));
       setAiModeMessage(res?.message || 'زمان‌بندی پاسخگویی هوش مصنوعی ذخیره شد.');
     } catch (err: any) {
       setAiModeMessage(err.message || 'ذخیره زمان‌بندی ناموفق بود.');
@@ -270,8 +286,34 @@ export default function App() {
     }
   };
 
-  const updateScheduleDay = (day: keyof AiSchedule['weekly'], update: Partial<AiSchedule['weekly'][typeof day]>) => {
-    setAiSchedule((current) => ({ ...current, weekly: { ...current.weekly, [day]: { ...current.weekly[day], ...update } } }));
+  const addScheduleRange = (day: keyof AiSchedule['weekly']) => {
+    const range: AiTimeRange = { startTime: '08:00', endTime: '18:00', endDay: 'SAME_DAY', untilEndOfDay: false };
+    setAiSchedule((current) => ({
+      ...current,
+      weekly: { ...current.weekly, [day]: { ranges: [...current.weekly[day].ranges, range] } },
+    }));
+  };
+
+  const updateScheduleRange = (day: keyof AiSchedule['weekly'], index: number, update: Partial<AiTimeRange>) => {
+    setAiSchedule((current) => ({
+      ...current,
+      weekly: {
+        ...current.weekly,
+        [day]: {
+          ranges: current.weekly[day].ranges.map((range, rangeIndex) => rangeIndex === index ? { ...range, ...update } : range),
+        },
+      },
+    }));
+  };
+
+  const removeScheduleRange = (day: keyof AiSchedule['weekly'], index: number) => {
+    setAiSchedule((current) => ({
+      ...current,
+      weekly: {
+        ...current.weekly,
+        [day]: { ranges: current.weekly[day].ranges.filter((_, rangeIndex) => rangeIndex !== index) },
+      },
+    }));
   };
 
   const [e2eTesting, setE2eTesting] = useState(false);
@@ -670,18 +712,51 @@ export default function App() {
                     </label>
                   </div>
 
-                  <div className="overflow-hidden rounded-xl border border-slate-200">
-                    <div className="grid grid-cols-[1fr_auto_1fr_1fr] gap-2 bg-slate-100 px-3 py-2 text-[10px] font-black text-slate-600">
-                      <span>روز</span><span>وضعیت</span><span>ساعت شروع</span><span>ساعت پایان</span>
-                    </div>
+                  <div className="space-y-3">
                     {IRAN_WEEKDAYS.map((day) => {
-                      const daySchedule = aiSchedule.weekly[day.id];
+                      const ranges = aiSchedule.weekly[day.id].ranges;
                       return (
-                        <div key={day.id} className={`grid grid-cols-[1fr_auto_1fr_1fr] items-center gap-2 border-t border-slate-100 px-3 py-2 ${daySchedule.enabled ? 'bg-white' : 'bg-slate-50'}`}>
-                          <span className="text-xs font-bold text-slate-700">{day.label}</span>
-                          <input type="checkbox" checked={daySchedule.enabled} onChange={(event) => updateScheduleDay(day.id, { enabled: event.target.checked })} className="h-4 w-4 accent-indigo-600" aria-label={`فعال‌سازی ${day.label}`} />
-                          <input type="time" disabled={!daySchedule.enabled} value={daySchedule.startTime} onChange={(event) => updateScheduleDay(day.id, { startTime: event.target.value })} className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400" aria-label={`ساعت شروع ${day.label}`} />
-                          <input type="time" disabled={!daySchedule.enabled} value={daySchedule.endTime} onChange={(event) => updateScheduleDay(day.id, { endTime: event.target.value })} className="w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400" aria-label={`ساعت پایان ${day.label}`} />
+                        <div key={day.id} className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                          <div className="flex items-center justify-between gap-3 bg-slate-50 px-3 py-2">
+                            <div>
+                              <span className="text-xs font-black text-slate-700">{day.label}</span>
+                              <span className="mr-2 text-[10px] text-slate-400">{ranges.length === 0 ? 'بدون بازه؛ AI خاموش' : `${ranges.length} بازه`}</span>
+                            </div>
+                            <button type="button" onClick={() => addScheduleRange(day.id)} className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-[10px] font-bold text-indigo-700 hover:bg-indigo-50">
+                              افزودن بازه زمانی
+                            </button>
+                          </div>
+                          {ranges.length === 0 ? (
+                            <p className="px-3 py-3 text-[11px] text-slate-400">برای این روز بازه‌ای ثبت نشده است. بازهٔ ادامه‌دار روز قبل همچنان می‌تواند در این روز فعال باشد.</p>
+                          ) : (
+                            <div className="divide-y divide-slate-100">
+                              {ranges.map((range, index) => (
+                                <div key={`${day.id}-${index}`} className="grid grid-cols-1 items-end gap-2 px-3 py-3 md:grid-cols-[1fr_1fr_1.25fr_auto_auto]">
+                                  <label className="text-[10px] font-bold text-slate-600">ساعت شروع
+                                    <input type="time" value={range.startTime} onChange={(event) => updateScheduleRange(day.id, index, { startTime: event.target.value })} className="mt-1 block w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" aria-label={`ساعت شروع ${day.label} بازه ${index + 1}`} />
+                                  </label>
+                                  <label className="text-[10px] font-bold text-slate-600">ساعت پایان
+                                    {range.untilEndOfDay ? (
+                                      <input type="text" value="24:00" disabled className="mt-1 block w-full rounded-lg border border-slate-200 bg-slate-100 px-2 py-1.5 text-xs text-slate-500" aria-label={`ساعت پایان ${day.label} بازه ${index + 1}`} />
+                                    ) : (
+                                      <input type="time" value={range.endTime} onChange={(event) => updateScheduleRange(day.id, index, { endTime: event.target.value })} className="mt-1 block w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs" aria-label={`ساعت پایان ${day.label} بازه ${index + 1}`} />
+                                    )}
+                                  </label>
+                                  <label className="text-[10px] font-bold text-slate-600">روز پایان
+                                    <select disabled={range.untilEndOfDay} value={range.endDay} onChange={(event) => updateScheduleRange(day.id, index, { endDay: event.target.value as AiTimeRange['endDay'] })} className="mt-1 block w-full rounded-lg border border-slate-200 px-2 py-1.5 text-xs disabled:bg-slate-100 disabled:text-slate-400">
+                                      <option value="SAME_DAY">پایان در همان روز</option>
+                                      <option value="NEXT_DAY">پایان در روز بعد</option>
+                                    </select>
+                                  </label>
+                                  <label className="flex h-8 items-center gap-1.5 whitespace-nowrap text-[10px] font-bold text-slate-600">
+                                    <input type="checkbox" checked={range.untilEndOfDay} onChange={(event) => updateScheduleRange(day.id, index, event.target.checked ? { untilEndOfDay: true, endTime: '24:00', endDay: 'SAME_DAY' } : { untilEndOfDay: false, endTime: '18:00', endDay: 'SAME_DAY' })} className="h-4 w-4 accent-indigo-600" />
+                                    تا پایان روز
+                                  </label>
+                                  <button type="button" onClick={() => removeScheduleRange(day.id, index)} className="h-8 rounded-lg border border-rose-200 px-3 text-[10px] font-bold text-rose-700 hover:bg-rose-50" aria-label={`حذف بازه ${index + 1} ${day.label}`}>حذف</button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
                       );
                     })}

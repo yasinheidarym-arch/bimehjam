@@ -1,7 +1,7 @@
 import prisma from '../db/client';
 import OpenAI from 'openai';
 import { GoogleGenAI } from '@google/genai';
-import { AiMode, AiSchedule, DEFAULT_AI_SCHEDULE, isLegacyAiSchedule, resolveEffectiveAiMode, validateAiSchedule } from '../../shared/aiSchedule';
+import { AiMode, AiSchedule, DEFAULT_AI_SCHEDULE, needsAiScheduleUpgrade, resolveEffectiveAiMode, validateAiSchedule } from '../../shared/aiSchedule';
 
 export type { AiMode, AiSchedule } from '../../shared/aiSchedule';
 
@@ -54,7 +54,10 @@ export async function setAiMode(mode: AiMode): Promise<string> {
 function defaultAiSchedule(): AiSchedule {
   return {
     ...DEFAULT_AI_SCHEDULE,
-    weekly: Object.fromEntries(Object.entries(DEFAULT_AI_SCHEDULE.weekly).map(([day, value]) => [day, { ...value }])) as AiSchedule['weekly'],
+    weekly: Object.fromEntries(Object.entries(DEFAULT_AI_SCHEDULE.weekly).map(([day, value]) => [
+      day,
+      { ranges: value.ranges.map((range) => ({ ...range })) },
+    ])) as AiSchedule['weekly'],
   };
 }
 
@@ -64,7 +67,7 @@ export async function getAiSchedule(): Promise<AiSchedule> {
     if (!setting?.value) return defaultAiSchedule();
     const parsed = JSON.parse(setting.value) as unknown;
     const schedule = validateAiSchedule(parsed);
-    if (isLegacyAiSchedule(parsed)) {
+    if (needsAiScheduleUpgrade(parsed)) {
       await prisma.systemSetting.update({ where: { key: 'ai_response_schedule' }, data: { value: JSON.stringify(schedule) } });
     }
     return schedule;
