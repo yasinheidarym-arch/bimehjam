@@ -6,12 +6,15 @@ import {
   getAiConfigController,
   updateAiConfigController,
   testAiConnectionController,
+  updateAiScheduleController,
 } from '../controllers/settingController';
+import { requireRole } from '../middleware/auth';
 
 const router = Router();
 
 router.get('/mode', getAiModeController);
 router.post('/mode', setAiModeController);
+router.put('/schedule', requireRole(['ADMIN']), updateAiScheduleController);
 router.get('/config', getAiConfigController);
 router.post('/config', updateAiConfigController);
 router.put('/config', updateAiConfigController);

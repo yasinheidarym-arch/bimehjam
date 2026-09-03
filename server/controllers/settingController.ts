@@ -8,17 +8,24 @@ import {
   getAiConfig,
   saveAiConfig,
   testAiConnectionService,
+  getAiSchedule,
+  getEffectiveAiMode,
+  setAiSchedule,
 } from '../services/settingService';
+import { effectiveAiStatusLabel } from '../../shared/aiSchedule';
 import { getGoftinoAiPolicyCatalog, setGoftinoAiPolicyEnabled } from '../services/goftinoAiPolicyService';
 
 // GET /api/ai/mode
 export async function getAiModeController(req: Request, res: Response) {
   try {
-    const mode = await getAiMode();
+    const [mode, schedule, effectiveMode] = await Promise.all([getAiMode(), getAiSchedule(), getEffectiveAiMode()]);
     return res.json({
       success: true,
       data: {
         mode,
+        schedule,
+        effectiveMode,
+        effectiveStatus: effectiveAiStatusLabel(effectiveMode),
         label: mode === 'ACTIVE' ? 'فعال' : mode === 'TEST_MODE' ? 'تست مود' : 'خاموش',
         description:
           mode === 'ACTIVE'
@@ -156,6 +163,20 @@ export async function getAiResponsePoliciesController(
       success: false,
       error: error.message,
     });
+  }
+}
+
+export async function updateAiScheduleController(req: Request, res: Response) {
+  try {
+    const schedule = await setAiSchedule(req.body);
+    const effectiveMode = await getEffectiveAiMode();
+    return res.json({
+      success: true,
+      data: { schedule, effectiveMode, effectiveStatus: effectiveAiStatusLabel(effectiveMode) },
+      message: 'زمان‌بندی پاسخگویی هوش مصنوعی ذخیره شد.',
+    });
+  } catch (error) {
+    return res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'ذخیره زمان‌بندی ناموفق بود.' });
   }
 }
 

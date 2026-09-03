@@ -20,6 +20,13 @@ import { initialKnowledgeBase } from './data/knowledgeBase';
 
 import { GoftinoLogEntry, KnowledgeBaseData, AiMode } from './types';
 import { settingService } from './services/api';
+import {
+  AiSchedule,
+  DEFAULT_AI_SCHEDULE,
+  effectiveAiStatusLabel,
+  IRAN_WEEKDAYS,
+  resolveEffectiveAiMode,
+} from '../shared/aiSchedule';
 import { 
   Sparkles, 
   AlertCircle, 
@@ -198,6 +205,8 @@ export default function App() {
   const [aiMode, setAiMode] = useState<AiMode>('TEST_MODE');
   const [aiModeLoading, setAiModeLoading] = useState<boolean>(false);
   const [aiModeMessage, setAiModeMessage] = useState<string | null>(null);
+  const [aiSchedule, setAiSchedule] = useState<AiSchedule>({ ...DEFAULT_AI_SCHEDULE, days: [...DEFAULT_AI_SCHEDULE.days] });
+  const [effectiveAiMode, setEffectiveAiMode] = useState<AiMode>('TEST_MODE');
 
   // Fetch initial data from backend Express server
   useEffect(() => {
@@ -213,6 +222,8 @@ export default function App() {
       if (res?.data?.mode) {
         setAiMode(res.data.mode);
       }
+      if (res?.data?.schedule) setAiSchedule(res.data.schedule);
+      if (res?.data?.effectiveMode) setEffectiveAiMode(res.data.effectiveMode);
     } catch (err) {
       console.warn('Failed to fetch AI mode:', err);
     }
@@ -224,6 +235,7 @@ export default function App() {
     try {
       const res: any = await settingService.setAiMode(newMode);
       setAiMode(newMode);
+      setEffectiveAiMode(resolveEffectiveAiMode(newMode, aiSchedule));
       setAiModeMessage(res?.message || 'وضعیت هوش مصنوعی با موفقیت ذخیره شد.');
       setTimeout(() => setAiModeMessage(null), 4000);
     } catch (err: any) {
@@ -232,6 +244,34 @@ export default function App() {
     } finally {
       setAiModeLoading(false);
     }
+  };
+
+  useEffect(() => {
+    const updateEffectiveMode = () => setEffectiveAiMode(resolveEffectiveAiMode(aiMode, aiSchedule));
+    const timer = window.setInterval(updateEffectiveMode, 30_000);
+    return () => window.clearInterval(timer);
+  }, [aiMode, aiSchedule]);
+
+  const handleSaveAiSchedule = async () => {
+    setAiModeLoading(true);
+    setAiModeMessage(null);
+    try {
+      const res: any = await settingService.setAiSchedule(aiSchedule);
+      if (res?.data?.schedule) setAiSchedule(res.data.schedule);
+      setEffectiveAiMode(res?.data?.effectiveMode || resolveEffectiveAiMode(aiMode, aiSchedule));
+      setAiModeMessage(res?.message || 'زمان‌بندی پاسخگویی هوش مصنوعی ذخیره شد.');
+    } catch (err: any) {
+      setAiModeMessage(err.message || 'ذخیره زمان‌بندی ناموفق بود.');
+    } finally {
+      setAiModeLoading(false);
+    }
+  };
+
+  const toggleScheduleDay = (day: AiSchedule['days'][number]) => {
+    setAiSchedule((current) => ({
+      ...current,
+      days: current.days.includes(day) ? current.days.filter((item) => item !== day) : [...current.days, day],
+    }));
   };
 
   const [e2eTesting, setE2eTesting] = useState(false);
@@ -520,14 +560,14 @@ export default function App() {
                     <span>حالت پاسخگویی هوش مصنوعی (AI Mode Settings)</span>
                   </h4>
                   <span className={`text-[11px] px-2.5 py-0.5 rounded-full font-bold flex items-center gap-1.5 border ${
-                    aiMode === 'TEST_MODE'
+                    effectiveAiMode === 'TEST_MODE'
                       ? 'bg-amber-100 text-amber-900 border-amber-300'
-                      : aiMode === 'ACTIVE'
+                      : effectiveAiMode === 'ACTIVE'
                       ? 'bg-emerald-100 text-emerald-900 border-emerald-300'
                       : 'bg-slate-200 text-slate-700 border-slate-300'
                   }`}>
-                    <span className={`w-2 h-2 rounded-full ${aiMode === 'OFF' ? 'bg-slate-400' : 'bg-current animate-pulse'}`}></span>
-                    <span>وضعیت فعلی: {aiMode === 'TEST_MODE' ? 'تست مود (AI Test Mode)' : aiMode === 'ACTIVE' ? 'فعال (ارسال زنده)' : 'خاموش'}</span>
+                    <span className={`w-2 h-2 rounded-full ${effectiveAiMode === 'OFF' ? 'bg-slate-400' : 'bg-current animate-pulse'}`}></span>
+                    <span>{effectiveAiStatusLabel(effectiveAiMode)}</span>
                   </span>
                 </div>
 
@@ -610,6 +650,57 @@ export default function App() {
                     <div className="pt-2 text-[10px] font-bold text-emerald-700 border-t border-slate-100">
                       پاسخگویی زنده به مشتریان
                     </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-indigo-200 bg-white p-4 space-y-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <h5 className="text-xs font-black text-slate-800">زمان‌بندی پاسخگویی AI</h5>
+                      <p className="mt-1 text-[11px] text-slate-500">تمام ساعت‌ها بر اساس ساعت ایران (Asia/Tehran) محاسبه می‌شوند.</p>
+                    </div>
+                    <label className="flex items-center gap-2 text-xs font-bold text-slate-700">
+                      <span>فعال‌سازی زمان‌بندی</span>
+                      <input
+                        type="checkbox"
+                        checked={aiSchedule.enabled}
+                        onChange={(event) => setAiSchedule({ ...aiSchedule, enabled: event.target.checked })}
+                        className="h-4 w-4 accent-indigo-600"
+                      />
+                    </label>
+                  </div>
+
+                  <div>
+                    <div className="mb-2 text-[11px] font-bold text-slate-700">روزهای هفته</div>
+                    <div className="flex flex-wrap gap-2">
+                      {IRAN_WEEKDAYS.map((day) => {
+                        const selected = aiSchedule.days.includes(day.id);
+                        return <button key={day.id} type="button" onClick={() => toggleScheduleDay(day.id)} className={`rounded-lg border px-3 py-1.5 text-[11px] font-bold ${selected ? 'border-indigo-500 bg-indigo-50 text-indigo-700' : 'border-slate-200 bg-white text-slate-500'}`}>{day.label}</button>;
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                    <label className="text-[11px] font-bold text-slate-700">ساعت شروع
+                      <input type="time" value={aiSchedule.startTime} onChange={(event) => setAiSchedule({ ...aiSchedule, startTime: event.target.value })} className="mt-1 block w-full rounded-xl border border-slate-200 px-3 py-2 text-xs" />
+                    </label>
+                    <label className="text-[11px] font-bold text-slate-700">ساعت پایان
+                      <input type="time" value={aiSchedule.endTime} onChange={(event) => setAiSchedule({ ...aiSchedule, endTime: event.target.value })} className="mt-1 block w-full rounded-xl border border-slate-200 px-3 py-2 text-xs" />
+                    </label>
+                    <label className="text-[11px] font-bold text-slate-700">حالت AI در ساعت‌های مجاز
+                      <select value={aiSchedule.allowedMode} onChange={(event) => setAiSchedule({ ...aiSchedule, allowedMode: event.target.value as AiSchedule['allowedMode'] })} className="mt-1 block w-full rounded-xl border border-slate-200 px-3 py-2 text-xs">
+                        <option value="ACTIVE">ACTIVE</option>
+                        <option value="TEST_MODE">AI Test Mode</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="rounded-xl bg-slate-100 px-3 py-2 text-[11px] font-medium text-slate-600">
+                    خارج از بازهٔ مجاز، AI مانند حالت OFF عمل می‌کند و به مشتری پاسخ خودکار نمی‌دهد.
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <span className={`text-xs font-black ${effectiveAiMode === 'OFF' ? 'text-slate-600' : effectiveAiMode === 'TEST_MODE' ? 'text-amber-700' : 'text-emerald-700'}`}>{effectiveAiStatusLabel(effectiveAiMode)}</span>
+                    <button type="button" disabled={aiModeLoading} onClick={handleSaveAiSchedule} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">ذخیره زمان‌بندی</button>
                   </div>
                 </div>
 

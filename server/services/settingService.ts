@@ -1,8 +1,9 @@
 import prisma from '../db/client';
 import OpenAI from 'openai';
 import { GoogleGenAI } from '@google/genai';
+import { AiMode, AiSchedule, DEFAULT_AI_SCHEDULE, resolveEffectiveAiMode, validateAiSchedule } from '../../shared/aiSchedule';
 
-export type AiMode = 'OFF' | 'TEST_MODE' | 'ACTIVE';
+export type { AiMode, AiSchedule } from '../../shared/aiSchedule';
 
 export interface AiConfig {
   aiMode: AiMode;
@@ -48,6 +49,35 @@ export async function setAiMode(mode: AiMode): Promise<string> {
     },
   });
   return updated.value;
+}
+
+function defaultAiSchedule(): AiSchedule {
+  return { ...DEFAULT_AI_SCHEDULE, days: [...DEFAULT_AI_SCHEDULE.days] };
+}
+
+export async function getAiSchedule(): Promise<AiSchedule> {
+  try {
+    const setting = await prisma.systemSetting.findUnique({ where: { key: 'ai_response_schedule' }, select: { value: true } });
+    return setting?.value ? validateAiSchedule(JSON.parse(setting.value)) : defaultAiSchedule();
+  } catch (error) {
+    console.warn('Could not read AI response schedule, using disabled default:', error instanceof Error ? error.message : 'unknown error');
+    return defaultAiSchedule();
+  }
+}
+
+export async function setAiSchedule(input: unknown): Promise<AiSchedule> {
+  const schedule = validateAiSchedule(input);
+  await prisma.systemSetting.upsert({
+    where: { key: 'ai_response_schedule' },
+    create: { key: 'ai_response_schedule', value: JSON.stringify(schedule), description: 'زمان‌بندی پاسخگویی AI بر اساس ساعت ایران (Asia/Tehran)' },
+    update: { value: JSON.stringify(schedule) },
+  });
+  return schedule;
+}
+
+export async function getEffectiveAiMode(now = new Date()): Promise<AiMode> {
+  const [manualMode, schedule] = await Promise.all([getAiMode(), getAiSchedule()]);
+  return resolveEffectiveAiMode(manualMode, schedule, now);
 }
 
 export async function getAiConfig(): Promise<AiConfig> {

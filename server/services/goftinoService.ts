@@ -1,9 +1,10 @@
 import prisma from '../db/client';
 import { runAiPipelineForMessage, createAiLog } from './aiPipelineService';
-import { getAiMode } from './settingService';
+import { getEffectiveAiMode } from './settingService';
 import { getGoftinoUserData, getGoftinoVisitedPages } from './goftinoUserService';
 import { resolveGoftinoAiPolicy } from './goftinoAiPolicyService';
 import { findGoftinoCatalogTopic } from './goftinoTopicCatalog';
+import { shouldExecuteAi } from '../../shared/aiSchedule';
 
 export interface GoftinoWebhookPayload {
   event?: string;
@@ -436,10 +437,10 @@ export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
   }
 
   // Check AI status mode (OFF, TEST_MODE, ACTIVE)
-  const currentAiMode = await getAiMode();
+  const currentAiMode = await getEffectiveAiMode();
 
   // Trigger AI pipeline only if sender is CUSTOMER, AI is not OFF, and human operator is NOT active
-  if (currentAiMode === 'OFF') {
+  if (!shouldExecuteAi(currentAiMode)) {
     await createAiLog({
       conversationId: conversation.id,
       customerId: customer.id,

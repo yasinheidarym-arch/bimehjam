@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import prisma from '../db/client';
 import axios from 'axios';
 import { processBrainLayer } from './brainLayerService';
-import { getAiMode } from './settingService';
+import { getEffectiveAiMode } from './settingService';
 import { createSystemTask } from './taskService';
 import { resolveGoftinoAiPolicy } from './goftinoAiPolicyService';
 import { goftinoAiResponseMode } from './goftinoAiPolicyDecision';
@@ -13,6 +13,7 @@ import {
   resolveHumanHandoffNameRule,
 } from './humanHandoffNameFlow';
 import { isFullNameHandoffRuleActive } from './aiBehaviorService';
+import { shouldExecuteAi } from '../../shared/aiSchedule';
 
 const DEFAULT_GOFTINO_HANDOFF_MESSAGE = 'برای بررسی دقیق درخواست شما، همکاران متخصص بیمه جم ادامهٔ گفتگو را پیگیری می‌کنند. 🌹';
 
@@ -308,8 +309,8 @@ export async function runAiPipelineForMessage(params: {
   } = params;
 
   // 0. Check AI Mode (OFF, TEST_MODE, ACTIVE)
-  const aiMode = await getAiMode();
-  if (aiMode === 'OFF') {
+  const aiMode = await getEffectiveAiMode();
+  if (!shouldExecuteAi(aiMode)) {
     await createAiLog({
       conversationId,
       customerId,

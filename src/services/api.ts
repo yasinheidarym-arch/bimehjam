@@ -356,6 +356,14 @@ export const settingService = {
   setAiMode: async (mode: 'OFF' | 'TEST_MODE' | 'ACTIVE') => {
     return apiClient.post('/ai/mode', { mode });
   },
+  setAiSchedule: async (schedule: {
+    enabled: boolean;
+    days: string[];
+    startTime: string;
+    endTime: string;
+    allowedMode: 'ACTIVE' | 'TEST_MODE';
+    timezone: 'Asia/Tehran';
+  }) => apiClient.put('/ai/schedule', schedule),
   getAiConfig: async () => {
     return apiClient.get('/settings/ai-config');
   },
