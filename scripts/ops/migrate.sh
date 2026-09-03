@@ -28,8 +28,12 @@ git merge-base --is-ancestor "$commit" origin/main || { echo "Commit is not reac
 git switch --detach --quiet "$commit"
 
 readonly SQLITE_VOLUME="bimehjam_data"
-image_id="$(docker compose images -q app)"
-[[ -n "$image_id" ]] || { echo "Migration image for app is not available; deploy the approved commit first." >&2; exit 1; }
+image_id="$(docker compose images -q app 2>/dev/null || true)"
+if [[ -z "$image_id" ]] || ! docker image inspect "$image_id" >/dev/null 2>&1; then
+  image_ref="$(docker compose config --images | sed -n '1p')"
+  image_id="$(docker image inspect --format '{{.Id}}' "$image_ref" 2>/dev/null || true)"
+fi
+[[ -n "$image_id" ]] || { echo "Migration image for app is not available; build the approved commit first." >&2; exit 1; }
 
 # The production volume is historically mounted at /app/prisma and masks the
 # versioned migration files shipped in the image. Mount the same SQLite volume
