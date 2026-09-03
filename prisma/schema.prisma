@@ -17,9 +17,12 @@ model User {
   name          String
   role          String         @default("OPERATOR") // ADMIN, OPERATOR, AGENT
   avatar        String?
+  mobile        String?
   createdAt     DateTime       @default(now())
   updatedAt     DateTime       @updatedAt
   conversations Conversation[]
+  assignedTasks Task[]         @relation("TaskAssignedUser")
+  smsDeliveries FastNotifySmsDelivery[]
 }
 
 model Customer {
@@ -427,6 +430,8 @@ model Task {
   conversationId String?
   conversation   Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
   assignedUser   String?       @default("کارشناس فروش")
+  assignedUserId String?
+  assignedUserRecord User?     @relation("TaskAssignedUser", fields: [assignedUserId], references: [id], onDelete: SetNull)
   title          String
   description    String?
   type           String        @default("Call Customer") // Call Customer, Send Message, Prepare Quotation, Collect Documents, Review Request, Follow Up Quote, Renewal Reminder, Complaint Follow Up, Other
@@ -437,6 +442,30 @@ model Task {
   completedAt    DateTime?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
+  smsDeliveries  FastNotifySmsDelivery[]
+
+  @@index([assignedUserId])
+}
+
+model FastNotifySmsDelivery {
+  id                String   @id @default(uuid())
+  eventKey          String   @unique
+  taskId            String?
+  task              Task?    @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  recipientUserId   String?
+  recipientUser     User?    @relation(fields: [recipientUserId], references: [id], onDelete: SetNull)
+  status            String   @default("PENDING") // PENDING, SENT, FAILED
+  attemptCount      Int      @default(0)
+  providerRequestId String?
+  providerReferences String?
+  lastErrorCode     String?
+  sentAt            DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([taskId])
+  @@index([recipientUserId])
+  @@index([status])
 }
 
 model Notification {

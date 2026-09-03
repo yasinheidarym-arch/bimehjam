@@ -1,5 +1,6 @@
 import prisma from '../db/client';
 import { GoogleGenAI } from '@google/genai';
+import { dispatchTaskCreatedSms } from './fastNotifySmsService';
 
 const apiKey = process.env.GEMINI_API_KEY;
 const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
@@ -156,6 +157,7 @@ export async function triggerAutomationEvent(
             dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000), // Due in 24h
           },
         });
+        await dispatchTaskCreatedSms(task);
 
         // Also create a notification for task creation
         await prisma.notification.create({

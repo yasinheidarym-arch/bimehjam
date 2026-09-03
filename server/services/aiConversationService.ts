@@ -8,6 +8,7 @@ import { resolveProductByUrl } from './productIntelligenceService';
 import { getOrCreateQuotationSession, processSessionAnswers, extractQuotationAnswersWithGemini } from './quotationWorkflowService';
 import { createTimelineEvent } from './timelineService';
 import { getAiConfig } from './settingService';
+import { dispatchTaskCreatedSms } from './fastNotifySmsService';
 
 
 // Initialize Gemini Client with User-Agent
@@ -542,7 +543,7 @@ ${recentMessages
         ? `محاسبه و اعلام قیمت بیمه ${activeProduct ? activeProduct.name : ''} - ${customer.name || 'مشتری'}`
         : `درخواست صحبت با کارشناس بیمه - ${customer.name || 'مشتری'}`;
 
-      await prisma.task.create({
+      const task = await prisma.task.create({
         data: {
           title: taskTitle,
           description: `اطلاعات گردآوری شده: ${JSON.stringify(existingCollectedData)}`,
@@ -551,10 +552,12 @@ ${recentMessages
           type: quotationCompleted ? 'Prepare Quotation' : 'Call Customer',
           source: 'AI',
           assignedUser: customer.assignedOperator || 'کارشناس فروش',
+          assignedUserId: conversation.assignedUserId || null,
           customerId: customer.id,
           conversationId: conversation.id,
         },
       });
+      await dispatchTaskCreatedSms(task);
 
       await createTimelineEvent({
         customerId: customer.id,

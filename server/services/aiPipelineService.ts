@@ -618,6 +618,7 @@ export async function runAiPipelineForMessage(params: {
           priority:
             brainResult.task.priority ||
             'MEDIUM',
+          assignedUserId: conversation.assignedUserId || undefined,
         });
 
         console.log('========== AI TASK CREATED ==========');

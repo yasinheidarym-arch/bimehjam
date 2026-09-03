@@ -213,6 +213,15 @@ export const aiPolicyService = {
   },
 };
 
+export const taskSmsService = {
+  getSettings: async () => apiClient.get('/settings/task-sms'),
+  updateSettings: async (data: {
+    enabled: boolean;
+    selectedTaskTypes: string[];
+    selectedRecipientUserIds: string[];
+  }) => apiClient.put('/settings/task-sms', data),
+};
+
 
 // Brain Layer Services
 export const brainService = {

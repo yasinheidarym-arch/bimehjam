@@ -17,6 +17,8 @@ import {
   updateAiResponsePolicyController
 } from '../controllers/settingController';
 import { authenticateToken } from '../middleware/auth';
+import { requireRole } from '../middleware/auth';
+import { getTaskSmsSettings, updateTaskSmsSettings } from '../controllers/taskSmsController';
 
 const router = Router();
 
@@ -83,6 +85,8 @@ router.use('/', authenticateToken, automationRoutes);
  */
 router.get('/settings', authenticateToken, getSettingsController);
 router.post('/settings', authenticateToken, updateSettingController);
+router.get('/settings/task-sms', authenticateToken, getTaskSmsSettings);
+router.put('/settings/task-sms', authenticateToken, requireRole(['ADMIN']), updateTaskSmsSettings);
 
 router.get(
   '/settings/ai-response-policies',

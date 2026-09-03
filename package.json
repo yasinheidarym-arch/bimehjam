@@ -13,6 +13,7 @@
     "test:category-knowledge": "tsx --test tests/categoryKnowledgeScope.test.ts",
     "test:goftino-ai-policies": "tsx --test tests/goftinoAiResponsePolicy.test.ts",
     "test:quotation-workflow": "tsx --test tests/quotationConversationFlow.test.ts"
+    ,"test:task-sms": "tsx --test tests/fastNotifyTaskSms.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

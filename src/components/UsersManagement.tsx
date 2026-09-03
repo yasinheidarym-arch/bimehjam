@@ -6,6 +6,7 @@ type User = {
   email: string;
   name: string;
   role: string;
+  mobile?: string | null;
   avatar?: string | null;
   createdAt?: string;
   _count?: {
@@ -18,6 +19,7 @@ const emptyForm = {
   email: '',
   password: '',
   role: 'OPERATOR',
+  mobile: '',
 };
 
 export default function UsersManagement() {
@@ -88,6 +90,7 @@ export default function UsersManagement() {
       email: user.email || '',
       password: '',
       role: user.role || 'OPERATOR',
+      mobile: user.mobile || '',
     });
     setError('');
     setSuccess('');
@@ -131,6 +134,7 @@ export default function UsersManagement() {
         name: form.name.trim(),
         email: form.email.trim().toLowerCase(),
         role: form.role,
+        mobile: form.mobile.trim(),
       };
 
       if (form.password) {
@@ -353,6 +357,23 @@ export default function UsersManagement() {
               </select>
             </div>
 
+            {['ADMIN', 'OPERATOR'].includes(form.role) && (
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-2">
+                  شماره موبایل
+                </label>
+                <input
+                  type="tel"
+                  value={form.mobile}
+                  onChange={(e) => setForm({ ...form, mobile: e.target.value })}
+                  placeholder="09xxxxxxxxx"
+                  dir="ltr"
+                  inputMode="numeric"
+                  className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-blue-500"
+                />
+              </div>
+            )}
+
           </div>
 
           <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
@@ -408,6 +429,11 @@ export default function UsersManagement() {
                 >
                   {user.email}
                 </div>
+                {user.mobile && (
+                  <div dir="ltr" className="text-xs text-slate-500 text-right mt-1">
+                    {user.mobile}
+                  </div>
+                )}
               </div>
 
               <div className="flex items-center gap-2 shrink-0">

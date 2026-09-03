@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import prisma from '../db/client';
 import { AuthRequest } from '../middleware/auth';
+import { normalizeIranianMobile } from '../services/fastNotifySmsService';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'bimehjam_jwt_secret_key_2026';
 
@@ -81,7 +82,7 @@ export async function login(req: Request, res: Response) {
 }
 export async function register(req: Request, res: Response) {
   try {
-    const { email, password, name, role } = req.body;
+    const { email, password, name, role, mobile } = req.body;
 
     if (!email || !password || !name) {
       return res.status(400).json({
@@ -103,12 +104,18 @@ export async function register(req: Request, res: Response) {
 
     const hashedPassword = await bcrypt.hash(password, 10);
 
+    const normalizedRole = role || 'OPERATOR';
+    const normalizedMobile = mobile ? normalizeIranianMobile(mobile) : null;
+    if (mobile && !normalizedMobile) {
+      return res.status(400).json({ success: false, error: 'شماره موبایل معتبر نیست.' });
+    }
     const newUser = await prisma.user.create({
       data: {
         email: email.trim().toLowerCase(),
         password: hashedPassword,
         name,
-        role: role || 'OPERATOR',
+        role: normalizedRole,
+        mobile: ['ADMIN', 'OPERATOR'].includes(normalizedRole) ? normalizedMobile : null,
         avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${encodeURIComponent(name)}`,
       },
     });
@@ -122,6 +129,7 @@ export async function register(req: Request, res: Response) {
         name: newUser.name,
         role: newUser.role,
         avatar: newUser.avatar,
+        mobile: newUser.mobile,
         createdAt: newUser.createdAt,
       },
     });
@@ -144,6 +152,7 @@ export async function getMe(req: AuthRequest, res: Response) {
         name: true,
         role: true,
         avatar: true,
+        mobile: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -171,6 +180,7 @@ export async function listUsers(req: AuthRequest, res: Response) {
         name: true,
         role: true,
         avatar: true,
+        mobile: true,
         createdAt: true,
         _count: {
           select: { conversations: true },
@@ -193,12 +203,24 @@ export async function listUsers(req: AuthRequest, res: Response) {
 export async function updateUser(req: AuthRequest, res: Response) {
   try {
     const { id } = req.params;
-    const { name, email, role, password } = req.body;
+    const { name, email, role, password, mobile } = req.body;
+
+    const existingUser = await prisma.user.findUnique({ where: { id }, select: { role: true } });
+    if (!existingUser) return res.status(404).json({ success: false, error: 'کاربر یافت نشد.' });
+    const targetRole = role || existingUser.role;
+    const normalizedMobile = mobile ? normalizeIranianMobile(mobile) : null;
+    if (mobile && !normalizedMobile) {
+      return res.status(400).json({ success: false, error: 'شماره موبایل معتبر نیست.' });
+    }
 
     const data: any = {
       ...(name && { name }),
       ...(email && { email: email.trim().toLowerCase() }),
       ...(role && { role }),
+      ...(mobile !== undefined && {
+        mobile: ['ADMIN', 'OPERATOR'].includes(targetRole) ? normalizedMobile : null,
+      }),
+      ...(!['ADMIN', 'OPERATOR'].includes(targetRole) && { mobile: null }),
     };
 
     if (password) {
@@ -221,6 +243,7 @@ export async function updateUser(req: AuthRequest, res: Response) {
         name: true,
         role: true,
         avatar: true,
+        mobile: true,
         createdAt: true,
       },
     });

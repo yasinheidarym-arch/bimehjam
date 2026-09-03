@@ -22,7 +22,7 @@ import {
   ArrowRight,
   ShieldAlert,
 } from 'lucide-react';
-import { taskService, customerService } from '../services/api';
+import { taskService, customerService, taskSmsService } from '../services/api';
 
 interface TaskItem {
   id: string;
@@ -49,6 +49,21 @@ interface SmartSuggestion {
   urgency: 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
 }
 
+interface SmsUser {
+  id: string;
+  name: string;
+  role: string;
+  mobile?: string | null;
+}
+
+interface TaskSmsSettings {
+  enabled: boolean;
+  selectedTaskTypes: string[];
+  selectedRecipientUserIds: string[];
+  taskTypes: Array<{ id: string; label: string }>;
+  users: SmsUser[];
+}
+
 export const TaskManagerView: React.FC = () => {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -69,16 +84,46 @@ export const TaskManagerView: React.FC = () => {
   const [newTaskDesc, setNewTaskDesc] = useState('');
   const [newTaskType, setNewTaskType] = useState('Call Customer');
   const [newTaskPriority, setNewTaskPriority] = useState<'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT'>('HIGH');
-  const [newTaskUser, setNewTaskUser] = useState('کارشناس فروش');
+  const [newTaskUserId, setNewTaskUserId] = useState('');
   const [newTaskCustomerId, setNewTaskCustomerId] = useState('');
   const [newTaskDueDate, setNewTaskDueDate] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [smsSettings, setSmsSettings] = useState<TaskSmsSettings | null>(null);
+  const [savingSms, setSavingSms] = useState(false);
+  const [smsMessage, setSmsMessage] = useState('');
+  const currentRole = (() => {
+    try { return JSON.parse(localStorage.getItem('bimeh_jam_user') || '{}')?.role; } catch { return null; }
+  })();
 
   useEffect(() => {
     fetchTasks();
     fetchSmartSuggestions();
     fetchCustomersList();
   }, [statusFilter, priorityFilter, typeFilter, sourceFilter]);
+
+  useEffect(() => {
+    taskSmsService.getSettings()
+      .then((res: any) => res.success && setSmsSettings(res.data))
+      .catch(() => undefined);
+  }, []);
+
+  const saveSmsSettings = async (next: TaskSmsSettings) => {
+    setSmsSettings(next);
+    setSavingSms(true);
+    setSmsMessage('');
+    try {
+      const res: any = await taskSmsService.updateSettings({
+        enabled: next.enabled,
+        selectedTaskTypes: next.selectedTaskTypes,
+        selectedRecipientUserIds: next.selectedRecipientUserIds,
+      });
+      if (res.success) setSmsMessage('تنظیمات ذخیره شد.');
+    } catch (error) {
+      setSmsMessage(error instanceof Error ? error.message : 'ذخیره تنظیمات ناموفق بود.');
+    } finally {
+      setSavingSms(false);
+    }
+  };
 
   const fetchTasks = async () => {
     setLoading(true);
@@ -143,7 +188,7 @@ export const TaskManagerView: React.FC = () => {
         description: newTaskDesc,
         type: newTaskType,
         priority: newTaskPriority,
-        assignedUser: newTaskUser,
+        assignedUserId: newTaskUserId || undefined,
         customerId: newTaskCustomerId || undefined,
         dueDate: newTaskDueDate || undefined,
         source: 'Operator',
@@ -255,6 +300,72 @@ export const TaskManagerView: React.FC = () => {
           ثبت وظیفه جدید
         </button>
       </div>
+
+      {currentRole === 'ADMIN' && smsSettings && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <h3 className="font-black text-slate-800">اعلان پیامکی FastNotify</h3>
+              <p className="text-xs text-slate-500 mt-1">اعلان فقط برای مسئول همان وظیفه ارسال می‌شود.</p>
+            </div>
+            <button
+              type="button"
+              disabled={savingSms}
+              onClick={() => saveSmsSettings({ ...smsSettings, enabled: !smsSettings.enabled })}
+              className={`relative w-12 h-7 rounded-full transition-colors ${smsSettings.enabled ? 'bg-emerald-500' : 'bg-slate-300'}`}
+              aria-label="فعال‌سازی اعلان پیامکی"
+            >
+              <span className={`absolute top-1 w-5 h-5 rounded-full bg-white shadow transition-all ${smsSettings.enabled ? 'right-6' : 'right-1'}`} />
+            </button>
+          </div>
+
+          <div>
+            <div className="text-xs font-bold text-slate-700 mb-2">نوع وظیفه‌ها</div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+              {smsSettings.taskTypes.map((taskType) => (
+                <label key={taskType.id} className="flex items-center gap-2 rounded-xl border border-slate-200 p-3 text-xs text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={smsSettings.selectedTaskTypes.includes(taskType.id)}
+                    disabled={savingSms}
+                    onChange={() => saveSmsSettings({
+                      ...smsSettings,
+                      selectedTaskTypes: smsSettings.selectedTaskTypes.includes(taskType.id)
+                        ? smsSettings.selectedTaskTypes.filter((id) => id !== taskType.id)
+                        : [...smsSettings.selectedTaskTypes, taskType.id],
+                    })}
+                  />
+                  {taskType.label}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="text-xs font-bold text-slate-700 mb-2">دریافت‌کنندگان مجاز</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {smsSettings.users.map((user) => (
+                <label key={user.id} className="flex items-center gap-2 rounded-xl border border-slate-200 p-3 text-xs text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={smsSettings.selectedRecipientUserIds.includes(user.id)}
+                    disabled={savingSms || !user.mobile}
+                    onChange={() => saveSmsSettings({
+                      ...smsSettings,
+                      selectedRecipientUserIds: smsSettings.selectedRecipientUserIds.includes(user.id)
+                        ? smsSettings.selectedRecipientUserIds.filter((id) => id !== user.id)
+                        : [...smsSettings.selectedRecipientUserIds, user.id],
+                    })}
+                  />
+                  <span>{user.name} ({user.role === 'ADMIN' ? 'مدیر' : 'اپراتور'})</span>
+                  {!user.mobile && <span className="text-amber-600">بدون موبایل</span>}
+                </label>
+              ))}
+            </div>
+          </div>
+          {smsMessage && <div className="text-xs text-slate-600">{smsMessage}</div>}
+        </div>
+      )}
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -587,12 +698,16 @@ export const TaskManagerView: React.FC = () => {
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">مسئول پیگیری</label>
-                  <input
-                    type="text"
-                    value={newTaskUser}
-                    onChange={(e) => setNewTaskUser(e.target.value)}
+                  <select
+                    value={newTaskUserId}
+                    onChange={(e) => setNewTaskUserId(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800"
-                  />
+                  >
+                    <option value="">-- بدون مسئول مشخص --</option>
+                    {(smsSettings?.users || []).map((user) => (
+                      <option key={user.id} value={user.id}>{user.name}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
 

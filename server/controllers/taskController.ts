@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import prisma from '../db/client';
 import { getSmartFollowUpSuggestions } from '../services/automationService';
+import { dispatchTaskCreatedSms } from '../services/fastNotifySmsService';
 
 export async function getTasks(req: Request, res: Response) {
   try {
@@ -19,6 +20,7 @@ export async function getTasks(req: Request, res: Response) {
         customer: { select: { id: true, name: true, phone: true, avatar: true } },
         lead: { select: { id: true, insuranceType: true, score: true, status: true } },
         conversation: { select: { id: true, status: true, lastMessage: true } },
+        assignedUserRecord: { select: { id: true, name: true, role: true } },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -36,6 +38,7 @@ export async function createTask(req: Request, res: Response) {
       leadId,
       conversationId,
       assignedUser,
+      assignedUserId,
       title,
       description,
       type,
@@ -48,12 +51,20 @@ export async function createTask(req: Request, res: Response) {
       return res.status(400).json({ success: false, error: 'عنوان وظیفه الزامی است' });
     }
 
+    const selectedUser = assignedUserId ? await prisma.user.findFirst({
+      where: { id: String(assignedUserId), role: { in: ['ADMIN', 'OPERATOR'] } },
+      select: { id: true, name: true },
+    }) : null;
+    if (assignedUserId && !selectedUser) {
+      return res.status(400).json({ success: false, error: 'کاربر مسئول معتبر نیست.' });
+    }
     const task = await prisma.task.create({
       data: {
         customerId: customerId || null,
         leadId: leadId || null,
         conversationId: conversationId || null,
-        assignedUser: assignedUser || 'کارشناس فروش',
+        assignedUser: selectedUser?.name || assignedUser || 'کارشناس فروش',
+        assignedUserId: selectedUser?.id || null,
         title,
         description: description || null,
         type: type || 'Call Customer',
@@ -67,6 +78,8 @@ export async function createTask(req: Request, res: Response) {
         lead: true,
       },
     });
+
+    await dispatchTaskCreatedSms(task);
 
     // Create Notification
     await prisma.notification.create({
@@ -90,7 +103,7 @@ export async function createTask(req: Request, res: Response) {
 export async function updateTask(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const { status, title, description, priority, assignedUser, dueDate } = req.body;
+    const { status, title, description, priority, assignedUser, assignedUserId, dueDate } = req.body;
 
     const dataToUpdate: any = {};
     if (status) {
@@ -103,6 +116,17 @@ export async function updateTask(req: Request, res: Response) {
     if (description !== undefined) dataToUpdate.description = description;
     if (priority) dataToUpdate.priority = priority;
     if (assignedUser) dataToUpdate.assignedUser = assignedUser;
+    if (assignedUserId !== undefined) {
+      const selectedUser = assignedUserId ? await prisma.user.findFirst({
+        where: { id: String(assignedUserId), role: { in: ['ADMIN', 'OPERATOR'] } },
+        select: { id: true, name: true },
+      }) : null;
+      if (assignedUserId && !selectedUser) {
+        return res.status(400).json({ success: false, error: 'کاربر مسئول معتبر نیست.' });
+      }
+      dataToUpdate.assignedUserId = selectedUser?.id || null;
+      if (selectedUser) dataToUpdate.assignedUser = selectedUser.name;
+    }
     if (dueDate) dataToUpdate.dueDate = new Date(dueDate);
 
     const task = await prisma.task.update({

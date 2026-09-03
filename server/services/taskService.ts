@@ -1,4 +1,5 @@
 import prisma from '../db/client';
+import { dispatchTaskCreatedSms } from './fastNotifySmsService';
 
 export async function createSystemTask(data: {
   customerId?: string;
@@ -9,6 +10,7 @@ export async function createSystemTask(data: {
   type?: string;
   priority?: string;
   assignedUser?: string;
+  assignedUserId?: string;
 }) {
 
   const task = await prisma.task.create({
@@ -18,6 +20,7 @@ export async function createSystemTask(data: {
       conversationId: data.conversationId || null,
 
       assignedUser: data.assignedUser || 'کارشناس فروش',
+      assignedUserId: data.assignedUserId || null,
 
       title: data.title,
       description: data.description || null,
@@ -33,6 +36,8 @@ export async function createSystemTask(data: {
       dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000)
     }
   });
+
+  await dispatchTaskCreatedSms(task);
 
 
   await prisma.notification.create({
