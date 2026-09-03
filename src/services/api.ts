@@ -224,7 +224,8 @@ export const taskSmsService = {
 
 export const taskTypeService = {
   getTypes: async (includeArchived = false) => apiClient.get('/task-types', { params: { includeArchived } }),
-  createType: async (label: string) => apiClient.post('/task-types', { label }),
+  createType: async (label: string, smsTemplate: string) => apiClient.post('/task-types', { label, smsTemplate }),
+  updateType: async (id: string, data: { label: string; smsTemplate: string }) => apiClient.put(`/task-types/${encodeURIComponent(id)}`, data),
   deleteType: async (id: string) => apiClient.delete(`/task-types/${encodeURIComponent(id)}`),
 };
 

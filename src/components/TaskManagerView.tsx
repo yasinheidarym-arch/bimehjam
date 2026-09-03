@@ -64,7 +64,10 @@ interface TaskSmsSettings {
   users: SmsUser[];
 }
 
-interface TaskTypeDefinition { id: string; label: string; active: boolean; builtin: boolean }
+interface TaskTypeDefinition { id: string; label: string; active: boolean; builtin: boolean; smsTemplate: string }
+
+const DEFAULT_TASK_SMS_TEMPLATE = 'بیمه جم: وظیفه «{{taskType}}» برای {{customerFullName}} ثبت شد. عنوان: {{taskTitle}} | اولویت: {{priority}} | شناسه: {{taskId}} | {{taskLink}}';
+const TASK_SMS_VARIABLES = ['{{taskType}}', '{{taskTitle}}', '{{priority}}', '{{customerFullName}}', '{{taskId}}', '{{taskLink}}'];
 
 export const TaskManagerView: React.FC = () => {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
@@ -96,6 +99,8 @@ export const TaskManagerView: React.FC = () => {
   const [smsMessage, setSmsMessage] = useState('');
   const [taskTypes, setTaskTypes] = useState<TaskTypeDefinition[]>([]);
   const [newTaskTypeLabel, setNewTaskTypeLabel] = useState('');
+  const [taskTypeTemplate, setTaskTypeTemplate] = useState(DEFAULT_TASK_SMS_TEMPLATE);
+  const [editingTaskTypeId, setEditingTaskTypeId] = useState<string | null>(null);
   const [taskTypeMessage, setTaskTypeMessage] = useState('');
   const currentRole = (() => {
     try { return JSON.parse(localStorage.getItem('bimeh_jam_user') || '{}')?.role; } catch { return null; }
@@ -132,13 +137,41 @@ export const TaskManagerView: React.FC = () => {
   const addTaskType = async () => {
     if (!newTaskTypeLabel.trim()) return;
     try {
-      await taskTypeService.createType(newTaskTypeLabel);
+      if (editingTaskTypeId) {
+        await taskTypeService.updateType(editingTaskTypeId, { label: newTaskTypeLabel, smsTemplate: taskTypeTemplate });
+      } else {
+        await taskTypeService.createType(newTaskTypeLabel, taskTypeTemplate);
+      }
       setNewTaskTypeLabel('');
-      setTaskTypeMessage('نوع وظیفه اضافه شد.');
+      setTaskTypeTemplate(DEFAULT_TASK_SMS_TEMPLATE);
+      setEditingTaskTypeId(null);
+      setTaskTypeMessage(editingTaskTypeId ? 'نوع وظیفه و قالب پیامک ویرایش شد.' : 'نوع وظیفه اضافه شد.');
       await Promise.all([loadTaskTypes(), loadSmsSettings()]);
       window.dispatchEvent(new CustomEvent('bimehjam-task-types-updated'));
     } catch (error) { setTaskTypeMessage(error instanceof Error ? error.message : 'ثبت ناموفق بود.'); }
   };
+
+  const startEditingTaskType = (item: TaskTypeDefinition) => {
+    setEditingTaskTypeId(item.id);
+    setNewTaskTypeLabel(item.label);
+    setTaskTypeTemplate(item.smsTemplate || DEFAULT_TASK_SMS_TEMPLATE);
+    setTaskTypeMessage('');
+  };
+
+  const cancelEditingTaskType = () => {
+    setEditingTaskTypeId(null);
+    setNewTaskTypeLabel('');
+    setTaskTypeTemplate(DEFAULT_TASK_SMS_TEMPLATE);
+  };
+
+  const taskSmsPreview = taskTypeTemplate.replace(/{{\s*(taskType|taskTitle|priority|customerFullName|taskId|taskLink)\s*}}/g, (_match, key) => ({
+    taskType: newTaskTypeLabel || 'تماس برای قیمت‌دهی',
+    taskTitle: 'پیگیری درخواست قیمت مشتری',
+    priority: 'HIGH',
+    customerFullName: 'علی رضایی',
+    taskId: 'TASK-123',
+    taskLink: 'https://bimehjam.com/admin/tasks?taskId=TASK-123',
+  }[key] || ''));
 
   const deleteTaskType = async (id: string) => {
     try {
@@ -672,15 +705,31 @@ export const TaskManagerView: React.FC = () => {
               <div><h3 className="font-black text-slate-800">مدیریت نوع وظیفه</h3><p className="text-xs text-slate-500 mt-1">نوع‌های استفاده‌شده آرشیو و نوع‌های بدون استفاده حذف می‌شوند.</p></div>
               <button type="button" onClick={() => setIsTaskTypeModalOpen(false)} className="text-slate-400 hover:text-slate-700 font-bold">✕</button>
             </div>
-            <div className="flex gap-2">
-              <input value={newTaskTypeLabel} onChange={(e) => setNewTaskTypeLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addTaskType(); } }} placeholder="عنوان نوع جدید" className="flex-1 rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
-              <button type="button" onClick={addTaskType} className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white">افزودن</button>
+            <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+              <input value={newTaskTypeLabel} onChange={(e) => setNewTaskTypeLabel(e.target.value)} placeholder="عنوان نوع وظیفه" className="w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm" />
+              <div>
+                <label className="mb-1 block text-xs font-bold text-slate-700">قالب پیامک اعلان</label>
+                <textarea value={taskTypeTemplate} onChange={(e) => setTaskTypeTemplate(e.target.value)} rows={4} className="w-full rounded-xl border border-slate-200 px-3 py-2 text-xs leading-6" />
+                <div className="mt-2 flex flex-wrap gap-1" dir="ltr">
+                  {TASK_SMS_VARIABLES.map((variable) => <code key={variable} className="rounded bg-white px-1.5 py-1 text-[10px] text-blue-700">{variable}</code>)}
+                </div>
+              </div>
+              <div className="rounded-lg border border-blue-100 bg-white p-3 text-xs leading-6 text-slate-600">
+                <span className="font-bold text-slate-800">پیش‌نمایش: </span>{taskSmsPreview || 'قالب پیش‌فرض امن هنگام ارسال استفاده می‌شود.'}
+              </div>
+              <div className="flex gap-2">
+                <button type="button" onClick={addTaskType} className="rounded-xl bg-blue-600 px-4 py-2 text-xs font-bold text-white">{editingTaskTypeId ? 'ذخیره ویرایش' : 'افزودن نوع'}</button>
+                {editingTaskTypeId && <button type="button" onClick={cancelEditingTaskType} className="rounded-xl border border-slate-200 px-4 py-2 text-xs font-bold text-slate-600">انصراف</button>}
+              </div>
             </div>
             <div className="space-y-2">
               {taskTypes.map((item) => (
                 <div key={item.id} className={`flex items-center justify-between rounded-xl border p-3 text-xs ${item.active ? 'border-slate-200' : 'border-slate-100 bg-slate-50 text-slate-400'}`}>
                   <span className="font-bold">{item.label}{!item.active && ' — آرشیوشده'}</span>
-                  {item.active && <button type="button" onClick={() => deleteTaskType(item.id)} className="text-rose-600 font-bold">حذف / آرشیو</button>}
+                  <div className="flex gap-3">
+                    <button type="button" onClick={() => startEditingTaskType(item)} className="font-bold text-blue-600">ویرایش</button>
+                    {item.active && <button type="button" onClick={() => deleteTaskType(item.id)} className="text-rose-600 font-bold">حذف / آرشیو</button>}
+                  </div>
                 </div>
               ))}
             </div>

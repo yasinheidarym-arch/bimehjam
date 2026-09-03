@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { AuthRequest } from '../middleware/auth';
-import { addTaskType, getTaskTypeCatalog, removeOrArchiveTaskType } from '../services/taskTypeCatalogService';
+import { addTaskType, getTaskTypeCatalog, removeOrArchiveTaskType, updateTaskType } from '../services/taskTypeCatalogService';
 
 export async function listTaskTypes(req: AuthRequest, res: Response) {
   try {
@@ -10,8 +10,13 @@ export async function listTaskTypes(req: AuthRequest, res: Response) {
 }
 
 export async function createTaskType(req: AuthRequest, res: Response) {
-  try { return res.status(201).json({ success: true, data: await addTaskType(req.body?.label) }); }
+  try { return res.status(201).json({ success: true, data: await addTaskType(req.body?.label, req.body?.smsTemplate) }); }
   catch (error) { return res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'ثبت نوع وظیفه ناموفق بود.' }); }
+}
+
+export async function editTaskType(req: AuthRequest, res: Response) {
+  try { return res.json({ success: true, data: await updateTaskType(req.params.id, req.body || {}) }); }
+  catch (error) { return res.status(400).json({ success: false, error: error instanceof Error ? error.message : 'ویرایش نوع وظیفه ناموفق بود.' }); }
 }
 
 export async function deleteTaskType(req: AuthRequest, res: Response) {

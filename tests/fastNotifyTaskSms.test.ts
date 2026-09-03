@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { dispatchTaskCreatedSmsCore } from '../server/services/fastNotifySmsCore';
+import { renderTaskSmsTemplate, validateTaskSmsTemplate } from '../server/services/taskSmsTemplate';
 
 const task = {
   id: 'task-123',
@@ -8,6 +9,7 @@ const task = {
   priority: 'HIGH',
   type: 'Call Customer',
   assignedUserId: 'operator-1',
+  customerId: 'customer-1',
 };
 
 function createHarness(options: {
@@ -17,6 +19,8 @@ function createHarness(options: {
   mobile?: string | null;
   providerStatus?: number;
   duplicate?: boolean;
+  smsTemplate?: string;
+  customerFullName?: string | null;
 } = {}) {
   const requests: Array<{ url: string; init?: RequestInit }> = [];
   const deliveryUpdates: Array<Record<string, unknown>> = [];
@@ -47,6 +51,12 @@ function createHarness(options: {
         return { id: 'delivery-1' };
       },
       deliveryUpdate: async (_id: string, data: Record<string, unknown>) => { deliveryUpdates.push(data); },
+      messageContext: async () => ({
+        taskTypeLabel: 'تماس برای قیمت‌دهی',
+        smsTemplate: options.smsTemplate,
+        customerFullName: options.customerFullName === undefined ? 'یاسین حیدری' : options.customerFullName,
+        taskLink: 'https://bimehjam.com/admin/tasks?taskId=task-123',
+      }),
       fetcher,
       apiKey: 'mock-api-key',
       from: '50002635118000',
@@ -90,8 +100,21 @@ test('eligible price-call task sends exactly one correct FastNotify POST', async
   assert.deepEqual(body.to, ['09120000000']);
   assert.equal(body.from, '50002635118000');
   assert.match(body.message, /task-123/);
-  assert.doesNotMatch(body.message, /مشتری|شماره/);
+  assert.match(body.message, /یاسین حیدری/);
+  assert.doesNotMatch(body.message, /09120000000/);
   assert.equal(harness.deliveryUpdates.at(-1)?.status, 'SENT');
+});
+
+test('custom task-type SMS template renders only allowlisted variables', async () => {
+  const template = '{{taskType}} | {{taskTitle}} | {{priority}} | {{customerFullName}} | {{taskId}} | {{taskLink}}';
+  const harness = createHarness({ smsTemplate: template, customerFullName: 'علی رضایی' });
+  assert.equal(await dispatchTaskCreatedSmsCore(task, harness.dependencies), 'sent');
+  const body = JSON.parse(String(harness.requests[0].init?.body));
+  assert.equal(body.message, 'تماس برای قیمت‌دهی | تماس برای قیمت‌دهی | HIGH | علی رضایی | task-123 | https://bimehjam.com/admin/tasks?taskId=task-123');
+  assert.throws(() => validateTaskSmsTemplate('کلید: {{FASTNOTIFY_API_KEY}}'), /متغیر غیرمجاز/);
+  assert.equal(renderTaskSmsTemplate('', {
+    taskType: 'تماس', taskTitle: 'پیگیری', priority: 'HIGH', customerFullName: 'علی رضایی', taskId: '1', taskLink: '/tasks/1',
+  }).includes('علی رضایی'), true);
 });
 
 test('provider failure is contained after task creation', async () => {

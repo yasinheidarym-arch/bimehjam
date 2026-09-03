@@ -1,3 +1,5 @@
+import { DEFAULT_TASK_SMS_TEMPLATE, renderTaskSmsTemplate } from './taskSmsTemplate';
+
 const FASTNOTIFY_ENDPOINT = 'https://services.fastnotify.ir/api/v1/message/single';
 export const FASTNOTIFY_SETTING_KEYS = { enabled: 'fastnotify_sms_enabled', taskTypes: 'fastnotify_sms_task_types', recipientUserIds: 'fastnotify_sms_recipient_user_ids' } as const;
 
@@ -12,12 +14,14 @@ function list(value?: string): string[] {
   try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : []; } catch { return []; }
 }
 
-export type CreatedTaskForSms = { id: string; title: string; priority: string; type: string; assignedUserId?: string | null };
+export type CreatedTaskForSms = { id: string; title: string; priority: string; type: string; customerId?: string | null; assignedUserId?: string | null };
+export type TaskSmsMessageContext = { taskTypeLabel: string; smsTemplate?: string | null; customerFullName?: string | null; taskLink: string };
 export type SmsDependencies = {
   settingFindMany: () => Promise<Array<{ key: string; value: string }>>;
   userFindUnique: (id: string) => Promise<{ id: string; role: string; mobile: string | null } | null>;
   deliveryCreate: (data: Record<string, unknown>) => Promise<{ id: string }>;
   deliveryUpdate: (id: string, data: Record<string, unknown>) => Promise<void>;
+  messageContext: (task: CreatedTaskForSms) => Promise<TaskSmsMessageContext>;
   fetcher: typeof fetch; apiKey?: string; from?: string;
 };
 export type SmsDispatchResult = 'sent' | 'disabled' | 'task-type-disabled' | 'unassigned' | 'recipient-disabled' | 'invalid-recipient' | 'configuration-missing' | 'duplicate' | 'provider-failed';
@@ -43,9 +47,18 @@ export async function dispatchTaskCreatedSmsCore(task: CreatedTaskForSms, deps: 
       await deps.deliveryUpdate(delivery.id, { status: 'FAILED', attemptCount: 1, lastErrorCode: 'CONFIGURATION_MISSING' });
       return 'configuration-missing';
     }
+    const context = await deps.messageContext(task);
+    const message = renderTaskSmsTemplate(context.smsTemplate || DEFAULT_TASK_SMS_TEMPLATE, {
+      taskType: context.taskTypeLabel,
+      taskTitle: task.title,
+      priority: task.priority,
+      customerFullName: context.customerFullName?.trim() || 'ثبت نشده',
+      taskId: task.id,
+      taskLink: context.taskLink,
+    });
     const response = await deps.fetcher(FASTNOTIFY_ENDPOINT, {
       method: 'POST', headers: { apiKey: deps.apiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: deps.from, to: [mobile], message: `وظیفه جدید: ${task.title}\nاولویت: ${task.priority}\nشناسه: ${task.id}` }),
+      body: JSON.stringify({ from: deps.from, to: [mobile], message }),
       signal: AbortSignal.timeout(5000),
     });
     const body = response.ok ? await response.json() as { data?: { requestId?: unknown; references?: unknown } } : null;

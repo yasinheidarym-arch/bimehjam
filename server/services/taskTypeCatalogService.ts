@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import prisma from '../db/client';
+import { DEFAULT_TASK_SMS_TEMPLATE, validateTaskSmsTemplate } from './taskSmsTemplate';
 
 const SETTING_KEY = 'task_type_catalog';
 
@@ -8,18 +9,19 @@ export type TaskTypeDefinition = {
   label: string;
   active: boolean;
   builtin: boolean;
+  smsTemplate: string;
 };
 
 const INITIAL_TASK_TYPES: TaskTypeDefinition[] = [
-  { id: 'Call Customer', label: 'تماس برای قیمت‌دهی', active: true, builtin: true },
-  { id: 'Send Message', label: 'ارسال پیام', active: true, builtin: true },
-  { id: 'Prepare Quotation', label: 'آماده‌سازی قیمت', active: true, builtin: true },
-  { id: 'Collect Documents', label: 'دریافت مدارک', active: true, builtin: true },
-  { id: 'Review Request', label: 'بررسی استعلام', active: true, builtin: true },
-  { id: 'Follow Up Quote', label: 'پیگیری صدور', active: true, builtin: true },
-  { id: 'Renewal Reminder', label: 'یادآوری تمدید', active: true, builtin: true },
-  { id: 'Complaint Follow Up', label: 'پیگیری شکایت', active: true, builtin: true },
-  { id: 'Other', label: 'سایر', active: true, builtin: true },
+  { id: 'Call Customer', label: 'تماس برای قیمت‌دهی', active: true, builtin: true, smsTemplate: DEFAULT_TASK_SMS_TEMPLATE },
+  { id: 'Send Message', label: 'ارسال پیام', active: true, builtin: true, smsTemplate: DEFAULT_TASK_SMS_TEMPLATE },
+  { id: 'Prepare Quotation', label: 'آماده‌سازی قیمت', active: true, builtin: true, smsTemplate: DEFAULT_TASK_SMS_TEMPLATE },
+  { id: 'Collect Documents', label: 'دریافت مدارک', active: true, builtin: true, smsTemplate: DEFAULT_TASK_SMS_TEMPLATE },
+  { id: 'Review Request', label: 'بررسی استعلام', active: true, builtin: true, smsTemplate: DEFAULT_TASK_SMS_TEMPLATE },
+  { id: 'Follow Up Quote', label: 'پیگیری صدور', active: true, builtin: true, smsTemplate: DEFAULT_TASK_SMS_TEMPLATE },
+  { id: 'Renewal Reminder', label: 'یادآوری تمدید', active: true, builtin: true, smsTemplate: DEFAULT_TASK_SMS_TEMPLATE },
+  { id: 'Complaint Follow Up', label: 'پیگیری شکایت', active: true, builtin: true, smsTemplate: DEFAULT_TASK_SMS_TEMPLATE },
+  { id: 'Other', label: 'سایر', active: true, builtin: true, smsTemplate: DEFAULT_TASK_SMS_TEMPLATE },
 ];
 
 function parseCatalog(value?: string | null): TaskTypeDefinition[] {
@@ -27,12 +29,17 @@ function parseCatalog(value?: string | null): TaskTypeDefinition[] {
   try {
     const parsed = JSON.parse(value) as unknown;
     if (!Array.isArray(parsed)) return INITIAL_TASK_TYPES;
-    const valid = parsed.filter((item): item is TaskTypeDefinition => {
+    const valid = parsed.filter((item) => {
       if (!item || typeof item !== 'object') return false;
       const value = item as Record<string, unknown>;
       return typeof value.id === 'string' && typeof value.label === 'string' && typeof value.active === 'boolean' && typeof value.builtin === 'boolean';
     });
-    return valid.length ? valid : INITIAL_TASK_TYPES;
+    return valid.length ? valid.map((item) => ({
+      ...item,
+      smsTemplate: typeof (item as Record<string, unknown>).smsTemplate === 'string'
+        ? validateTaskSmsTemplate((item as Record<string, unknown>).smsTemplate)
+        : DEFAULT_TASK_SMS_TEMPLATE,
+    })) as TaskTypeDefinition[] : INITIAL_TASK_TYPES;
   } catch {
     return INITIAL_TASK_TYPES;
   }
@@ -52,16 +59,31 @@ export async function getTaskTypeCatalog(options: { includeArchived?: boolean } 
   return options.includeArchived ? catalog : catalog.filter((item) => item.active);
 }
 
-export async function addTaskType(labelInput: unknown) {
+export async function addTaskType(labelInput: unknown, smsTemplateInput: unknown = DEFAULT_TASK_SMS_TEMPLATE) {
   const label = typeof labelInput === 'string' ? labelInput.trim().replace(/\s+/g, ' ') : '';
   if (label.length < 2 || label.length > 80) throw new Error('عنوان نوع وظیفه باید بین ۲ تا ۸۰ کاراکتر باشد.');
   const catalog = await getTaskTypeCatalog({ includeArchived: true });
   if (catalog.some((item) => item.label.localeCompare(label, 'fa', { sensitivity: 'base' }) === 0)) {
     throw new Error('این نوع وظیفه قبلاً ثبت شده است.');
   }
-  const created: TaskTypeDefinition = { id: `CUSTOM_${randomUUID()}`, label, active: true, builtin: false };
+  const created: TaskTypeDefinition = { id: `CUSTOM_${randomUUID()}`, label, active: true, builtin: false, smsTemplate: validateTaskSmsTemplate(smsTemplateInput) };
   await saveCatalog([...catalog, created]);
   return created;
+}
+
+export async function updateTaskType(id: string, input: { label?: unknown; smsTemplate?: unknown }) {
+  const catalog = await getTaskTypeCatalog({ includeArchived: true });
+  const target = catalog.find((item) => item.id === id);
+  if (!target) throw new Error('نوع وظیفه یافت نشد.');
+  const label = input.label === undefined ? target.label : String(input.label).trim().replace(/\s+/g, ' ');
+  if (label.length < 2 || label.length > 80) throw new Error('عنوان نوع وظیفه باید بین ۲ تا ۸۰ کاراکتر باشد.');
+  if (catalog.some((item) => item.id !== id && item.label.localeCompare(label, 'fa', { sensitivity: 'base' }) === 0)) {
+    throw new Error('این نوع وظیفه قبلاً ثبت شده است.');
+  }
+  const smsTemplate = input.smsTemplate === undefined ? target.smsTemplate : validateTaskSmsTemplate(input.smsTemplate);
+  const updated = { ...target, label, smsTemplate };
+  await saveCatalog(catalog.map((item) => item.id === id ? updated : item));
+  return updated;
 }
 
 export async function removeOrArchiveTaskType(id: string) {

@@ -6,6 +6,12 @@ import { getAiMode } from './settingService';
 import { createSystemTask } from './taskService';
 import { resolveGoftinoAiPolicy } from './goftinoAiPolicyService';
 import { goftinoAiResponseMode } from './goftinoAiPolicyDecision';
+import {
+  advanceHumanHandoffName,
+  handoffReasonLabel,
+  HumanHandoffNameState,
+  HumanHandoffReason,
+} from './humanHandoffNameFlow';
 
 const DEFAULT_GOFTINO_HANDOFF_MESSAGE = 'برای بررسی دقیق درخواست شما، همکاران متخصص بیمه جم ادامهٔ گفتگو را پیگیری می‌کنند. 🌹';
 
@@ -41,6 +47,32 @@ function policyHandoffResult(message: string, reason: string) {
     retryCount: 0,
     modelUsed: 'Goftino Policy Allowlist',
     policyHandoff: true,
+  };
+}
+
+function parseConversationCollectedData(value: unknown): Record<string, any> {
+  if (typeof value !== 'string') return value && typeof value === 'object' ? value as Record<string, any> : {};
+  try { const parsed = JSON.parse(value); return parsed && typeof parsed === 'object' ? parsed : {}; } catch { return {}; }
+}
+
+function humanHandoffResult(input: {
+  replyText: string;
+  collectedData: Record<string, any>;
+  reason: HumanHandoffReason;
+  fullName?: string | null;
+  task?: { create: true; title: string; type: string; priority: string; description: string };
+  deferHumanHandoff?: boolean;
+}) {
+  return {
+    intent: 'Human Operator Request', stage: 'Human Handoff', missingInfo: '', loadedKnowledgeSummary: '',
+    extractedKnowledge: { matchedProduct: null, relevantFaqs: [], relevantArticles: [], matchedObjections: [], quotationWorkflow: null },
+    appliedRules: [], systemPrompt: '', userPrompt: '', finalPromptSnippet: '', replyText: input.replyText,
+    collectedData: input.collectedData, promptTokens: 0, completionTokens: 0,
+    validationResult: 'PASSED' as const, validationReason: 'Deterministic human handoff name workflow', retryCount: 0,
+    modelUsed: 'Backend Rule Engine', task: input.task,
+    operatorSummary: input.task?.description || '', deferHumanHandoff: input.deferHumanHandoff,
+    handoffReason: input.reason, customerFullName: input.fullName,
+    handoffCompleted: Boolean(input.task),
   };
 }
 
@@ -515,8 +547,47 @@ export async function runAiPipelineForMessage(params: {
 
     const handoffRequestRegex = /کارشناس|اپراتور|انسان|تماس|مشاور تلفنی|وصل کن/i;
     const customerRequestedHuman = handoffRequestRegex.test(userMessageContent);
+    const existingCollectedData = parseConversationCollectedData(conversation.collectedData);
+    const pendingHandoff = existingCollectedData.humanHandoff?.pending === true
+      ? existingCollectedData.humanHandoff as HumanHandoffNameState
+      : null;
 
-    if (policyDecision.kind === 'HANDOFF') {
+    if (pendingHandoff) {
+      const decision = advanceHumanHandoffName({
+        reason: pendingHandoff.reason,
+        existingCustomerName: customer.name,
+        message: userMessageContent,
+        state: pendingHandoff,
+      });
+      if (decision.action === 'ASK_NAME') {
+        brainResult = humanHandoffResult({
+          replyText: decision.replyText,
+          reason: pendingHandoff.reason,
+          collectedData: { ...existingCollectedData, humanHandoff: decision.state },
+          deferHumanHandoff: true,
+        });
+      } else {
+        const reasonText = handoffReasonLabel(decision.reason);
+        brainResult = humanHandoffResult({
+          replyText: 'سپاسگزارم. درخواست شما ثبت شد و همکارم ادامهٔ پیگیری را انجام می‌دهد. 🌹',
+          reason: decision.reason,
+          fullName: decision.fullName,
+          collectedData: {
+            ...existingCollectedData,
+            humanHandoff: null,
+            customerIdentity: { fullName: decision.fullName, status: decision.nameStatus },
+            handoffReason: reasonText,
+          },
+          task: {
+            create: true,
+            title: decision.reason === 'QUOTATION_COMPLETED' ? 'محاسبه قیمت و تماس با مشتری' : 'تماس با مشتری درخواست‌کننده کارشناس',
+            type: decision.reason === 'QUOTATION_COMPLETED' ? 'Prepare Quotation' : 'Call Customer',
+            priority: 'HIGH',
+            description: `علت ارجاع: ${reasonText}\nنام مشتری: ${decision.fullName || 'ثبت نشده'}`,
+          },
+        });
+      }
+    } else if (policyDecision.kind === 'HANDOFF') {
       brainResult = policyHandoffResult(
         DEFAULT_GOFTINO_HANDOFF_MESSAGE,
         `Goftino policy decision: ${policyDecision.reason}`,
@@ -529,49 +600,30 @@ export async function runAiPipelineForMessage(params: {
         status: 'WARNING',
         details: `پاسخ تخصصی AI متوقف شد: ${policyDecision.reason}`,
       });
-    } else if (customerRequestedHuman && customer.phone) {
-      console.log("========== HUMAN HANDOFF BY BACKEND RULE ==========");
-      console.log({
-        customerPhone: customer.phone,
-        message: userMessageContent
-      });
-
-      brainResult = {
-        intent: 'Human Operator Request',
-        stage: 'Human Handoff',
-        missingInfo: '',
-        loadedKnowledgeSummary: '',
-        extractedKnowledge: {
-          matchedProduct: null,
-          relevantFaqs: [],
-          relevantArticles: [],
-          matchedObjections: [],
-          quotationWorkflow: null
-        },
-        appliedRules: [],
-        systemPrompt: '',
-        userPrompt: '',
-        finalPromptSnippet: '',
-        replyText: `چشم ${customer.name || ''} جان 🌹 درخواست تماس شما ثبت شد. کارشناس بیمه جم با شماره ثبت‌شده در اولین فرصت با شما تماس می‌گیرد.`,
-        collectedData: {
-          phone: customer.phone,
-          contactRequest: true
-        },
-        promptTokens: 0,
-        completionTokens: 0,
-        validationResult: 'PASSED',
-        validationReason: 'Backend human handoff rule',
-        retryCount: 0,
-        modelUsed: 'Backend Rule Engine',
-        task: {
-          create: true,
-          title: `تماس با مشتری درخواست‌کننده کارشناس - ${customer.name || 'مشتری'}`,
-          type: 'Call Customer',
-          priority: 'HIGH',
-          description: `مشتری درخواست تماس با کارشناس داده است. شماره تماس: ${customer.phone}`
-        },
-        operatorSummary: `درخواست تماس با کارشناس. شماره موجود در پرونده: ${customer.phone}`
-      };
+    } else if (customerRequestedHuman) {
+      const decision = advanceHumanHandoffName({ reason: 'DIRECT_HUMAN_REQUEST', existingCustomerName: customer.name });
+      if (decision.action === 'ASK_NAME') {
+        brainResult = humanHandoffResult({
+          replyText: decision.replyText,
+          reason: 'DIRECT_HUMAN_REQUEST',
+          collectedData: { ...existingCollectedData, humanHandoff: decision.state },
+          deferHumanHandoff: true,
+        });
+      } else {
+        const reasonText = handoffReasonLabel(decision.reason);
+        brainResult = humanHandoffResult({
+          replyText: 'درخواست شما ثبت شد و همکارم ادامهٔ پیگیری را انجام می‌دهد. 🌹',
+          reason: decision.reason,
+          fullName: decision.fullName,
+          collectedData: { ...existingCollectedData, humanHandoff: null, customerIdentity: { fullName: decision.fullName, status: decision.nameStatus }, handoffReason: reasonText },
+          task: {
+            create: true,
+            title: `تماس با مشتری درخواست‌کننده کارشناس - ${decision.fullName || 'نام ثبت نشده'}`,
+            type: 'Call Customer', priority: 'HIGH',
+            description: `علت ارجاع: ${reasonText}\nنام مشتری: ${decision.fullName || 'ثبت نشده'}`,
+          },
+        });
+      }
 
     } else {
 
@@ -587,6 +639,22 @@ export async function runAiPipelineForMessage(params: {
         restrictKnowledgeScope: true,
       });
 
+      if (brainResult.quotationState?.isCompleted && brainResult.task?.create) {
+        const decision = advanceHumanHandoffName({ reason: 'QUOTATION_COMPLETED', existingCustomerName: customer.name });
+        if (decision.action === 'ASK_NAME') {
+          brainResult.replyText = decision.replyText;
+          brainResult.task = undefined;
+          brainResult.deferHumanHandoff = true;
+          brainResult.collectedData = { ...brainResult.collectedData, humanHandoff: decision.state };
+        } else {
+          const reasonText = handoffReasonLabel(decision.reason);
+          brainResult.customerFullName = decision.fullName;
+          brainResult.handoffReason = decision.reason;
+          brainResult.collectedData = { ...brainResult.collectedData, humanHandoff: null, customerIdentity: { fullName: decision.fullName, status: decision.nameStatus }, handoffReason: reasonText };
+          brainResult.task.description = `${brainResult.task.description || ''}\nعلت ارجاع: ${reasonText}\nنام مشتری: ${decision.fullName || 'ثبت نشده'}`.trim();
+        }
+      }
+
     }
 
     console.log("========== BRAIN CALL DEBUG: AFTER processBrainLayer ==========");
@@ -600,6 +668,11 @@ export async function runAiPipelineForMessage(params: {
     console.log("brainResult.task:", JSON.stringify(brainResult?.task || null, null, 2));
     console.log("brainResult.replyText:", brainResult?.replyText || "");
     console.log("=================================================");
+
+    if (brainResult.customerFullName) {
+      await prisma.customer.update({ where: { id: customer.id }, data: { name: brainResult.customerFullName } });
+      customer.name = brainResult.customerFullName;
+    }
 
     // Create operator task from AI decision
     if (brainResult.task?.create && brainResult.task.title) {
@@ -760,7 +833,7 @@ export async function runAiPipelineForMessage(params: {
   await prisma.conversation.update({
     where: { id: conversation.id },
     data: {
-      status: brainResult.policyHandoff || brainResult.quotationState?.isCompleted
+      status: !brainResult.deferHumanHandoff && (brainResult.policyHandoff || brainResult.handoffCompleted || brainResult.quotationState?.isCompleted)
         ? 'WAITING_OPERATOR'
         : 'AI_HANDLING',
       lastMessage: aiReplyText,
