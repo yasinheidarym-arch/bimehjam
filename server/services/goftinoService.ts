@@ -465,6 +465,7 @@ export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
       messageId: savedMessage.id,
       userMessageContent: content.trim(),
       aiCategory: selectedPolicy.kind === 'ALLOW' ? selectedPolicy.policy.insuranceCategoryId : 'OTHER',
+      effectiveAiMode: currentAiMode,
     }).catch((err) => {
       console.error('❌ Error executing AI pipeline:', err);
     });

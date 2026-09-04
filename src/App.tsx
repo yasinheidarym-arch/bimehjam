@@ -27,7 +27,6 @@ import {
   describeAiRange,
   effectiveAiStatusLabel,
   IRAN_WEEKDAYS,
-  resolveEffectiveAiMode,
   validateAiSchedule,
 } from '../shared/aiSchedule';
 import { 
@@ -205,7 +204,6 @@ export default function App() {
   const [rawWebhookLogs, setRawWebhookLogs] = useState<any[]>([]);
 
   // AI Mode State (OFF | TEST_MODE | ACTIVE)
-  const [aiMode, setAiMode] = useState<AiMode>('TEST_MODE');
   const [aiModeLoading, setAiModeLoading] = useState<boolean>(false);
   const [aiModeMessage, setAiModeMessage] = useState<string | null>(null);
   const [aiSchedule, setAiSchedule] = useState<AiSchedule>({
@@ -228,13 +226,19 @@ export default function App() {
   const fetchAiMode = async () => {
     try {
       const res: any = await settingService.getAiMode();
-      if (res?.data?.mode) {
-        setAiMode(res.data.mode);
-      }
       if (res?.data?.schedule) setAiSchedule(res.data.schedule);
       if (res?.data?.effectiveMode) setEffectiveAiMode(res.data.effectiveMode);
     } catch (err) {
       console.warn('Failed to fetch AI mode:', err);
+    }
+  };
+
+  const refreshEffectiveAiMode = async () => {
+    try {
+      const res: any = await settingService.getAiMode();
+      if (res?.data?.effectiveMode) setEffectiveAiMode(res.data.effectiveMode);
+    } catch (err) {
+      console.warn('Failed to refresh effective AI mode:', err);
     }
   };
 
@@ -243,12 +247,9 @@ export default function App() {
     setAiModeMessage(null);
     try {
       const res: any = await settingService.setAiMode(newMode);
-      setAiMode(newMode);
-      try {
-        setEffectiveAiMode(resolveEffectiveAiMode(newMode, aiSchedule));
-      } catch {
-        // Keep the last server-confirmed status while the schedule form is incomplete.
-      }
+      if (res?.data?.schedule) setAiSchedule(res.data.schedule);
+      if (res?.data?.effectiveMode) setEffectiveAiMode(res.data.effectiveMode);
+      else await refreshEffectiveAiMode();
       setAiModeMessage(res?.message || 'وضعیت هوش مصنوعی با موفقیت ذخیره شد.');
       setTimeout(() => setAiModeMessage(null), 4000);
     } catch (err: any) {
@@ -260,16 +261,9 @@ export default function App() {
   };
 
   useEffect(() => {
-    const updateEffectiveMode = () => {
-      try {
-        setEffectiveAiMode(resolveEffectiveAiMode(aiMode, aiSchedule));
-      } catch {
-        // Editing can temporarily produce an invalid range; validation is shown on save.
-      }
-    };
-    const timer = window.setInterval(updateEffectiveMode, 30_000);
+    const timer = window.setInterval(refreshEffectiveAiMode, 30_000);
     return () => window.clearInterval(timer);
-  }, [aiMode, aiSchedule]);
+  }, []);
 
   const handleSaveAiSchedule = async () => {
     setAiModeLoading(true);
@@ -278,7 +272,8 @@ export default function App() {
       const normalizedSchedule = validateAiSchedule(aiSchedule);
       const res: any = await settingService.setAiSchedule(normalizedSchedule);
       if (res?.data?.schedule) setAiSchedule(res.data.schedule);
-      setEffectiveAiMode(res?.data?.effectiveMode || resolveEffectiveAiMode(aiMode, normalizedSchedule));
+      if (res?.data?.effectiveMode) setEffectiveAiMode(res.data.effectiveMode);
+      else await refreshEffectiveAiMode();
       setAiModeMessage(res?.message || 'زمان‌بندی پاسخگویی هوش مصنوعی ذخیره شد.');
     } catch (err: any) {
       setAiModeMessage(err.message || 'ذخیره زمان‌بندی ناموفق بود.');
@@ -463,7 +458,7 @@ export default function App() {
         {/* Top Header */}
         <TopHeader
           activeTab={activeTab}
-          aiMode={aiMode}
+          aiMode={effectiveAiMode}
           onUpdateAiMode={handleUpdateAiMode}
           user={currentUser}
           onLogout={handleLogout}
@@ -620,7 +615,7 @@ export default function App() {
                   <div 
                     onClick={() => !aiModeLoading && handleUpdateAiMode('OFF')}
                     className={`p-4 rounded-xl border-2 transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
-                      aiMode === 'OFF'
+                      effectiveAiMode === 'OFF'
                         ? 'bg-rose-50/70 border-rose-500 text-rose-950 shadow-xs'
                         : 'bg-white border-slate-200 hover:border-slate-300 text-slate-700'
                     }`}
@@ -631,7 +626,7 @@ export default function App() {
                           <Power className="w-4 h-4 text-rose-500" />
                           <span>خاموش (OFF)</span>
                         </span>
-                        {aiMode === 'OFF' && <CheckCircle2 className="w-4 h-4 text-rose-600" />}
+                        {effectiveAiMode === 'OFF' && <CheckCircle2 className="w-4 h-4 text-rose-600" />}
                       </div>
                       <p className="text-[11px] leading-relaxed text-slate-500">
                         پایپ‌لاین هوش مصنوعی کاملاً متوقف است و هیچ واکنشی به پیام‌های ورودی نشان نمی‌دهد.
@@ -646,7 +641,7 @@ export default function App() {
                   <div 
                     onClick={() => !aiModeLoading && handleUpdateAiMode('TEST_MODE')}
                     className={`p-4 rounded-xl border-2 transition-all cursor-pointer space-y-2 flex flex-col justify-between relative overflow-hidden ${
-                      aiMode === 'TEST_MODE'
+                      effectiveAiMode === 'TEST_MODE'
                         ? 'bg-amber-50/90 border-amber-500 text-amber-950 shadow-md ring-2 ring-amber-300/40'
                         : 'bg-white border-slate-200 hover:border-amber-300 text-slate-700'
                     }`}
@@ -657,7 +652,7 @@ export default function App() {
                           <FlaskConical className="w-4 h-4 text-amber-600" />
                           <span>تست مود (AI Test Mode)</span>
                         </span>
-                        {aiMode === 'TEST_MODE' && <CheckCircle2 className="w-4 h-4 text-amber-700" />}
+                        {effectiveAiMode === 'TEST_MODE' && <CheckCircle2 className="w-4 h-4 text-amber-700" />}
                       </div>
                       <p className="text-[11px] leading-relaxed text-amber-950/80">
                         پیام‌های واقعی مشتری دریافت و پایپ‌لاین کامل اجرا می‌شود. پاسخ <strong>فقط در پنل مدیر</strong> ذخیره شده و <strong>هرگز به گفتینو و مشتری ارسال نمی‌شود</strong>.
@@ -673,7 +668,7 @@ export default function App() {
                   <div 
                     onClick={() => !aiModeLoading && handleUpdateAiMode('ACTIVE')}
                     className={`p-4 rounded-xl border-2 transition-all cursor-pointer space-y-2 flex flex-col justify-between ${
-                      aiMode === 'ACTIVE'
+                      effectiveAiMode === 'ACTIVE'
                         ? 'bg-emerald-50/80 border-emerald-500 text-emerald-950 shadow-xs'
                         : 'bg-white border-slate-200 hover:border-emerald-300 text-slate-700'
                     }`}
@@ -684,7 +679,7 @@ export default function App() {
                           <Zap className="w-4 h-4 text-emerald-600" />
                           <span>فعال (ACTIVE)</span>
                         </span>
-                        {aiMode === 'ACTIVE' && <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
+                        {effectiveAiMode === 'ACTIVE' && <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
                       </div>
                       <p className="text-[11px] leading-relaxed text-slate-500">
                         هوش مصنوعی پاسخ را تولید کرده و به صورت آنی به گفتینو ارسال می‌کند تا مشتری مستقیماً دریافت کند.
@@ -695,6 +690,12 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+
+                {aiSchedule.enabled && (
+                  <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-[11px] font-bold text-indigo-800">
+                    حالت دستی تا خاموش‌شدن زمان‌بندی اعمال نمی‌شود.
+                  </div>
+                )}
 
                 <div className="rounded-2xl border border-indigo-200 bg-white p-4 space-y-4">
                   <div className="flex items-center justify-between gap-4">

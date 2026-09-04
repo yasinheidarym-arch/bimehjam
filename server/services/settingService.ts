@@ -88,8 +88,16 @@ export async function setAiSchedule(input: unknown): Promise<AiSchedule> {
 }
 
 export async function getEffectiveAiMode(now = new Date()): Promise<AiMode> {
-  const [manualMode, schedule] = await Promise.all([getAiMode(), getAiSchedule()]);
-  return resolveEffectiveAiMode(manualMode, schedule, now);
+  return (await getAiModeStatus(now)).effectiveMode;
+}
+
+export async function getAiModeStatus(now = new Date()): Promise<{
+  mode: AiMode;
+  schedule: AiSchedule;
+  effectiveMode: AiMode;
+}> {
+  const [mode, schedule] = await Promise.all([getAiMode(), getAiSchedule()]);
+  return { mode, schedule, effectiveMode: resolveEffectiveAiMode(mode, schedule, now) };
 }
 
 export async function getAiConfig(): Promise<AiConfig> {

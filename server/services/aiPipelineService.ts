@@ -13,7 +13,7 @@ import {
   resolveHumanHandoffNameRule,
 } from './humanHandoffNameFlow';
 import { isFullNameHandoffRuleActive } from './aiBehaviorService';
-import { shouldExecuteAi } from '../../shared/aiSchedule';
+import { AiMode, shouldExecuteAi } from '../../shared/aiSchedule';
 
 const DEFAULT_GOFTINO_HANDOFF_MESSAGE = 'برای بررسی دقیق درخواست شما، همکاران متخصص بیمه جم ادامهٔ گفتگو را پیگیری می‌کنند. 🌹';
 
@@ -298,6 +298,7 @@ export async function runAiPipelineForMessage(params: {
   messageId: string;
   userMessageContent: string;
   aiCategory?: string;
+  effectiveAiMode?: AiMode;
 }) {
   const startTime = Date.now();
   const {
@@ -306,10 +307,11 @@ export async function runAiPipelineForMessage(params: {
     messageId,
     userMessageContent,
     aiCategory = 'OTHER',
+    effectiveAiMode,
   } = params;
 
   // 0. Check AI Mode (OFF, TEST_MODE, ACTIVE)
-  const aiMode = await getEffectiveAiMode();
+  const aiMode = effectiveAiMode ?? await getEffectiveAiMode();
   if (!shouldExecuteAi(aiMode)) {
     await createAiLog({
       conversationId,

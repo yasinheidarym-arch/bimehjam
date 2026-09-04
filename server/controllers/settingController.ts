@@ -1,6 +1,5 @@
 import { Request, Response } from 'express';
 import {
-  getAiMode,
   setAiMode,
   getAllSystemSettings,
   updateSystemSetting,
@@ -8,8 +7,7 @@ import {
   getAiConfig,
   saveAiConfig,
   testAiConnectionService,
-  getAiSchedule,
-  getEffectiveAiMode,
+  getAiModeStatus,
   setAiSchedule,
 } from '../services/settingService';
 import { effectiveAiStatusLabel } from '../../shared/aiSchedule';
@@ -18,7 +16,7 @@ import { getGoftinoAiPolicyCatalog, setGoftinoAiPolicyEnabled } from '../service
 // GET /api/ai/mode
 export async function getAiModeController(req: Request, res: Response) {
   try {
-    const [mode, schedule, effectiveMode] = await Promise.all([getAiMode(), getAiSchedule(), getEffectiveAiMode()]);
+    const { mode, schedule, effectiveMode } = await getAiModeStatus();
     return res.json({
       success: true,
       data: {
@@ -26,11 +24,11 @@ export async function getAiModeController(req: Request, res: Response) {
         schedule,
         effectiveMode,
         effectiveStatus: effectiveAiStatusLabel(effectiveMode),
-        label: mode === 'ACTIVE' ? 'فعال' : mode === 'TEST_MODE' ? 'تست مود' : 'خاموش',
+        label: effectiveMode === 'ACTIVE' ? 'فعال' : effectiveMode === 'TEST_MODE' ? 'تست مود' : 'خاموش',
         description:
-          mode === 'ACTIVE'
+          effectiveMode === 'ACTIVE'
             ? 'هوش مصنوعی پاسخ تولید می‌کند و مستقیماً به گفتینو ارسال می‌شود.'
-            : mode === 'TEST_MODE'
+            : effectiveMode === 'TEST_MODE'
             ? 'هوش مصنوعی روی پیام‌های واقعی مشتری پاسخ تولید می‌کند، در دیتابیس و پنل ذخیره می‌شود ولی به گفتینو یا مشتری ارسال نمی‌گردد.'
             : 'پایپ‌لاین هوش مصنوعی کاملاً متوقف است.',
       },
@@ -52,11 +50,15 @@ export async function setAiModeController(req: Request, res: Response) {
     }
 
     const updatedMode = await setAiMode(mode as AiMode);
+    const status = await getAiModeStatus();
     return res.json({
       success: true,
       data: {
         mode: updatedMode,
-        label: updatedMode === 'ACTIVE' ? 'فعال' : updatedMode === 'TEST_MODE' ? 'تست مود' : 'خاموش',
+        schedule: status.schedule,
+        effectiveMode: status.effectiveMode,
+        effectiveStatus: effectiveAiStatusLabel(status.effectiveMode),
+        label: status.effectiveMode === 'ACTIVE' ? 'فعال' : status.effectiveMode === 'TEST_MODE' ? 'تست مود' : 'خاموش',
       },
       message: `وضعیت هوش مصنوعی با موفقیت به "${updatedMode === 'ACTIVE' ? 'فعال' : updatedMode === 'TEST_MODE' ? 'تست مود' : 'خاموش'}" تغییر یافت.`,
     });
@@ -169,7 +171,7 @@ export async function getAiResponsePoliciesController(
 export async function updateAiScheduleController(req: Request, res: Response) {
   try {
     const schedule = await setAiSchedule(req.body);
-    const effectiveMode = await getEffectiveAiMode();
+    const { effectiveMode } = await getAiModeStatus();
     return res.json({
       success: true,
       data: { schedule, effectiveMode, effectiveStatus: effectiveAiStatusLabel(effectiveMode) },

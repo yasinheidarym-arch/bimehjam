@@ -554,8 +554,8 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
   const fetchAiMode = async () => {
     try {
       const res: any = await settingService.getAiMode();
-      if (res?.data?.mode) {
-        setAiMode(res.data.mode);
+      if (res?.data?.effectiveMode) {
+        setAiMode(res.data.effectiveMode);
       }
     } catch (e) {
       console.warn('Failed to fetch AI mode:', e);
@@ -565,8 +565,9 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
   const handleUpdateAiMode = async (newMode: AiMode) => {
     setChangingAiMode(true);
     try {
-      await settingService.setAiMode(newMode);
-      setAiMode(newMode);
+      const res: any = await settingService.setAiMode(newMode);
+      if (res?.data?.effectiveMode) setAiMode(res.data.effectiveMode);
+      else await fetchAiMode();
     } catch (e) {
       console.error('Failed to update AI mode:', e);
     } finally {
@@ -587,6 +588,11 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
 
     return () => clearInterval(interval);
   }, [statusFilter, searchQuery]);
+
+  useEffect(() => {
+    const aiModeInterval = window.setInterval(fetchAiMode, 30_000);
+    return () => window.clearInterval(aiModeInterval);
+  }, []);
 
   const handleSelectConversation = (convId: string) => {
     if (convId === selectedConvId) return;

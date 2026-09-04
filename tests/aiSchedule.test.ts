@@ -31,6 +31,32 @@ test('end after start creates a same-day range with a clear summary', () => {
   assert.equal(resolveEffectiveAiMode('ACTIVE', schedule, new Date('2026-09-06T14:30:00Z')), 'OFF');
 });
 
+test('manual OFF cannot override an ACTIVE schedule inside an allowed range', () => {
+  const schedule = emptySchedule();
+  schedule.weekly.SUNDAY.ranges = [range('08:00', '18:00')];
+  assert.equal(resolveEffectiveAiMode('OFF', schedule, new Date('2026-09-06T08:30:00Z')), 'ACTIVE');
+});
+
+test('manual ACTIVE cannot override a schedule outside all ranges', () => {
+  const schedule = emptySchedule();
+  schedule.weekly.SUNDAY.ranges = [range('08:00', '18:00')];
+  assert.equal(resolveEffectiveAiMode('ACTIVE', schedule, new Date('2026-09-06T18:30:00Z')), 'OFF');
+});
+
+test('scheduled Test Mode is effective inside an allowed range', () => {
+  const schedule = emptySchedule();
+  schedule.allowedMode = 'TEST_MODE';
+  schedule.weekly.SUNDAY.ranges = [range('08:00', '18:00')];
+  assert.equal(resolveEffectiveAiMode('ACTIVE', schedule, new Date('2026-09-06T08:30:00Z')), 'TEST_MODE');
+});
+
+test('disabled scheduling preserves the stored manual mode', () => {
+  const schedule = emptySchedule();
+  schedule.enabled = false;
+  assert.equal(resolveEffectiveAiMode('OFF', schedule, new Date('2026-09-06T08:30:00Z')), 'OFF');
+  assert.equal(resolveEffectiveAiMode('ACTIVE', schedule, new Date('2026-09-06T18:30:00Z')), 'ACTIVE');
+});
+
 test('end before start automatically continues to the next day', () => {
   const schedule = emptySchedule();
   schedule.weekly.SATURDAY.ranges = [range('17:00', '08:00')];
