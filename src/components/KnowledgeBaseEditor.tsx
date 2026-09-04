@@ -53,6 +53,9 @@ import { AiBehaviorRule } from '../types';
 import { FULL_NAME_HANDOFF_RULE_CATEGORY } from '../../shared/humanHandoffRule';
 
 type ModuleTab = 'categories' | 'products' | 'faqs' | 'ai-behavior';
+type ModuleLoadState = 'loading' | 'ready' | 'error';
+
+const KNOWLEDGE_MODULE_TABS: ModuleTab[] = ['categories', 'products', 'faqs', 'ai-behavior'];
 
 interface KnowledgeBaseEditorProps {
   knowledgeBase?: any;
@@ -216,6 +219,14 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
   });
 
   const [aiBehaviorRules, setAiBehaviorRules] = useState<AiBehaviorRule[]>([]);
+  const [moduleLoadState, setModuleLoadState] = useState<Record<ModuleTab, ModuleLoadState>>({
+    categories: 'loading',
+    products: 'loading',
+    faqs: 'loading',
+    'ai-behavior': 'loading',
+  });
+  const loadedModulesRef = useRef<Set<ModuleTab>>(new Set());
+  const inFlightModulesRef = useRef<Map<ModuleTab, Promise<void>>>(new Map());
   const [showBehaviorModal, setShowBehaviorModal] = useState<boolean>(false);
   const [editingBehaviorRule, setEditingBehaviorRule] = useState<AiBehaviorRule | null>(null);
   const [behaviorForm, setBehaviorForm] = useState<{
@@ -229,40 +240,57 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
   });
   const [draggedBehaviorIndex, setDraggedBehaviorIndex] = useState<number | null>(null);
 
-  useEffect(() => {
-    loadTabContent();
-  }, [activeTab]);
+  const fetchModuleData = async (tab: ModuleTab): Promise<void> => {
+    let response: unknown;
+    if (tab === 'categories') response = await knowledgeService.getInsuranceCategories();
+    else if (tab === 'products') response = await knowledgeService.getProducts();
+    else if (tab === 'faqs') response = await knowledgeService.getFaqs();
+    else response = await knowledgeService.getAiBehavior();
 
-  const loadTabContent = async () => {
-    setLoading(true);
-    try {
-      if (activeTab === 'categories') {
-        const res = await knowledgeService.getInsuranceCategories();
-        if (res.success && Array.isArray(res.data)) {
-          setInsuranceCategories(res.data);
-        }
-      } else if (activeTab === 'products') {
-        const res = await knowledgeService.getProducts();
-        if (res.success && Array.isArray(res.data)) {
-          setProducts(res.data);
-        }
-      } else if (activeTab === 'faqs') {
-        const res = await knowledgeService.getFaqs();
-        if (res.success && Array.isArray(res.data)) {
-          setFaqs(res.data);
-        }
-      } else if (activeTab === 'ai-behavior') {
-        const res = await knowledgeService.getAiBehavior();
-        if (res.success && Array.isArray(res.data)) {
-          setAiBehaviorRules(res.data);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to load knowledge module data:', err);
-    } finally {
-      setLoading(false);
-    }
+    const payload = response as { success?: boolean; data?: unknown };
+    if (!payload.success || !Array.isArray(payload.data)) throw new Error(`Invalid ${tab} response`);
+    if (tab === 'categories') setInsuranceCategories(payload.data);
+    else if (tab === 'products') setProducts(payload.data);
+    else if (tab === 'faqs') setFaqs(payload.data);
+    else setAiBehaviorRules(payload.data as AiBehaviorRule[]);
   };
+
+  const loadModule = (tab: ModuleTab, force = false): Promise<void> => {
+    const existing = inFlightModulesRef.current.get(tab);
+    if (existing) return existing;
+    if (!force && loadedModulesRef.current.has(tab)) return Promise.resolve();
+
+    setModuleLoadState((current) => ({ ...current, [tab]: 'loading' }));
+    const request = fetchModuleData(tab)
+      .then(() => {
+        loadedModulesRef.current.add(tab);
+        setModuleLoadState((current) => ({ ...current, [tab]: 'ready' }));
+      })
+      .catch((err) => {
+        loadedModulesRef.current.delete(tab);
+        setModuleLoadState((current) => ({ ...current, [tab]: 'error' }));
+        console.error(`Failed to load knowledge module ${tab}:`, err);
+      })
+      .finally(() => {
+        inFlightModulesRef.current.delete(tab);
+      });
+    inFlightModulesRef.current.set(tab, request);
+    return request;
+  };
+
+  const loadAllModules = async (force = false): Promise<void> => {
+    await Promise.all(KNOWLEDGE_MODULE_TABS.map((tab) => loadModule(tab, force)));
+  };
+
+  const loadTabContent = (): Promise<void> => loadModule(activeTab, true);
+
+  useEffect(() => {
+    void loadAllModules();
+  }, []);
+
+  useEffect(() => {
+    void loadModule(activeTab);
+  }, [activeTab]);
 
   // --- Handlers for Dynamic AI Behavior Rules ---
   const handleOpenCreateBehaviorModal = () => {
@@ -442,7 +470,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       setShowProductModal(false);
       setEditingItem(null);
       resetProductForm();
-      loadTabContent();
+      await Promise.all([loadModule('products', true), loadModule('categories', true)]);
     } catch (err) {
       console.error(err);
     }
@@ -452,7 +480,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     if (!window.confirm('آیا از حذف این محصول بیمه‌ای اطمینان دارید؟')) return;
     try {
       await knowledgeService.deleteProduct(id);
-      loadTabContent();
+      await Promise.all([loadModule('products', true), loadModule('categories', true)]);
     } catch (err) {
       console.error(err);
     }
@@ -895,10 +923,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       setShowCategoryModal(false);
       setEditingCategory(null);
 
-      const res = await knowledgeService.getInsuranceCategories();
-      if (res.success && Array.isArray(res.data)) {
-        setInsuranceCategories(res.data);
-      }
+      await loadModule('categories', true);
     } catch (err: any) {
       console.error(err);
       alert(err?.response?.data?.error || 'ذخیره دسته‌بندی انجام نشد.');
@@ -923,10 +948,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     try {
       await knowledgeService.deleteInsuranceCategory(category.id);
 
-      const res = await knowledgeService.getInsuranceCategories();
-      if (res.success && Array.isArray(res.data)) {
-        setInsuranceCategories(res.data);
-      }
+      await loadModule('categories', true);
     } catch (err: any) {
       console.error(err);
       alert(err?.response?.data?.error || 'حذف دسته‌بندی انجام نشد.');
@@ -987,10 +1009,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       setEditingSubCategory(null);
       setSelectedCategoryForSub(null);
 
-      const res = await knowledgeService.getInsuranceCategories();
-      if (res.success && Array.isArray(res.data)) {
-        setInsuranceCategories(res.data);
-      }
+      await loadModule('categories', true);
     } catch (err: any) {
       console.error(err);
       alert(err?.response?.data?.error || 'ذخیره زیر‌دسته انجام نشد.');
@@ -1019,10 +1038,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
         subCategory.id
       );
 
-      const res = await knowledgeService.getInsuranceCategories();
-      if (res.success && Array.isArray(res.data)) {
-        setInsuranceCategories(res.data);
-      }
+      await loadModule('categories', true);
     } catch (err: any) {
       console.error(err);
       alert(
@@ -1055,11 +1071,11 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
         </div>
 
         <button
-          onClick={loadTabContent}
-          disabled={loading}
+          onClick={() => void loadAllModules(true)}
+          disabled={loading || Object.values(moduleLoadState).some((state) => state === 'loading')}
           className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all flex items-center gap-2"
         >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`w-4 h-4 ${Object.values(moduleLoadState).some((state) => state === 'loading') ? 'animate-spin' : ''}`} />
           بروزرسانی اطلاعات
         </button>
       </div>
@@ -1335,7 +1351,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
               ? 'bg-white/20 text-white'
               : 'bg-slate-200 text-slate-700'
           }`}>
-            {insuranceCategories.length}
+            {moduleLoadState.categories === 'loading' ? <Loader2 className="h-3 w-3 animate-spin" aria-label="در حال بارگذاری تعداد دسته‌ها" /> : moduleLoadState.categories === 'ready' ? insuranceCategories.length : '—'}
           </span>
         </button>
         <button
@@ -1349,7 +1365,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
           <Shield className="w-4 h-4" />
           ۲. محصولات بیمه‌ای
           <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${activeTab === 'products' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'}`}>
-            {products.length}
+            {moduleLoadState.products === 'loading' ? <Loader2 className="h-3 w-3 animate-spin" aria-label="در حال بارگذاری تعداد محصولات" /> : moduleLoadState.products === 'ready' ? products.length : '—'}
           </span>
         </button>
 
@@ -1364,7 +1380,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
           <HelpCircle className="w-4 h-4" />
           ۳. پرسش‌های متداول (FAQ)
           <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${activeTab === 'faqs' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'}`}>
-            {faqs.length}
+            {moduleLoadState.faqs === 'loading' ? <Loader2 className="h-3 w-3 animate-spin" aria-label="در حال بارگذاری تعداد پرسش‌ها" /> : moduleLoadState.faqs === 'ready' ? faqs.length : '—'}
           </span>
         </button>
 
@@ -1379,7 +1395,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
           <Sparkles className="w-4 h-4 text-amber-300" />
           ۴. قوانین رفتار AI (Behavior)
           <span className={`text-[10px] px-2 py-0.5 rounded-full font-mono ${activeTab === 'ai-behavior' ? 'bg-white/20 text-white' : 'bg-slate-200 text-slate-700'}`}>
-            {aiBehaviorRules.length}
+            {moduleLoadState['ai-behavior'] === 'loading' ? <Loader2 className="h-3 w-3 animate-spin" aria-label="در حال بارگذاری تعداد قوانین" /> : moduleLoadState['ai-behavior'] === 'ready' ? aiBehaviorRules.length : '—'}
           </span>
         </button>
       </div>
