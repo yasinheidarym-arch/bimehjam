@@ -4,7 +4,7 @@ export const PURCHASE_LINK_RULE_CATEGORY = 'SYSTEM_PURCHASE_LINK_BEFORE_QUOTATIO
 export const PURCHASE_LINK_RULE_TITLE = 'پیشنهاد لینک خرید پیش از شروع استعلام';
 export const LEGACY_QUOTATION_RULE_TITLE = 'استعلام قیمت آنلاین، ارجاع به کارشناس و پاسخ کوتاه و انسانی';
 export const PURCHASE_LINK_RULE_DIRECTIVE = `شرط: محصول با اطمینان مشخص شده، intent خرید/قیمت است و purchaseUrl معتبر دارد.
-رفتار: پیش از هر سؤال quotation، لینک خرید/استعلام آنلاین همان محصول را فقط یک‌بار پیشنهاد بده و تا انتخاب مشتری برای «استعلام دقیق» سؤال استعلام نپرس. اگر URL خالی است، سؤال‌های استعلام مستقیماً و دقیقاً به ترتیب backend آغاز شوند. این قانون بر «Ask Quotation Questions» اولویت دارد و ترتیب قطعی را backend تعیین می‌کند.`;
+رفتار: عبارت‌های «می‌خوام»، «می‌خواهم»، «نیاز دارم»، «می‌خواهم بخرم» و درخواست قیمت برای محصول مشخص، قصد خرید/استعلام هستند. پیش از هر سؤال quotation، لینک خرید/استعلام آنلاین همان محصول را فقط یک‌بار پیشنهاد بده و تا انتخاب مشتری برای «استعلام دقیق» سؤال استعلام نپرس. اگر URL خالی است، سؤال‌های استعلام مستقیماً و دقیقاً به ترتیب backend آغاز شوند. درخواست صریح مجدد لینک باید همان لینک را دوباره نمایش دهد. این قانون بر «Ask Quotation Questions» اولویت دارد و ترتیب قطعی را backend تعیین می‌کند.`;
 export const PURCHASE_LINK_RULE_SORT_ORDER = 0;
 
 export function normalizeProductPurchaseUrl(value: unknown): string | null {
@@ -27,10 +27,25 @@ export function isDirectQuotationWorkflowRequest(message: string): boolean {
   const normalized = String(message || '').replace(/‌/g, ' ').trim().toLowerCase();
   return [
     /استعلام\s*(دقیق|کامل)/,
-    /(خودتان|خودتون|همینجا|همین جا)\s*(انجام|پیگیری|استعلام)/,
+    /(خودتان|خودتون|شما|همینجا|همین جا)\s*(انجام|پیگیری|استعلام)/,
     /(لینک|خرید آنلاین|آنلاین)\s*(را|رو)?\s*(نمی\s*خواهم|نمیخوام|نمی خواهم|نمی‌خواهم)/,
     /(سؤال|سوال).*(بپرس|شروع)/,
   ].some((pattern) => pattern.test(normalized));
+}
+
+export function isProductPurchaseIntent(message: string): boolean {
+  const normalized = String(message || '').replace(/‌/g, ' ').trim().toLowerCase();
+  return [
+    /می\s*(خوام|خواهم|خواهم بخرم)/,
+    /نیاز\s*دارم/,
+    /می\s*خوام\s*بخرم/,
+    /قصد\s*(خرید|بیمه کردن)/,
+  ].some((pattern) => pattern.test(normalized));
+}
+
+export function isExplicitProductPurchaseLinkRequest(message: string): boolean {
+  const normalized = String(message || '').replace(/‌/g, ' ').trim().toLowerCase();
+  return /(لینک).*(بفرست|ارسال|نمایش|بده|می\s*خوام|می\s*خواهم)|((بفرست|ارسال|نمایش|بده).*(لینک))/.test(normalized);
 }
 
 export function shouldOfferProductPurchaseLink(input: {
@@ -40,9 +55,11 @@ export function shouldOfferProductPurchaseLink(input: {
   offeredProductIds?: Iterable<string>;
   message: string;
 }): boolean {
-  if (input.intent !== 'Insurance Quotation' || !input.productId) return false;
+  if (!input.productId) return false;
   if (!normalizeProductPurchaseUrl(input.purchaseUrl)) return false;
   if (isDirectQuotationWorkflowRequest(input.message)) return false;
+  if (isExplicitProductPurchaseLinkRequest(input.message)) return true;
+  if (input.intent !== 'Insurance Quotation') return false;
   return !new Set(input.offeredProductIds || []).has(input.productId);
 }
 
@@ -54,8 +71,20 @@ export function shouldWaitForProductPurchaseDecision(input: {
   message: string;
 }): boolean {
   if (!input.productId || !normalizeProductPurchaseUrl(input.purchaseUrl)) return false;
-  if (input.quotationWorkflowActive || isDirectQuotationWorkflowRequest(input.message)) return false;
+  if (
+    input.quotationWorkflowActive ||
+    isDirectQuotationWorkflowRequest(input.message) ||
+    isExplicitProductPurchaseLinkRequest(input.message)
+  ) return false;
   return new Set(input.offeredProductIds || []).has(input.productId);
+}
+
+export function purchaseLinkAwaitingState(productId: string) {
+  return { status: 'AWAITING_CUSTOMER_CHOICE', productId } as const;
+}
+
+export function purchaseLinkQuotationSelectedState(productId: string) {
+  return { status: 'DETAILED_QUOTATION_SELECTED', productId } as const;
 }
 
 export function productPurchaseLinkReply(purchaseUrl: string): string {

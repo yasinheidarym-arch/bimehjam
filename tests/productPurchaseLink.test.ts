@@ -2,9 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isDirectQuotationWorkflowRequest,
+  isExplicitProductPurchaseLinkRequest,
+  isProductPurchaseIntent,
   normalizeProductPurchaseUrl,
   offeredPurchaseLinkProductIds,
   productPurchaseLinkReply,
+  purchaseLinkAwaitingState,
+  purchaseLinkQuotationSelectedState,
   purchaseLinkDecisionLogSummary,
   PURCHASE_LINK_METADATA_KEY,
   PURCHASE_LINK_RULE_SORT_ORDER,
@@ -30,12 +34,27 @@ test('building managers price request offers its valid URL only once', () => {
   assert.equal(shouldOfferProductPurchaseLink({ ...input, offeredProductIds: [productId] }), false);
 });
 
+test('exact building managers purchase wording is treated as purchase intent and offers the link first', () => {
+  const message = 'بیمه مسئولیت مدیران ساختمان می‌خوام';
+  assert.equal(isProductPurchaseIntent(message), true);
+  assert.equal(shouldOfferProductPurchaseLink({
+    intent: 'Insurance Quotation', productId, purchaseUrl, message,
+  }), true);
+  assert.doesNotMatch(productPurchaseLinkReply(purchaseUrl), /کاربری ساختمان/);
+  assert.deepEqual(purchaseLinkAwaitingState(productId), {
+    status: 'AWAITING_CUSTOMER_CHOICE', productId,
+  });
+});
+
 test('detailed quotation confirmation starts at the first question instead of being saved as its answer', () => {
   const firstQuestion = currentRequiredQuestion([{
     title: 'نوع کاربری ساختمان', fieldName: 'buildingUsage', required: true, order: 1,
   }], {});
   assert.equal(firstQuestion?.title, 'نوع کاربری ساختمان');
   assert.equal(shouldCaptureCurrentQuestionAnswer(true, firstQuestion, 'استعلام دقیق می‌خواهم'), false);
+  assert.deepEqual(purchaseLinkQuotationSelectedState(productId), {
+    status: 'DETAILED_QUOTATION_SELECTED', productId,
+  });
 });
 
 test('a product without URL starts the existing quotation path', () => {
@@ -65,6 +84,14 @@ test('switching products allows the new product URL once', () => {
   assert.equal(shouldOfferProductPurchaseLink({
     intent: 'Insurance Quotation', productId: 'fire-product', purchaseUrl: 'https://bimehjam.example/buy/fire',
     offeredProductIds: offered, message: 'قیمت بیمه آتش سوزی',
+  }), true);
+});
+
+test('an explicit repeat request displays the same product link again', () => {
+  const message = 'لینک استعلام آنلاین را دوباره بفرست';
+  assert.equal(isExplicitProductPurchaseLinkRequest(message), true);
+  assert.equal(shouldOfferProductPurchaseLink({
+    intent: 'Insurance Quotation', productId, purchaseUrl, offeredProductIds: [productId], message,
   }), true);
 });
 

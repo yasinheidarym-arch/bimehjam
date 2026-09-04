@@ -17,7 +17,10 @@ import {
 } from './quotationConversationFlow';
 import {
   isDirectQuotationWorkflowRequest,
+  isProductPurchaseIntent,
+  purchaseLinkAwaitingState,
   purchaseLinkDecisionLogSummary,
+  purchaseLinkQuotationSelectedState,
   productPurchaseLinkReply,
   PURCHASE_LINK_RULE_TITLE,
   shouldOfferProductPurchaseLink,
@@ -238,7 +241,10 @@ export async function processBrainLayer(params: {
   console.log("========== END AI KNOWLEDGE DEBUG ==========");
 
   // Step 2: Intent & Stage Detection
-  const intent = detectIntent(userMessageContent, historyText);
+  const detectedIntent = detectIntent(userMessageContent, historyText);
+  const intent = extractedKnowledge.matchedProduct && isProductPurchaseIntent(userMessageContent)
+    ? 'Insurance Quotation'
+    : detectedIntent;
   const stage = detectCustomerStage(messageHistory.length, intent, customer.leadScore || 50, historyText);
   const explicitFormRequested = isExplicitQuotationFormRequest(userMessageContent);
   const directQuotationRequested = isDirectQuotationWorkflowRequest(userMessageContent);
@@ -885,6 +891,11 @@ Call Customer
     ...existingCollectedData,
     ...(extractedKnowledge.quotationWorkflow?.answeredFields || {}),
     ...newlyExtractedData,
+    ...(purchaseLinkOffer
+      ? { purchaseLinkState: purchaseLinkAwaitingState(purchaseLinkOffer.productId) }
+      : quotationState && directQuotationRequested
+        ? { purchaseLinkState: purchaseLinkQuotationSelectedState(quotationState.productId) }
+        : {}),
   };
 
   return {
