@@ -456,7 +456,11 @@ export async function processSessionAnswers(
   }
 
   // Evaluate remaining questions based on conditions
-  const allQuestions = session.workflow?.questions || [];
+  // Do not depend on relation materialization order. The lowest configured
+  // order is always authoritative for both answer capture and the next turn.
+  const allQuestions = [...(session.workflow?.questions || [])].sort(
+    (a, b) => a.order - b.order || a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id),
+  );
   const activeQuestions: typeof allQuestions = [];
 
   for (const q of allQuestions) {

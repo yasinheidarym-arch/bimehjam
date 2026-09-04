@@ -6,6 +6,7 @@ import { getFormattedAiBehaviorPrompt } from './aiBehaviorService';
 import { sendMessage as prepareGoftinoReply } from './goftinoReplyService';
 import { resolveProductByUrl } from './productIntelligenceService';
 import { getOrCreateQuotationSession, processSessionAnswers, extractQuotationAnswersWithGemini } from './quotationWorkflowService';
+import { quotationQuestionReply } from './quotationConversationFlow';
 import { createTimelineEvent } from './timelineService';
 import { getAiConfig } from './settingService';
 import { dispatchTaskCreatedSms } from './fastNotifySmsService';
@@ -446,6 +447,13 @@ ${recentMessages
   if (!aiAnswerText) {
     aiAnswerText = generateFallbackAnswer(latestCustomerMessage, remainingQuestionObj, quotationCompleted);
     internalOperatorSummary = `کسب اطلاعات استعلام بیمه ${activeProduct ? activeProduct.name : ''}. فیلدها: ${JSON.stringify(existingCollectedData)}`;
+  }
+
+  // Legacy/manual AI processing must obey the same deterministic quotation
+  // guard as the real Goftino pipeline. The model may provide surrounding
+  // conversation elsewhere, but it can never author or rewrite this question.
+  if (remainingQuestionObj) {
+    aiAnswerText = quotationQuestionReply(remainingQuestionObj);
   }
 
 

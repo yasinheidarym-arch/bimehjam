@@ -24,18 +24,10 @@ export function isExplicitQuotationFormRequest(message: string): boolean {
 }
 
 export function quotationQuestionReply(question: QuotationTurnQuestion): string {
-  const prompt = question.aiQuestion?.trim() || question.title.trim();
-  if (!question.options || question.options === '[]') return prompt;
-
-  try {
-    const parsed: unknown = JSON.parse(question.options);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return `${prompt}\nگزینه‌ها: ${parsed.map(String).join(' / ')}`;
-    }
-  } catch {
-    // Keep the administrator-authored prompt usable even if legacy options are malformed.
-  }
-  return prompt;
+  // The administrator-authored AI question is the canonical customer-facing
+  // text. Returning it directly keeps the LLM out of question generation and
+  // prevents rewording, option injection, or reordering in the quotation flow.
+  return question.aiQuestion?.trim() || question.title.trim();
 }
 
 export function quotationFormReply(): string {
@@ -51,7 +43,7 @@ export function currentRequiredQuestion(
   collectedData: Record<string, string>,
 ): QuotationTurnQuestion | null {
   return [...questions]
-    .sort((a, b) => a.order - b.order)
+    .sort((a, b) => a.order - b.order || String(a.id || '').localeCompare(String(b.id || '')))
     .find((question) => question.required && !collectedData[question.fieldName]) || null;
 }
 

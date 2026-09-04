@@ -17,8 +17,10 @@ import {
   shouldWaitForProductPurchaseDecision,
 } from '../shared/productPurchaseLink.ts';
 import {
+  captureCurrentQuestionAnswer,
   currentRequiredQuestion,
   isInsuranceQuotationRequest,
+  quotationQuestionReply,
   shouldCaptureCurrentQuestionAnswer,
 } from '../server/services/quotationConversationFlow.ts';
 
@@ -57,6 +59,50 @@ test('detailed quotation confirmation starts at the first question instead of be
   assert.deepEqual(purchaseLinkQuotationSelectedState(productId), {
     status: 'DETAILED_QUOTATION_SELECTED', productId,
   });
+});
+
+test('building managers purchase link continues deterministically through the exact order-2 question', () => {
+  const selectionMessage = 'بیمه مسئولیت مدیر ساختمان می‌خوام';
+  assert.equal(shouldOfferProductPurchaseLink({
+    intent: 'Insurance Quotation', productId, purchaseUrl, message: selectionMessage,
+  }), true);
+  assert.doesNotMatch(productPurchaseLinkReply(purchaseUrl), /نوع کاربری ساختمان/);
+
+  const confirmation = 'اره شما زحمتو بکشید';
+  assert.equal(isDirectQuotationWorkflowRequest(confirmation), true);
+
+  const configuredQuestions = [
+    {
+      id: 'question-3', title: 'تعداد واحدها', aiQuestion: 'تعداد واحدهای ساختمان چقدر است؟',
+      fieldName: 'unitCount', required: true, order: 3,
+    },
+    {
+      id: 'question-2',
+      title: 'جمع کل متراژ مجموع طبقات ساختمان با احتساب طبقه همکف و منفی چقدر است؟',
+      aiQuestion: 'جمع کل متراژ مجموع طبقات ساختمان با احتساب طبقه همکف و منفی چقدر است؟',
+      fieldName: 'totalFloorArea', required: true, order: 2,
+    },
+    {
+      id: 'question-1', title: 'نوع کاربری ساختمان', aiQuestion: 'نوع کاربری ساختمان',
+      fieldName: 'buildingUsage', required: true, order: 1, options: JSON.stringify(['مجتمع مسکونی']),
+    },
+  ];
+
+  const first = currentRequiredQuestion(configuredQuestions, {});
+  assert.equal(quotationQuestionReply(first!), 'نوع کاربری ساختمان');
+  assert.equal(shouldCaptureCurrentQuestionAnswer(true, first, 'مجتمع مسکونی'), true);
+
+  const collected = captureCurrentQuestionAnswer(first, 'مجتمع مسکونی');
+  assert.deepEqual(collected, { buildingUsage: 'مجتمع مسکونی' });
+
+  const second = currentRequiredQuestion(configuredQuestions, collected);
+  assert.equal(second?.order, 2);
+  assert.equal(second?.fieldName, 'totalFloorArea');
+  assert.equal(
+    quotationQuestionReply(second!),
+    'جمع کل متراژ مجموع طبقات ساختمان با احتساب طبقه همکف و منفی چقدر است؟',
+  );
+  assert.doesNotMatch(quotationQuestionReply(second!), /تعداد واحد/);
 });
 
 test('a product without URL starts the existing quotation path', () => {

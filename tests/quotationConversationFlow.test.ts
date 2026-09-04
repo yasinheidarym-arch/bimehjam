@@ -16,12 +16,12 @@ const questions: QuotationTurnQuestion[] = Array.from({ length: 20 }, (_, index)
   title: index === 0
     ? 'نوع کاربری ساختمان'
     : index === 1
-      ? 'مجموع مساحت طبقات ساختمان'
+      ? 'جمع کل متراژ مجموع طبقات ساختمان با احتساب طبقه همکف و منفی چقدر است؟'
       : `سؤال ${index + 1}`,
   aiQuestion: index === 0
-    ? 'کاربری ساختمان محل مورد بیمه چیه؟'
+    ? 'نوع کاربری ساختمان'
     : index === 1
-      ? 'جمع کل متراژ مجموع طبقات ساختمان چقدره؟'
+      ? 'جمع کل متراژ مجموع طبقات ساختمان با احتساب طبقه همکف و منفی چقدر است؟'
       : `پاسخ سؤال ${index + 1} چیه؟`,
   fieldName: index === 0 ? 'type' : index === 1 ? 'majmuemetraj' : `field_${index + 1}`,
   required: true,
@@ -36,7 +36,7 @@ test('building managers price request starts with the first quotation question, 
 
   const first = currentRequiredQuestion(questions, {});
   assert.equal(first?.fieldName, 'type');
-  assert.match(quotationQuestionReply(first!), /^کاربری ساختمان محل مورد بیمه چیه؟/);
+  assert.equal(quotationQuestionReply(first!), 'نوع کاربری ساختمان');
   assert.doesNotMatch(quotationQuestionReply(first!), /فرم/);
 });
 
@@ -47,7 +47,10 @@ test('the first customer answer is stored under its fieldName and advances to qu
   assert.deepEqual(collected, { type: 'ساختمان مسکونی' });
   const second = currentRequiredQuestion(questions, collected);
   assert.equal(second?.fieldName, 'majmuemetraj');
-  assert.equal(quotationQuestionReply(second!), 'جمع کل متراژ مجموع طبقات ساختمان چقدره؟');
+  assert.equal(
+    quotationQuestionReply(second!),
+    'جمع کل متراژ مجموع طبقات ساختمان با احتساب طبقه همکف و منفی چقدر است؟',
+  );
 });
 
 test('answering every required question completes the quotation workflow', () => {
