@@ -5,10 +5,18 @@ import {
   normalizeProductPurchaseUrl,
   offeredPurchaseLinkProductIds,
   productPurchaseLinkReply,
+  purchaseLinkDecisionLogSummary,
   PURCHASE_LINK_METADATA_KEY,
+  PURCHASE_LINK_RULE_SORT_ORDER,
+  PURCHASE_LINK_RULE_TITLE,
   shouldOfferProductPurchaseLink,
+  shouldWaitForProductPurchaseDecision,
 } from '../shared/productPurchaseLink.ts';
-import { isInsuranceQuotationRequest } from '../server/services/quotationConversationFlow.ts';
+import {
+  currentRequiredQuestion,
+  isInsuranceQuotationRequest,
+  shouldCaptureCurrentQuestionAnswer,
+} from '../server/services/quotationConversationFlow.ts';
 
 const productId = 'building-managers';
 const purchaseUrl = 'https://bimehjam.example/buy/building-managers';
@@ -17,7 +25,17 @@ test('building managers price request offers its valid URL only once', () => {
   const input = { intent: 'Insurance Quotation', productId, purchaseUrl, message: 'قیمت بیمه مسئولیت مدیران ساختمان' };
   assert.equal(shouldOfferProductPurchaseLink(input), true);
   assert.match(productPurchaseLinkReply(purchaseUrl), /https:\/\/bimehjam\.example\/buy\/building-managers/);
+  assert.match(productPurchaseLinkReply(purchaseUrl), /استعلام دقیق می‌خواهم/);
+  assert.doesNotMatch(productPurchaseLinkReply(purchaseUrl), /نوع کاربری ساختمان/);
   assert.equal(shouldOfferProductPurchaseLink({ ...input, offeredProductIds: [productId] }), false);
+});
+
+test('detailed quotation confirmation starts at the first question instead of being saved as its answer', () => {
+  const firstQuestion = currentRequiredQuestion([{
+    title: 'نوع کاربری ساختمان', fieldName: 'buildingUsage', required: true, order: 1,
+  }], {});
+  assert.equal(firstQuestion?.title, 'نوع کاربری ساختمان');
+  assert.equal(shouldCaptureCurrentQuestionAnswer(true, firstQuestion, 'استعلام دقیق می‌خواهم'), false);
 });
 
 test('a product without URL starts the existing quotation path', () => {
@@ -50,7 +68,30 @@ test('switching products allows the new product URL once', () => {
   }), true);
 });
 
+test('the same product waits for an explicit detailed quotation choice without repeating its link', () => {
+  assert.equal(shouldWaitForProductPurchaseDecision({
+    productId,
+    purchaseUrl,
+    offeredProductIds: [productId],
+    quotationWorkflowActive: false,
+    message: 'ممنون',
+  }), true);
+  assert.equal(shouldWaitForProductPurchaseDecision({
+    productId,
+    purchaseUrl,
+    offeredProductIds: [productId],
+    quotationWorkflowActive: false,
+    message: 'استعلام دقیق می‌خواهم',
+  }), false);
+});
+
 test('only http and https purchase URLs are accepted', () => {
   assert.equal(normalizeProductPurchaseUrl('javascript:alert(1)'), null);
   assert.equal(normalizeProductPurchaseUrl('https://bimehjam.com/product'), 'https://bimehjam.com/product');
+});
+
+test('purchase-link behavior rule is logged and has higher priority than Ask Quotation Questions', () => {
+  assert.equal(PURCHASE_LINK_RULE_TITLE, 'پیشنهاد لینک خرید پیش از شروع استعلام');
+  assert.ok(PURCHASE_LINK_RULE_SORT_ORDER < 6);
+  assert.match(purchaseLinkDecisionLogSummary('بیمه مسئولیت مدیر ساختمان'), /پیشنهاد لینک خرید پیش از شروع استعلام/);
 });

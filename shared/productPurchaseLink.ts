@@ -1,4 +1,11 @@
 export const PURCHASE_LINK_METADATA_KEY = 'purchaseLinkProductId';
+export const PURCHASE_LINK_RULE_ID = 'system-purchase-link-before-quotation';
+export const PURCHASE_LINK_RULE_CATEGORY = 'SYSTEM_PURCHASE_LINK_BEFORE_QUOTATION';
+export const PURCHASE_LINK_RULE_TITLE = 'پیشنهاد لینک خرید پیش از شروع استعلام';
+export const LEGACY_QUOTATION_RULE_TITLE = 'استعلام قیمت آنلاین، ارجاع به کارشناس و پاسخ کوتاه و انسانی';
+export const PURCHASE_LINK_RULE_DIRECTIVE = `شرط: محصول با اطمینان مشخص شده، intent خرید/قیمت است و purchaseUrl معتبر دارد.
+رفتار: پیش از هر سؤال quotation، لینک خرید/استعلام آنلاین همان محصول را فقط یک‌بار پیشنهاد بده و تا انتخاب مشتری برای «استعلام دقیق» سؤال استعلام نپرس. اگر URL خالی است، سؤال‌های استعلام مستقیماً و دقیقاً به ترتیب backend آغاز شوند. این قانون بر «Ask Quotation Questions» اولویت دارد و ترتیب قطعی را backend تعیین می‌کند.`;
+export const PURCHASE_LINK_RULE_SORT_ORDER = 0;
 
 export function normalizeProductPurchaseUrl(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -39,11 +46,27 @@ export function shouldOfferProductPurchaseLink(input: {
   return !new Set(input.offeredProductIds || []).has(input.productId);
 }
 
+export function shouldWaitForProductPurchaseDecision(input: {
+  productId?: string | null;
+  purchaseUrl?: string | null;
+  offeredProductIds?: Iterable<string>;
+  quotationWorkflowActive: boolean;
+  message: string;
+}): boolean {
+  if (!input.productId || !normalizeProductPurchaseUrl(input.purchaseUrl)) return false;
+  if (input.quotationWorkflowActive || isDirectQuotationWorkflowRequest(input.message)) return false;
+  return new Set(input.offeredProductIds || []).has(input.productId);
+}
+
 export function productPurchaseLinkReply(purchaseUrl: string): string {
   const safeUrl = normalizeProductPurchaseUrl(purchaseUrl);
   if (!safeUrl) throw new Error('A valid http/https product purchase URL is required.');
 
-  return `می‌توانید قیمت این بیمه را آنلاین ببینید و در صورت تمایل خرید کنید:\n${safeUrl}\nاگر ترجیح می‌دهید، چند سؤال کوتاه می‌پرسم تا استعلام دقیق‌تری برایتان آماده کنیم.`;
+  return `می‌توانید قیمت این بیمه را آنلاین ببینید و در صورت تمایل خرید کنید:\n${safeUrl}\nاگر ترجیح می‌دهید استعلام دقیق‌تری برایتان آماده کنیم، بگویید “استعلام دقیق می‌خواهم”.`;
+}
+
+export function purchaseLinkDecisionLogSummary(productName: string): string {
+  return `[قانون قطعی]: ${PURCHASE_LINK_RULE_TITLE} | [محصول]: ${productName}`;
 }
 
 export function offeredPurchaseLinkProductIds(

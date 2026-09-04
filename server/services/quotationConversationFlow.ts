@@ -62,3 +62,11 @@ export function captureCurrentQuestionAnswer(
   const value = String(message || '').trim();
   return question && value ? { [question.fieldName]: value } : {};
 }
+
+export function shouldCaptureCurrentQuestionAnswer(
+  sameProductWorkflowActive: boolean,
+  question: QuotationTurnQuestion | null,
+  message: string,
+): boolean {
+  return sameProductWorkflowActive && Boolean(question) && !isDirectQuotationWorkflowRequest(message);
+}

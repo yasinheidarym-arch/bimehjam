@@ -13,10 +13,15 @@ import {
   quotationCompletedReply,
   quotationFormReply,
   quotationQuestionReply,
+  shouldCaptureCurrentQuestionAnswer,
 } from './quotationConversationFlow';
 import {
+  isDirectQuotationWorkflowRequest,
+  purchaseLinkDecisionLogSummary,
   productPurchaseLinkReply,
+  PURCHASE_LINK_RULE_TITLE,
   shouldOfferProductPurchaseLink,
+  shouldWaitForProductPurchaseDecision,
 } from '../../shared/productPurchaseLink';
 
 
@@ -51,6 +56,7 @@ export interface BrainResult {
   purchaseLinkOffer?: {
     productId: string;
     productName: string;
+    ruleTitle: string;
   };
 
   task?: {
@@ -235,13 +241,12 @@ export async function processBrainLayer(params: {
   const intent = detectIntent(userMessageContent, historyText);
   const stage = detectCustomerStage(messageHistory.length, intent, customer.leadScore || 50, historyText);
   const explicitFormRequested = isExplicitQuotationFormRequest(userMessageContent);
+  const directQuotationRequested = isDirectQuotationWorkflowRequest(userMessageContent);
   let deterministicReply: string | null = null;
   let quotationState: BrainResult['quotationState'];
   let purchaseLinkOffer: BrainResult['purchaseLinkOffer'];
 
-  if (explicitFormRequested && extractedKnowledge.matchedProduct) {
-    deterministicReply = quotationFormReply();
-  } else if (
+  if (
     extractedKnowledge.matchedProduct &&
     shouldOfferProductPurchaseLink({
       intent,
@@ -255,7 +260,23 @@ export async function processBrainLayer(params: {
     purchaseLinkOffer = {
       productId: extractedKnowledge.matchedProduct.id,
       productName: extractedKnowledge.matchedProduct.name,
+      ruleTitle: PURCHASE_LINK_RULE_TITLE,
     };
+  } else if (
+    extractedKnowledge.matchedProduct &&
+    shouldWaitForProductPurchaseDecision({
+      productId: extractedKnowledge.matchedProduct.id,
+      purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
+      offeredProductIds: offeredPurchaseLinkProductIds,
+      quotationWorkflowActive: conversation.currentProductId === extractedKnowledge.matchedProduct.id,
+      message: userMessageContent,
+    })
+  ) {
+    // The link has been offered and the customer has not selected the detailed
+    // quotation path yet. Do not expose nextQuestion to the LLM on this turn.
+    extractedKnowledge.quotationWorkflow = null;
+  } else if (explicitFormRequested && extractedKnowledge.matchedProduct) {
+    deterministicReply = quotationFormReply();
   } else if (
     extractedKnowledge.matchedProduct &&
     (intent === 'Insurance Quotation' || conversation.currentProductId === extractedKnowledge.matchedProduct.id)
@@ -270,7 +291,11 @@ export async function processBrainLayer(params: {
 
     // A message answers the pending question only after this conversation has
     // already entered the deterministic workflow for the same product.
-    if (conversation.currentProductId === product.id && evaluation.nextQuestion) {
+    if (shouldCaptureCurrentQuestionAnswer(
+      conversation.currentProductId === product.id,
+      evaluation.nextQuestion,
+      userMessageContent,
+    )) {
       const answer = captureCurrentQuestionAnswer(evaluation.nextQuestion, userMessageContent);
       if (Object.keys(answer).length > 0) {
         evaluation = await processSessionAnswers(session.id, answer, 'customer');
@@ -663,12 +688,14 @@ Call Customer
   let generatedTask: any = undefined;
   let generatedOperatorSummary = '';
   let validation = deterministicReply
-    ? { valid: true, reason: 'Backend-enforced quotation workflow response' }
+    ? { valid: true, reason: purchaseLinkOffer ? PURCHASE_LINK_RULE_TITLE : 'Backend-enforced quotation workflow response' }
     : { valid: false, reason: '' };
   let retryCount = 0;
   let validationStatus: 'PASSED' | 'REJECTED' | 'REGENERATED' = 'PASSED';
   const targetModel = aiConfig.openaiModel || 'gpt-5';
-  let modelUsed = deterministicReply ? 'Deterministic Quotation Workflow' : targetModel;
+  let modelUsed = deterministicReply
+    ? purchaseLinkOffer ? 'Deterministic Product Purchase Link' : 'Deterministic Quotation Workflow'
+    : targetModel;
 
   // Execution & Self-Correction Loop
   while (!deterministicReply && retryCount <= 2) {
@@ -807,7 +834,9 @@ Call Customer
     generatedOperatorSummary = `پرسش‌های استعلام ${quotationState.productName} تکمیل شد و آماده محاسبه قیمت است.`;
   }
 
-  const loadedKnowledgeSummary = `[محصول]: ${extractedKnowledge.matchedProduct?.name || 'عمومی'} | [سوال بعدی]: ${extractedKnowledge.quotationWorkflow?.nextQuestion?.title || 'تکمیل'} | [تعداد قوانین فعال]: ${extractedKnowledge.appliedRules.length}`;
+  const loadedKnowledgeSummary = purchaseLinkOffer
+    ? `${purchaseLinkDecisionLogSummary(purchaseLinkOffer.productName)} | [تعداد قوانین فعال]: ${extractedKnowledge.appliedRules.length}`
+    : `[محصول]: ${extractedKnowledge.matchedProduct?.name || 'عمومی'} | [سوال بعدی]: ${extractedKnowledge.quotationWorkflow?.nextQuestion?.title || 'تکمیل'} | [تعداد قوانین فعال]: ${extractedKnowledge.appliedRules.length}`;
 
   // Record BrainLog in Database
   console.log("========== BRAINLOG DEBUG: BEFORE CREATE ==========");

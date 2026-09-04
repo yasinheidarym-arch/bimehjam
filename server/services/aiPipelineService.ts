@@ -791,6 +791,7 @@ export async function runAiPipelineForMessage(params: {
           totalTokens: tokensCount,
         },
         validationResult: brainResult.validationResult,
+        purchaseLinkRule: brainResult.purchaseLinkOffer?.ruleTitle || null,
         validationReason: brainResult.validationReason,
       }, null, 2),
       durationMs: Date.now() - brainStart,
@@ -858,11 +859,15 @@ export async function runAiPipelineForMessage(params: {
       lastMessage: aiReplyText,
       lastMessageAt: new Date(),
       collectedData: updatedCollectedDataStr,
-      ...(brainResult.quotationState ? {
-        currentProductId: brainResult.quotationState.productId,
-        currentProductName: brainResult.quotationState.productName,
-        remainingQuestions: JSON.stringify(brainResult.quotationState.remainingQuestions),
-      } : {}),
+      ...(brainResult.purchaseLinkOffer
+        ? { currentProductId: null, currentProductName: null, remainingQuestions: '[]' }
+        : brainResult.quotationState
+          ? {
+              currentProductId: brainResult.quotationState.productId,
+              currentProductName: brainResult.quotationState.productName,
+              remainingQuestions: JSON.stringify(brainResult.quotationState.remainingQuestions),
+            }
+          : {}),
     },
   });
 

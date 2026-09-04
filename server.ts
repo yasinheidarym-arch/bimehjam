@@ -18,6 +18,7 @@ import { createGoftinoV1Router } from './server/goftinoApi';
 import apiV1Router from './server/routes/index';
 import { errorHandler } from './server/middleware/errorHandler';
 import { ensureDbReady } from './server/db/client';
+import { ensureSystemAiBehaviorRules } from './server/services/aiBehaviorService';
 import {
   GoftinoWebhookPayload,
   GoftinoLogEntry,
@@ -66,6 +67,7 @@ let goftinoLogsStore: GoftinoLogEntry[] = [
 async function startServer() {
   // Ensure SQLite database is healthy and WAL mode is active
   await ensureDbReady();
+  await ensureSystemAiBehaviorRules();
 
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;

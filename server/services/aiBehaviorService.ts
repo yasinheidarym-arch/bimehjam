@@ -5,6 +5,14 @@ import {
   FULL_NAME_HANDOFF_RULE_ID,
   FULL_NAME_HANDOFF_RULE_TITLE,
 } from '../../shared/humanHandoffRule';
+import {
+  LEGACY_QUOTATION_RULE_TITLE,
+  PURCHASE_LINK_RULE_CATEGORY,
+  PURCHASE_LINK_RULE_DIRECTIVE,
+  PURCHASE_LINK_RULE_ID,
+  PURCHASE_LINK_RULE_SORT_ORDER,
+  PURCHASE_LINK_RULE_TITLE,
+} from '../../shared/productPurchaseLink';
 
 export interface AiBehaviorRuleItem {
   id: string;
@@ -76,6 +84,54 @@ async function ensureSeedRules() {
       data: { title: FULL_NAME_HANDOFF_RULE_TITLE, directive: FULL_NAME_HANDOFF_RULE_DIRECTIVE, category: FULL_NAME_HANDOFF_RULE_CATEGORY, enforcementLevel: 'STRICT' },
     });
   }
+
+  const purchaseLinkRule = await prisma.aiRule.findFirst({
+    where: {
+      OR: [
+        { id: PURCHASE_LINK_RULE_ID },
+        { category: PURCHASE_LINK_RULE_CATEGORY },
+        { title: PURCHASE_LINK_RULE_TITLE },
+        { title: LEGACY_QUOTATION_RULE_TITLE },
+      ],
+    },
+  });
+  if (!purchaseLinkRule) {
+    await prisma.aiRule.create({
+      data: {
+        id: PURCHASE_LINK_RULE_ID,
+        title: PURCHASE_LINK_RULE_TITLE,
+        directive: PURCHASE_LINK_RULE_DIRECTIVE,
+        sortOrder: PURCHASE_LINK_RULE_SORT_ORDER,
+        status: 'ACTIVE',
+        category: PURCHASE_LINK_RULE_CATEGORY,
+        enforcementLevel: 'STRICT',
+      },
+    }).catch(async (error: { code?: string }) => {
+      if (error.code !== 'P2002') throw error;
+    });
+  } else if (
+    purchaseLinkRule.title !== PURCHASE_LINK_RULE_TITLE ||
+    purchaseLinkRule.directive !== PURCHASE_LINK_RULE_DIRECTIVE ||
+    purchaseLinkRule.category !== PURCHASE_LINK_RULE_CATEGORY ||
+    purchaseLinkRule.enforcementLevel !== 'STRICT' ||
+    purchaseLinkRule.sortOrder !== PURCHASE_LINK_RULE_SORT_ORDER
+  ) {
+    await prisma.aiRule.update({
+      where: { id: purchaseLinkRule.id },
+      data: {
+        title: PURCHASE_LINK_RULE_TITLE,
+        directive: PURCHASE_LINK_RULE_DIRECTIVE,
+        sortOrder: PURCHASE_LINK_RULE_SORT_ORDER,
+        status: purchaseLinkRule.title === LEGACY_QUOTATION_RULE_TITLE ? 'ACTIVE' : purchaseLinkRule.status,
+        category: PURCHASE_LINK_RULE_CATEGORY,
+        enforcementLevel: 'STRICT',
+      },
+    });
+  }
+}
+
+export async function ensureSystemAiBehaviorRules(): Promise<void> {
+  await ensureSeedRules();
 }
 
 export async function isFullNameHandoffRuleActive(): Promise<boolean> {
@@ -173,7 +229,7 @@ export async function updateBehaviorRule(
   const updateData: any = {};
   const existing = await prisma.aiRule.findUnique({ where: { id } });
   if (!existing) throw new Error('قانون رفتار یافت نشد.');
-  if (existing.category === FULL_NAME_HANDOFF_RULE_CATEGORY) {
+  if (existing.category === FULL_NAME_HANDOFF_RULE_CATEGORY || existing.category === PURCHASE_LINK_RULE_CATEGORY) {
     if (data.status !== undefined) updateData.status = data.status;
   } else {
   if (data.title !== undefined) updateData.title = data.title.trim();
@@ -205,7 +261,9 @@ export async function updateBehaviorRule(
  */
 export async function deleteBehaviorRule(id: string): Promise<boolean> {
   const existing = await prisma.aiRule.findUnique({ where: { id }, select: { category: true } });
-  if (existing?.category === FULL_NAME_HANDOFF_RULE_CATEGORY) throw new Error('این قانون سیستمی قابل حذف نیست؛ می‌توانید آن را غیرفعال کنید.');
+  if (existing?.category === FULL_NAME_HANDOFF_RULE_CATEGORY || existing?.category === PURCHASE_LINK_RULE_CATEGORY) {
+    throw new Error('این قانون سیستمی قابل حذف نیست؛ می‌توانید آن را غیرفعال کنید.');
+  }
   await prisma.aiRule.delete({
     where: { id },
   });
