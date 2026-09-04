@@ -31,11 +31,11 @@ container_id="$(docker compose ps -a -q app)"
 [[ -n "$container_id" ]] || { echo "Cannot resolve the app container for migration." >&2; exit 1; }
 readonly SQLITE_VOLUME="$(docker inspect "$container_id" --format '{{range .Mounts}}{{if eq .Destination "/app/prisma"}}{{.Name}}{{end}}{{end}}')"
 [[ -n "$SQLITE_VOLUME" ]] || { echo "Cannot resolve the SQLite volume mounted at /app/prisma." >&2; exit 1; }
-image_id="$(docker compose images -q app 2>/dev/null || true)"
-if [[ -z "$image_id" ]] || ! docker image inspect "$image_id" >/dev/null 2>&1; then
-  image_ref="$(docker compose config --images | sed -n '1p')"
-  image_id="$(docker image inspect --format '{{.Id}}' "$image_ref" 2>/dev/null || true)"
-fi
+# Use the image built from the approved checkout, not the image attached to the
+# currently running (previous-release) container. This ensures migrate deploy
+# sees exactly the reviewed migrations from --commit.
+image_ref="$(docker compose config --images | sed -n '1p')"
+image_id="$(docker image inspect --format '{{.Id}}' "$image_ref" 2>/dev/null || true)"
 [[ -n "$image_id" ]] || { echo "Migration image for app is not available; build the approved commit first." >&2; exit 1; }
 
 # The production volume is historically mounted at /app/prisma and masks the
