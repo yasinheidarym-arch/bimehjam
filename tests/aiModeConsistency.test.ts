@@ -10,6 +10,7 @@ test('frontend indicators consume backend effectiveMode and do not calculate it 
   assert.doesNotMatch(app, /resolveEffectiveAiMode/);
   assert.match(app, /aiMode=\{effectiveAiMode\}/);
   assert.match(app, /res\?\.data\?\.effectiveMode/);
+  assert.match(app, /onChange=\{\(event\) => handleAiScheduleEnabledChange\(event\.target\.checked\)\}/);
   assert.match(conversations, /setAiMode\(res\.data\.effectiveMode\)/);
 });
 

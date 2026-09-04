@@ -282,6 +282,23 @@ export default function App() {
     }
   };
 
+  const handleAiScheduleEnabledChange = async (enabled: boolean) => {
+    setAiModeLoading(true);
+    setAiModeMessage(null);
+    try {
+      const normalizedSchedule = validateAiSchedule({ ...aiSchedule, enabled });
+      const res: any = await settingService.setAiSchedule(normalizedSchedule);
+      if (res?.data?.schedule) setAiSchedule(res.data.schedule);
+      if (res?.data?.effectiveMode) setEffectiveAiMode(res.data.effectiveMode);
+      else await refreshEffectiveAiMode();
+      setAiModeMessage(enabled ? 'زمان‌بندی فعال و وضعیت مؤثر از سرور به‌روزرسانی شد.' : 'زمان‌بندی خاموش و حالت دستی اعمال شد.');
+    } catch (err: any) {
+      setAiModeMessage(err.message || 'تغییر وضعیت زمان‌بندی ناموفق بود.');
+    } finally {
+      setAiModeLoading(false);
+    }
+  };
+
   const addScheduleRange = (day: keyof AiSchedule['weekly']) => {
     const range: AiTimeRange = { startTime: '08:00', endTime: '18:00' };
     setAiSchedule((current) => ({
@@ -708,7 +725,8 @@ export default function App() {
                       <input
                         type="checkbox"
                         checked={aiSchedule.enabled}
-                        onChange={(event) => setAiSchedule({ ...aiSchedule, enabled: event.target.checked })}
+                        disabled={aiModeLoading}
+                        onChange={(event) => handleAiScheduleEnabledChange(event.target.checked)}
                         className="h-4 w-4 accent-indigo-600"
                       />
                     </label>
