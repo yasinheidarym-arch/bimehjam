@@ -91,7 +91,7 @@ export function productPurchaseLinkReply(purchaseUrl: string): string {
   const safeUrl = normalizeProductPurchaseUrl(purchaseUrl);
   if (!safeUrl) throw new Error('A valid http/https product purchase URL is required.');
 
-  return `می‌توانید قیمت این بیمه را آنلاین ببینید و در صورت تمایل خرید کنید:\n${safeUrl}\nاگر ترجیح می‌دهید استعلام دقیق‌تری برایتان آماده کنیم، بگویید “استعلام دقیق می‌خواهم”.`;
+  return `می‌توانید با لینک زیر خودتان استعلام قیمت انجام دهید:\n${safeUrl}\nاگر می‌خواهید ما برایتان قیمت بگیریم و مشاوره بدهیم، اعلام کنید.`;
 }
 
 export function purchaseLinkDecisionLogSummary(productName: string): string {

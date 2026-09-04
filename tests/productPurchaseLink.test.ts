@@ -28,8 +28,10 @@ const purchaseUrl = 'https://bimehjam.example/buy/building-managers';
 test('building managers price request offers its valid URL only once', () => {
   const input = { intent: 'Insurance Quotation', productId, purchaseUrl, message: 'قیمت بیمه مسئولیت مدیران ساختمان' };
   assert.equal(shouldOfferProductPurchaseLink(input), true);
-  assert.match(productPurchaseLinkReply(purchaseUrl), /https:\/\/bimehjam\.example\/buy\/building-managers/);
-  assert.match(productPurchaseLinkReply(purchaseUrl), /استعلام دقیق می‌خواهم/);
+  assert.equal(
+    productPurchaseLinkReply(purchaseUrl),
+    `می‌توانید با لینک زیر خودتان استعلام قیمت انجام دهید:\n${purchaseUrl}\nاگر می‌خواهید ما برایتان قیمت بگیریم و مشاوره بدهیم، اعلام کنید.`,
+  );
   assert.doesNotMatch(productPurchaseLinkReply(purchaseUrl), /نوع کاربری ساختمان/);
   assert.equal(shouldOfferProductPurchaseLink({ ...input, offeredProductIds: [productId] }), false);
 });
