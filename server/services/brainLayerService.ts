@@ -14,6 +14,10 @@ import {
   quotationFormReply,
   quotationQuestionReply,
 } from './quotationConversationFlow';
+import {
+  productPurchaseLinkReply,
+  shouldOfferProductPurchaseLink,
+} from '../../shared/productPurchaseLink';
 
 
 export interface BrainResult {
@@ -42,6 +46,11 @@ export interface BrainResult {
     currentQuestionFieldName: string | null;
     remainingQuestions: string[];
     isCompleted: boolean;
+  };
+
+  purchaseLinkOffer?: {
+    productId: string;
+    productName: string;
   };
 
   task?: {
@@ -160,8 +169,9 @@ export async function processBrainLayer(params: {
   allowedCategoryId?: string;
   goftinoPolicyTitle?: string;
   restrictKnowledgeScope?: boolean;
+  offeredPurchaseLinkProductIds?: string[];
 }): Promise<BrainResult> {
-  const { customer, conversation, userMessageContent, messageHistory, allowedCategoryId, goftinoPolicyTitle, restrictKnowledgeScope } = params;
+  const { customer, conversation, userMessageContent, messageHistory, allowedCategoryId, goftinoPolicyTitle, restrictKnowledgeScope, offeredPurchaseLinkProductIds = [] } = params;
 
   const historyText = messageHistory
     .map((m) => `${m.senderType === 'CUSTOMER' ? 'مشتری' : 'مشاور بیمه جم'}: ${m.content}`)
@@ -227,9 +237,25 @@ export async function processBrainLayer(params: {
   const explicitFormRequested = isExplicitQuotationFormRequest(userMessageContent);
   let deterministicReply: string | null = null;
   let quotationState: BrainResult['quotationState'];
+  let purchaseLinkOffer: BrainResult['purchaseLinkOffer'];
 
   if (explicitFormRequested && extractedKnowledge.matchedProduct) {
     deterministicReply = quotationFormReply();
+  } else if (
+    extractedKnowledge.matchedProduct &&
+    shouldOfferProductPurchaseLink({
+      intent,
+      productId: extractedKnowledge.matchedProduct.id,
+      purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
+      offeredProductIds: offeredPurchaseLinkProductIds,
+      message: userMessageContent,
+    })
+  ) {
+    deterministicReply = productPurchaseLinkReply(extractedKnowledge.matchedProduct.purchaseUrl!);
+    purchaseLinkOffer = {
+      productId: extractedKnowledge.matchedProduct.id,
+      productName: extractedKnowledge.matchedProduct.name,
+    };
   } else if (
     extractedKnowledge.matchedProduct &&
     (intent === 'Insurance Quotation' || conversation.currentProductId === extractedKnowledge.matchedProduct.id)
@@ -851,6 +877,7 @@ Call Customer
     retryCount,
     modelUsed,
     quotationState,
+    purchaseLinkOffer,
     task: generatedTask,
     operatorSummary: generatedOperatorSummary,
   };

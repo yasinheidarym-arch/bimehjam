@@ -16,6 +16,10 @@ import {
 import { processBrainLayer } from '../services/brainLayerService';
 import { ensureTrainingCenterSeeded } from '../services/knowledgeRetrievalService';
 import { categoryKnowledgeScope } from '../services/categoryKnowledgeScope';
+import {
+  isValidOptionalProductPurchaseUrl,
+  normalizeProductPurchaseUrl,
+} from '../../shared/productPurchaseLink';
 
 async function attachCategoryKnowledge<T extends { id: string }>(categories: T[]) {
   const scopes = categories.map((category) => categoryKnowledgeScope(category.id));
@@ -767,6 +771,7 @@ export async function createProduct(req: Request, res: Response) {
       benefits,
       requiredDocuments,
       purchaseConditions,
+      purchaseUrl,
       renewalRules,
       claimProcess,
       commonQuestions,
@@ -778,6 +783,13 @@ export async function createProduct(req: Request, res: Response) {
       return res.status(400).json({
         success: false,
         error: 'نام محصول و دسته‌بندی اصلی الزامی است.',
+      });
+    }
+
+    if (!isValidOptionalProductPurchaseUrl(purchaseUrl)) {
+      return res.status(400).json({
+        success: false,
+        error: 'لینک خرید محصول باید با http یا https شروع شود.',
       });
     }
 
@@ -798,6 +810,7 @@ export async function createProduct(req: Request, res: Response) {
         benefits,
         requiredDocuments,
         purchaseConditions,
+        purchaseUrl: normalizeProductPurchaseUrl(purchaseUrl),
         renewalRules,
         claimProcess,
         commonQuestions,
@@ -817,9 +830,21 @@ export async function updateProduct(req: Request, res: Response) {
     const { id } = req.params;
     const body = req.body;
 
+    if (!isValidOptionalProductPurchaseUrl(body.purchaseUrl)) {
+      return res.status(400).json({
+        success: false,
+        error: 'لینک خرید محصول باید با http یا https شروع شود.',
+      });
+    }
+
     const updated = await prisma.insuranceProduct.update({
       where: { id },
-      data: body,
+      data: {
+        ...body,
+        ...(body.purchaseUrl !== undefined
+          ? { purchaseUrl: normalizeProductPurchaseUrl(body.purchaseUrl) }
+          : {}),
+      },
     });
 
     return res.status(200).json({ success: true, data: updated });

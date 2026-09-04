@@ -197,6 +197,7 @@ model InsuranceProduct {
   benefits          String?
   requiredDocuments String?
   purchaseConditions String?
+  purchaseUrl        String?
   renewalRules      String?
   claimProcess      String?
   commonQuestions   String?

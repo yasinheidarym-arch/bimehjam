@@ -1,3 +1,5 @@
+import { isDirectQuotationWorkflowRequest } from '../../shared/productPurchaseLink';
+
 export type QuotationTurnQuestion = {
   id?: string;
   title: string;
@@ -10,7 +12,7 @@ export type QuotationTurnQuestion = {
 
 export function isInsuranceQuotationRequest(message: string): boolean {
   const text = String(message || '').toLowerCase();
-  return ['قیمت', 'استعلام', 'چقدر میشه', 'چنده', 'چند درمیاد', 'چند در میاد', 'هزینه', 'نرخ', 'محاسبه']
+  return isDirectQuotationWorkflowRequest(text) || ['قیمت', 'استعلام', 'خرید', 'صدور', 'چقدر میشه', 'چنده', 'چند درمیاد', 'چند در میاد', 'هزینه', 'نرخ', 'محاسبه']
     .some((term) => text.includes(term));
 }
 

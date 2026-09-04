@@ -14,6 +14,10 @@ import {
 } from './humanHandoffNameFlow';
 import { isFullNameHandoffRuleActive } from './aiBehaviorService';
 import { AiMode, shouldExecuteAi } from '../../shared/aiSchedule';
+import {
+  offeredPurchaseLinkProductIds,
+  PURCHASE_LINK_METADATA_KEY,
+} from '../../shared/productPurchaseLink';
 
 const DEFAULT_GOFTINO_HANDOFF_MESSAGE = 'برای بررسی دقیق درخواست شما، همکاران متخصص بیمه جم ادامهٔ گفتگو را پیگیری می‌کنند. 🌹';
 
@@ -633,6 +637,11 @@ export async function runAiPipelineForMessage(params: {
 
     } else {
 
+      const priorPurchaseLinkMessages = await prisma.message.findMany({
+        where: { conversationId: conversation.id, senderType: 'AI' },
+        select: { metadata: true },
+      });
+
       console.log("========== BRAIN CALL DEBUG: BEFORE processBrainLayer ==========");
 
       brainResult = await processBrainLayer({
@@ -643,6 +652,7 @@ export async function runAiPipelineForMessage(params: {
         allowedCategoryId: policyDecision.policy.insuranceCategoryId || undefined,
         goftinoPolicyTitle: policyDecision.policy.goftinoTopicTitle,
         restrictKnowledgeScope: true,
+        offeredPurchaseLinkProductIds: offeredPurchaseLinkProductIds(priorPurchaseLinkMessages),
       });
 
       if (brainResult.quotationState?.isCompleted && brainResult.task?.create) {
@@ -828,6 +838,9 @@ export async function runAiPipelineForMessage(params: {
         intent: brainResult.intent,
         stage: brainResult.stage,
         validationResult: brainResult.validationResult,
+        ...(brainResult.purchaseLinkOffer
+          ? { [PURCHASE_LINK_METADATA_KEY]: brainResult.purchaseLinkOffer.productId }
+          : {}),
       }),
     },
   });

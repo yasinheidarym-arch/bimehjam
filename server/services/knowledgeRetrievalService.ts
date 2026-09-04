@@ -14,6 +14,7 @@ export interface ExtractedKnowledgePayload {
     id: string;
     name: string;
     category: string;
+    purchaseUrl: string | null;
     description: string;
     coverage: string;
     purchaseConditions: string;
@@ -691,6 +692,7 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
       id: matchedProductRaw.id,
       name: matchedProductRaw.name,
       category: matchedProductRaw.category,
+      purchaseUrl: matchedProductRaw.purchaseUrl || null,
       aiKnowledgeArticle: matchedProductRaw.aiKnowledgeArticle || '',
       aiRules: matchedProductRaw.aiRules || '',
     };

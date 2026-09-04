@@ -51,6 +51,10 @@ import {
 import { knowledgeService } from '../services/api';
 import { AiBehaviorRule } from '../types';
 import { FULL_NAME_HANDOFF_RULE_CATEGORY } from '../../shared/humanHandoffRule';
+import {
+  isValidOptionalProductPurchaseUrl,
+  normalizeProductPurchaseUrl,
+} from '../../shared/productPurchaseLink';
 
 type ModuleTab = 'categories' | 'products' | 'faqs' | 'ai-behavior';
 type ModuleLoadState = 'loading' | 'ready' | 'error';
@@ -204,6 +208,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     description: '',
     coverage: '',
     purchaseConditions: '',
+    purchaseUrl: '',
     exclusions: '',
     aiKnowledgeArticle: '',
     aiRules: '',
@@ -458,6 +463,10 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
   // --- Handlers for Products ---
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isValidOptionalProductPurchaseUrl(productForm.purchaseUrl)) {
+      window.alert('لینک خرید محصول باید یک آدرس معتبر با http یا https باشد.');
+      return;
+    }
     try {
       if (editingItem) {
         await knowledgeService.updateProduct(editingItem.id, productForm);
@@ -495,6 +504,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       description: '',
       coverage: '',
       purchaseConditions: '',
+      purchaseUrl: '',
       exclusions: '',
       aiKnowledgeArticle: '',
       aiRules: '',
@@ -536,6 +546,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
         description: product.description || '',
         coverage: product.coverage || '',
         purchaseConditions: product.purchaseConditions || '',
+        purchaseUrl: product.purchaseUrl || '',
         exclusions: product.exclusions || '',
         aiKnowledgeArticle: product.aiKnowledgeArticle || '',
         aiRules: product.aiRules || '',
@@ -2561,6 +2572,38 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                         ))}
                     </select>
                   </div>
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    لینک خرید محصول (اختیاری):
+                  </label>
+                  <p className="text-[11px] text-slate-500 mb-2">
+                    لینک امن http/https که فقط پس از تشخیص قطعی همین محصول برای خرید یا استعلام قیمت پیشنهاد می‌شود.
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="url"
+                      dir="ltr"
+                      value={productForm.purchaseUrl}
+                      onChange={(e) => setProductForm({ ...productForm, purchaseUrl: e.target.value })}
+                      placeholder="https://example.com/product"
+                      className="flex-1 px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 text-left"
+                    />
+                    {normalizeProductPurchaseUrl(productForm.purchaseUrl) && (
+                      <a
+                        href={normalizeProductPurchaseUrl(productForm.purchaseUrl)!}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-3 py-2 rounded-xl border border-indigo-200 text-indigo-700 font-bold hover:bg-indigo-50"
+                      >
+                        باز کردن لینک
+                      </a>
+                    )}
+                  </div>
+                  {productForm.purchaseUrl && !isValidOptionalProductPurchaseUrl(productForm.purchaseUrl) && (
+                    <p className="text-[11px] text-rose-600 mt-1">آدرس باید معتبر و با http یا https باشد.</p>
+                  )}
                 </div>
 
                 <div>
