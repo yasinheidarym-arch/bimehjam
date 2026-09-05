@@ -8,6 +8,7 @@ import {
 import { getOrCreateQuotationSession, processSessionAnswers } from './quotationWorkflowService';
 import {
   captureCurrentQuestionAnswer,
+  analyzeQuotationMessage,
   isInsuranceQuotationRequest,
   isExplicitQuotationFormRequest,
   quotationCompletedReply,
@@ -316,6 +317,7 @@ export async function processBrainLayer(params: {
   let deterministicReply: string | null = null;
   let quotationState: BrainResult['quotationState'];
   let purchaseLinkOffer: BrainResult['purchaseLinkOffer'];
+  let quotationInterruptionQuestion: { text: string } | null = null;
   let pageProductSuggestionState: CurrentPageProductSuggestionState | null = existingPageSuggestion;
   let pageProductSuggestionDecision: NonNullable<BrainResult['workflowContext']>['currentPageProductSuggestionDecision'] = 'NONE';
 
@@ -430,11 +432,15 @@ export async function processBrainLayer(params: {
       productId: product.id,
     });
     let evaluation = await processSessionAnswers(session.id, {}, 'customer');
+    const workflowWasActive = conversation.currentProductId === product.id;
+    const messageAnalysis = workflowWasActive
+      ? analyzeQuotationMessage(evaluation.nextQuestion, userMessageContent)
+      : { validAnswer: false, answerValue: null, asksQuestion: false };
 
     // A message answers the pending question only after this conversation has
     // already entered the deterministic workflow for the same product.
     if (shouldCaptureCurrentQuestionAnswer(
-      conversation.currentProductId === product.id,
+      workflowWasActive,
       evaluation.nextQuestion,
       userMessageContent,
     )) {
@@ -442,6 +448,14 @@ export async function processBrainLayer(params: {
       if (Object.keys(answer).length > 0) {
         evaluation = await processSessionAnswers(session.id, answer, 'customer');
       }
+    }
+
+    if (workflowWasActive && messageAnalysis.asksQuestion) {
+      quotationInterruptionQuestion = {
+        text: evaluation.nextQuestion
+          ? quotationQuestionReply(evaluation.nextQuestion)
+          : quotationCompletedReply(),
+      };
     }
 
     const questions = session.workflow?.questions || [];
@@ -492,7 +506,9 @@ export async function processBrainLayer(params: {
           currentPageUrl,
         })
       : '';
-    deterministicReply = questionReply
+    deterministicReply = quotationInterruptionQuestion
+      ? null
+      : questionReply
       ? [chatStartPrefix, questionReply].filter(Boolean).join('\n')
       : evaluation.isCompleted
         ? quotationCompletedReply()
@@ -686,6 +702,14 @@ ${extractedKnowledge.noRelevantKnowledge
 فقط یک سؤال روشن‌کننده و کوتاه برای مشخص‌شدن زیرمجموعه یا نیاز دقیق مشتری بپرس.
 `
   : ''}
+
+${quotationInterruptionQuestion ? `
+⚠️ وقفه در استعلام:
+مشتری در پیام فعلی یک سؤال پرسیده است.
+فقط همان سؤال را کوتاه و صرفاً با دانش معتبر همین محصول پاسخ بده.
+سؤال استعلام را تولید، بازنویسی یا تکرار نکن؛ backend پس از پاسخ تو سؤال دقیق ذخیره‌شده را اضافه می‌کند.
+هیچ داده‌ای از این پیام برای فیلدهای استعلام استخراج نکن.
+` : ''}
 
 
 ==============================
@@ -993,6 +1017,13 @@ Call Customer
   // Fallback if still invalid
   if (!validation.valid && !finalReplyText) {
     finalReplyText = `سلام، خوش آمدید. لطفاً بفرمایید در چه زمینه‌ای از خدمات بیمه‌ای نیاز به راهنمایی دارید تا دقیق‌تر راهنمایی‌تان کنم.`;
+  }
+
+  if (quotationInterruptionQuestion) {
+    finalReplyText = [finalReplyText.trim(), quotationInterruptionQuestion.text].filter(Boolean).join('\n');
+    newlyExtractedData = {};
+    generatedTask = undefined;
+    generatedOperatorSummary = '';
   }
 
   if (quotationState?.isCompleted) {

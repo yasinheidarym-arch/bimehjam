@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  analyzeQuotationMessage,
   captureCurrentQuestionAnswer,
   currentRequiredQuestion,
   isExplicitQuotationFormRequest,
@@ -58,7 +59,8 @@ test('answering every required question completes the quotation workflow', () =>
   while (true) {
     const current = currentRequiredQuestion(questions, collected);
     if (!current) break;
-    collected = { ...collected, ...captureCurrentQuestionAnswer(current, `پاسخ ${current.order}`) };
+    const answer = current.order === 1 ? 'ساختمان مسکونی' : `پاسخ ${current.order}`;
+    collected = { ...collected, ...captureCurrentQuestionAnswer(current, answer) };
   }
 
   assert.equal(Object.keys(collected).length, 20);
@@ -71,4 +73,54 @@ test('an explicit customer request for the online form uses the alternate form p
   const message = 'لطفاً لینک فرم استعلام آنلاین را بفرست';
   assert.equal(isExplicitQuotationFormRequest(message), true);
   assert.match(quotationFormReply(), /فرم استعلام همین صفحه/);
+});
+
+test('an insurance question does not become the numeric elevator answer or advance the workflow', () => {
+  const elevatorQuestion: QuotationTurnQuestion = {
+    id: 'elevators',
+    title: 'تعداد آسانسور',
+    aiQuestion: 'چند دستگاه آسانسور توی ساختمان شما وجود دارد؟',
+    fieldName: 'elevatorCount',
+    type: 'number',
+    required: true,
+    order: 8,
+    minVal: 0,
+  };
+  const message = 'میشه بیمه توضیح بدی چقدر بازه؟';
+  const analysis = analyzeQuotationMessage(elevatorQuestion, message);
+  assert.deepEqual(analysis, { validAnswer: false, answerValue: null, asksQuestion: true });
+  assert.deepEqual(captureCurrentQuestionAnswer(elevatorQuestion, message), {});
+  assert.equal(currentRequiredQuestion([elevatorQuestion], {}), elevatorQuestion);
+});
+
+test('a valid combined answer is captured before answering the interruption and advancing', () => {
+  const elevatorQuestion: QuotationTurnQuestion = {
+    id: 'elevators',
+    title: 'تعداد آسانسور',
+    aiQuestion: 'چند دستگاه آسانسور توی ساختمان شما وجود دارد؟',
+    fieldName: 'elevatorCount',
+    type: 'number',
+    required: true,
+    order: 8,
+  };
+  const nextQuestion: QuotationTurnQuestion = {
+    id: 'term', title: 'مدت بیمه', aiQuestion: 'مدت بیمه درخواستی چند ماه است؟',
+    fieldName: 'insuranceTerm', type: 'number', required: true, order: 9,
+  };
+  const message = '۳ تا، بیمه چه پوشش‌هایی دارد؟';
+  const analysis = analyzeQuotationMessage(elevatorQuestion, message);
+  assert.equal(analysis.validAnswer, true);
+  assert.equal(analysis.asksQuestion, true);
+  const collected = captureCurrentQuestionAnswer(elevatorQuestion, message);
+  assert.deepEqual(collected, { elevatorCount: '3' });
+  assert.equal(currentRequiredQuestion([elevatorQuestion, nextQuestion], collected), nextQuestion);
+});
+
+test('configured choices reject unrelated text and store the canonical option', () => {
+  const usageQuestion: QuotationTurnQuestion = {
+    id: 'usage', title: 'کاربری', fieldName: 'usage', type: 'select', required: true, order: 1,
+    options: JSON.stringify(['مجتمع مسکونی', 'مجتمع تجاری']),
+  };
+  assert.deepEqual(captureCurrentQuestionAnswer(usageQuestion, 'درباره پوشش‌ها توضیح می‌دهید؟'), {});
+  assert.deepEqual(captureCurrentQuestionAnswer(usageQuestion, 'مجتمع مسکونی'), { usage: 'مجتمع مسکونی' });
 });
