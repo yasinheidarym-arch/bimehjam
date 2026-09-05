@@ -365,7 +365,7 @@ export function normalizeUrlPath(urlOrPath: string): string {
 /**
  * Resolves an incoming URL/Path to its exact Insurance Product & Quotation Questions
  */
-export async function resolveProductByUrl(urlOrPath: string, options: { seedIfEmpty?: boolean } = {}) {
+export async function resolveProductByUrl(urlOrPath: string, options: { seedIfEmpty?: boolean; exactOnly?: boolean } = {}) {
   if (options.seedIfEmpty !== false) {
     await seedProductMapData();
   }
@@ -394,8 +394,22 @@ export async function resolveProductByUrl(urlOrPath: string, options: { seedIfEm
     },
   });
 
+  if (!mapEntry && options.exactOnly) {
+    const exactCandidates = await prisma.productUrlMap.findMany({
+      include: {
+        product: {
+          include: {
+            quotationQuestions: { orderBy: { order: 'asc' } },
+            knowledgeItems: true,
+          },
+        },
+      },
+    });
+    mapEntry = exactCandidates.find((item) => normalizeUrlPath(item.url) === cleanPath) || null;
+  }
+
   // 2. Suffix / Contains fallback search if direct match fails
-  if (!mapEntry) {
+  if (!mapEntry && !options.exactOnly) {
     const allMaps = await prisma.productUrlMap.findMany({
       include: {
         product: {
@@ -417,6 +431,37 @@ export async function resolveProductByUrl(urlOrPath: string, options: { seedIfEm
         m.url.includes(decoded) ||
         decoded.replace(/\//g, '').includes(m.url.replace(/\//g, ''))
     ) || null;
+  }
+
+  // Product purchase URLs are editable in the product panel and can be the
+  // canonical page even when no legacy ProductUrlMap row exists.
+  if (!mapEntry) {
+    const productsWithPurchaseUrl = await prisma.insuranceProduct.findMany({
+      where: { status: 'ACTIVE', purchaseUrl: { not: null } },
+      include: {
+        quotationQuestions: { orderBy: { order: 'asc' } },
+        knowledgeItems: true,
+      },
+    });
+    const product = productsWithPurchaseUrl.find(
+      (item) => item.purchaseUrl && normalizeUrlPath(item.purchaseUrl) === cleanPath,
+    );
+    if (product) {
+      return {
+        id: `purchase-url:${product.id}`,
+        url: cleanPath,
+        pageTitle: product.name,
+        productId: product.id,
+        product,
+        category: product.category,
+        productType: 'quotation',
+        quotationEnabled: true,
+        aiEnabled: true,
+        relatedKnowledge: '[]',
+        createdAt: product.createdAt,
+        updatedAt: product.updatedAt,
+      };
+    }
   }
 
   return mapEntry;

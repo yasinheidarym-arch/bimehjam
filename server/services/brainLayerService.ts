@@ -29,6 +29,15 @@ import {
 } from '../../shared/productPurchaseLink';
 import { resolveProductByUrl } from './productIntelligenceService';
 import { getQuotationRoutingRule } from './aiBehaviorService';
+import {
+  categoryProductClarificationReply,
+  currentPageProductSuggestionReply,
+  CurrentPageProductSuggestionState,
+  isCurrentPageProductSuggestionAccepted,
+  isCurrentPageProductSuggestionRejected,
+  readCurrentPageProductSuggestion,
+  shouldOfferCurrentPageProductSuggestion,
+} from '../../shared/currentPageProductSuggestion';
 
 
 export interface BrainResult {
@@ -69,12 +78,14 @@ export interface BrainResult {
 
   workflowContext?: {
     currentPageUrl: string | null;
-    currentPageProduct: { id: string; name: string } | null;
+    currentPageProduct: { id: string; name: string; categoryId: string | null } | null;
     detectedProduct: { id: string; name: string } | null;
     purchaseUrl: string | null;
     purchaseRequested: boolean;
     orderedQuestions: Array<{ order: number; fieldName: string; text: string }>;
     registrationStatus: string;
+    matchedCategory: { id: string; name: string } | null;
+    currentPageProductSuggestionDecision: 'NONE' | 'OFFERED' | 'AWAITING_CONFIRMATION' | 'ACCEPTED' | 'REJECTED';
   };
 
   task?: {
@@ -237,6 +248,22 @@ export async function processBrainLayer(params: {
   }
 
   const currentPageUrl = suppliedCurrentPageUrl || (typeof customerMetadata.lastUrl === 'string' ? customerMetadata.lastUrl : null);
+  const currentPageMap = currentPageUrl
+    ? await resolveProductByUrl(currentPageUrl, { seedIfEmpty: false, exactOnly: true })
+    : null;
+  const currentPageProduct = currentPageMap?.product &&
+    currentPageMap.product.status === 'ACTIVE' && currentPageMap.aiEnabled
+    ? {
+        id: currentPageMap.product.id,
+        name: currentPageMap.product.name,
+        categoryId: currentPageMap.product.categoryId || null,
+      }
+    : null;
+  const existingPageSuggestion = readCurrentPageProductSuggestion(existingCollectedData.currentPageProductSuggestion);
+  const suggestionAccepted = existingPageSuggestion?.status === 'AWAITING_CONFIRMATION' &&
+    isCurrentPageProductSuggestionAccepted(userMessageContent);
+  const suggestionRejected = existingPageSuggestion?.status === 'AWAITING_CONFIRMATION' &&
+    isCurrentPageProductSuggestionRejected(userMessageContent);
 
   // Step 1: Intelligent Knowledge Retrieval from AI Training Center (5 Sources)
   const extractedKnowledge = await retrieveRelevantKnowledgeFromTrainingCenter({
@@ -248,6 +275,7 @@ export async function processBrainLayer(params: {
       pageUrl: currentPageUrl || undefined,
       interestedInsuranceTypes: customer.interestedInsuranceTypes,
       categoryId: allowedCategoryId || null,
+      productId: suggestionAccepted ? existingPageSuggestion.productId : null,
       restrictToCategory: Boolean(restrictKnowledgeScope),
     },
     existingCollectedData,
@@ -280,12 +308,6 @@ export async function processBrainLayer(params: {
   );
   const directQuotationRequested = isDirectQuotationWorkflowRequest(userMessageContent) ||
     (matchedProductWasOffered && isPositiveQuotationWorkflowResponse(userMessageContent));
-  const currentPageMap = currentPageUrl
-    ? await resolveProductByUrl(currentPageUrl, { seedIfEmpty: false })
-    : null;
-  const currentPageProduct = currentPageMap?.product
-    ? { id: currentPageMap.product.id, name: currentPageMap.product.name }
-    : null;
   const registrationStatus = typeof existingCollectedData.quotationSubmission?.status === 'string'
     ? existingCollectedData.quotationSubmission.status
     : 'NOT_SUBMITTED';
@@ -294,8 +316,56 @@ export async function processBrainLayer(params: {
   let deterministicReply: string | null = null;
   let quotationState: BrainResult['quotationState'];
   let purchaseLinkOffer: BrainResult['purchaseLinkOffer'];
+  let pageProductSuggestionState: CurrentPageProductSuggestionState | null = existingPageSuggestion;
+  let pageProductSuggestionDecision: NonNullable<BrainResult['workflowContext']>['currentPageProductSuggestionDecision'] = 'NONE';
 
   if (
+    suggestionAccepted && existingPageSuggestion &&
+    extractedKnowledge.matchedProduct?.id === existingPageSuggestion.productId
+  ) {
+    pageProductSuggestionDecision = 'ACCEPTED';
+    pageProductSuggestionState = { ...existingPageSuggestion, status: 'ACCEPTED' };
+  } else if (suggestionRejected && existingPageSuggestion) {
+    pageProductSuggestionDecision = 'REJECTED';
+    pageProductSuggestionState = { ...existingPageSuggestion, status: 'REJECTED' };
+    if (!extractedKnowledge.matchedProduct || extractedKnowledge.matchedProduct.id === existingPageSuggestion.productId) {
+      extractedKnowledge.matchedProduct = null;
+      extractedKnowledge.quotationWorkflow = null;
+      extractedKnowledge.productKnowledgeAvailable = false;
+      extractedKnowledge.productSelectionRequired = Boolean(extractedKnowledge.matchedCategoryId);
+      deterministicReply = categoryProductClarificationReply(
+        extractedKnowledge.matchedCategory || existingPageSuggestion.categoryName,
+      );
+    }
+  } else if (existingPageSuggestion?.status === 'AWAITING_CONFIRMATION') {
+    pageProductSuggestionDecision = 'AWAITING_CONFIRMATION';
+    extractedKnowledge.matchedProduct = null;
+    extractedKnowledge.quotationWorkflow = null;
+    extractedKnowledge.productKnowledgeAvailable = false;
+    extractedKnowledge.productSelectionRequired = true;
+    deterministicReply = currentPageProductSuggestionReply(existingPageSuggestion.productName);
+  } else if (currentPageUrl && shouldOfferCurrentPageProductSuggestion({
+    message: userMessageContent,
+    matchedCategoryId: extractedKnowledge.matchedCategoryId,
+    matchedCategoryName: extractedKnowledge.matchedCategory,
+    productSelectionRequired: extractedKnowledge.productSelectionRequired,
+    currentPageProduct,
+    previousSuggestion: existingPageSuggestion,
+  })) {
+    pageProductSuggestionDecision = 'OFFERED';
+    pageProductSuggestionState = {
+      status: 'AWAITING_CONFIRMATION',
+      productId: currentPageProduct.id,
+      productName: currentPageProduct.name,
+      categoryId: extractedKnowledge.matchedCategoryId,
+      categoryName: extractedKnowledge.matchedCategory,
+      currentPageUrl,
+    };
+    deterministicReply = currentPageProductSuggestionReply(currentPageProduct.name);
+  }
+
+  if (
+    !deterministicReply &&
     quotationRoutingRule && routingRuleActive &&
     extractedKnowledge.matchedProduct &&
     shouldOfferProductPurchaseLink({
@@ -328,6 +398,7 @@ export async function processBrainLayer(params: {
       presentation: samePage ? 'CURRENT_PAGE' : 'EXTERNAL_LINK',
     };
   } else if (
+    !deterministicReply &&
     quotationRoutingRule && routingRuleActive &&
     extractedKnowledge.matchedProduct &&
     shouldWaitForProductPurchaseDecision({
@@ -346,10 +417,10 @@ export async function processBrainLayer(params: {
       purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
       currentPageUrl,
     });
-  } else if (explicitFormRequested && extractedKnowledge.matchedProduct) {
+  } else if (!deterministicReply && explicitFormRequested && extractedKnowledge.matchedProduct) {
     deterministicReply = quotationFormReply();
   } else if (
-    extractedKnowledge.matchedProduct &&
+    !deterministicReply && extractedKnowledge.matchedProduct &&
     (intent === 'Insurance Quotation' || conversation.currentProductId === extractedKnowledge.matchedProduct.id)
   ) {
     const product = extractedKnowledge.matchedProduct;
@@ -445,6 +516,10 @@ export async function processBrainLayer(params: {
         text: question.aiQuestion || question.title,
       })),
     registrationStatus,
+    matchedCategory: extractedKnowledge.matchedCategoryId && extractedKnowledge.matchedCategory
+      ? { id: extractedKnowledge.matchedCategoryId, name: extractedKnowledge.matchedCategory }
+      : null,
+    currentPageProductSuggestionDecision: pageProductSuggestionDecision,
   };
 
   const productSelectionRequired =
@@ -931,9 +1006,15 @@ Call Customer
     generatedOperatorSummary = `پرسش‌های استعلام ${quotationState.productName} تکمیل شد و آماده محاسبه قیمت است.`;
   }
 
-  const loadedKnowledgeSummary = purchaseLinkOffer
+  const loadedKnowledgeSummary = JSON.stringify({
+    summary: purchaseLinkOffer
     ? `${purchaseLinkDecisionLogSummary(purchaseLinkOffer.productName)} | [تعداد قوانین فعال]: ${extractedKnowledge.appliedRules.length}`
-    : `[محصول]: ${extractedKnowledge.matchedProduct?.name || 'عمومی'} | [سوال بعدی]: ${extractedKnowledge.quotationWorkflow?.nextQuestion?.title || 'تکمیل'} | [تعداد قوانین فعال]: ${extractedKnowledge.appliedRules.length}`;
+    : `[محصول]: ${extractedKnowledge.matchedProduct?.name || 'عمومی'} | [سوال بعدی]: ${extractedKnowledge.quotationWorkflow?.nextQuestion?.title || 'تکمیل'} | [تعداد قوانین فعال]: ${extractedKnowledge.appliedRules.length}`,
+    currentPageUrl,
+    currentPageProduct,
+    matchedCategory: workflowContext.matchedCategory,
+    currentPageProductSuggestionDecision: pageProductSuggestionDecision,
+  });
 
   // Record BrainLog in Database
   console.log("========== BRAINLOG DEBUG: BEFORE CREATE ==========");
@@ -987,6 +1068,9 @@ Call Customer
       : quotationState && directQuotationRequested
         ? { purchaseLinkState: purchaseLinkQuotationSelectedState(quotationState.productId) }
         : {}),
+    ...(pageProductSuggestionState
+      ? { currentPageProductSuggestion: pageProductSuggestionState }
+      : {}),
   };
 
   return {

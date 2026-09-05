@@ -74,6 +74,7 @@ export interface ExtractedKnowledgePayload {
   productSelectionRequired: boolean;
   noRelevantKnowledge: boolean;
   matchedCategory: string | null;
+  matchedCategoryId: string | null;
   matchedSubCategory: string | null;
   relevantArticles: Array<{ id: string; title: string; content: string }>;
 }
@@ -376,7 +377,7 @@ export async function ensureTrainingCenterSeeded() {
 export async function retrieveRelevantKnowledgeFromTrainingCenter(params: {
   userMessage: string;
   conversationHistoryText?: string;
-  customerContext?: { name?: string; city?: string; pageUrl?: string; interestedInsuranceTypes?: string; categoryId?: string | null; restrictToCategory?: boolean };
+  customerContext?: { name?: string; city?: string; pageUrl?: string; interestedInsuranceTypes?: string; categoryId?: string | null; productId?: string | null; restrictToCategory?: boolean };
   existingCollectedData?: Record<string, any>;
 }): Promise<ExtractedKnowledgePayload> {
   // Ensure database has seed data
@@ -605,6 +606,10 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
     status: 'ACTIVE',
   };
 
+  if (params.customerContext?.productId) {
+    productWhere.id = params.customerContext.productId;
+  }
+
   if (matchedSubCategoryRaw) {
     productWhere.categoryId = matchedSubCategoryRaw.categoryId;
 
@@ -694,7 +699,9 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
 
     // Product is activated only when subcategory is identified.
     // Category alone is not enough to load product knowledge or quotation workflow.
-    if (best && matchedSubCategoryRaw) {
+    if (best && params.customerContext?.productId && best.product.id === params.customerContext.productId) {
+      matchedProductRaw = best.product;
+    } else if (best && matchedSubCategoryRaw) {
       matchedProductRaw = best.product;
     } else if (best && !matchedSubCategoryRaw) {
       console.log("PRODUCT MATCH BLOCKED: category detected but subcategory is missing");
@@ -891,9 +898,10 @@ ${matchedProduct.aiRules.trim()}`
     // If category is known but subcategory is missing,
     // AI should clarify the user's requested insurance type first.
     productSelectionRequired:
-      !!matchedCategoryRaw && !matchedSubCategoryRaw,
+      !!matchedCategoryRaw && !matchedSubCategoryRaw && !matchedProduct,
 
     matchedCategory: matchedCategoryRaw?.name || null,
+    matchedCategoryId: matchedCategoryRaw?.id || null,
     matchedSubCategory: matchedSubCategoryRaw?.name || null,
 
     relevantFaqs,
