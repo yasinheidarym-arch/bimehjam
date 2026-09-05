@@ -15,6 +15,7 @@ import {
   PURCHASE_LINK_RULE_ID,
   PURCHASE_LINK_RULE_SORT_ORDER,
   PURCHASE_LINK_RULE_TITLE,
+  serializeQuotationRoutingTemplates,
 } from '../../shared/productPurchaseLink';
 
 export interface AiBehaviorRuleItem {
@@ -100,6 +101,12 @@ async function ensureSeedRules() {
       ],
     },
   });
+  const parsedPurchaseLinkRule = purchaseLinkRule
+    ? parseQuotationRoutingTemplates(purchaseLinkRule.directive)
+    : null;
+  const normalizedPurchaseLinkDirective = parsedPurchaseLinkRule
+    ? serializeQuotationRoutingTemplates(parsedPurchaseLinkRule)
+    : PURCHASE_LINK_RULE_DIRECTIVE;
   if (!purchaseLinkRule) {
     await prisma.aiRule.create({
       data: {
@@ -117,13 +124,13 @@ async function ensureSeedRules() {
   } else if (
     purchaseLinkRule.title !== PURCHASE_LINK_RULE_TITLE ||
     purchaseLinkRule.category !== PURCHASE_LINK_RULE_CATEGORY ||
-    !parseQuotationRoutingTemplates(purchaseLinkRule.directive)
+    purchaseLinkRule.directive !== normalizedPurchaseLinkDirective
   ) {
     await prisma.aiRule.update({
       where: { id: purchaseLinkRule.id },
       data: {
         title: PURCHASE_LINK_RULE_TITLE,
-        directive: PURCHASE_LINK_RULE_DIRECTIVE,
+        directive: normalizedPurchaseLinkDirective,
         sortOrder: PURCHASE_LINK_RULE_SORT_ORDER,
         status: [LEGACY_QUOTATION_RULE_TITLE, LEGACY_PURCHASE_LINK_RULE_TITLE].includes(purchaseLinkRule.title) ? 'ACTIVE' : purchaseLinkRule.status,
         category: PURCHASE_LINK_RULE_CATEGORY,

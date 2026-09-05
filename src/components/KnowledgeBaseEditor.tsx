@@ -3561,6 +3561,23 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                   <p className="text-[11px] leading-relaxed text-indigo-700">
                     متغیرهای مجاز: <code>{'{{productName}}'}</code>، <code>{'{{purchaseUrl}}'}</code> و <code>{'{{currentPageUrl}}'}</code>
                   </p>
+                  <label className="block space-y-1">
+                    <span className="font-bold text-slate-700">نمونه عبارت‌های پذیرش استعلام چتی:</span>
+                    <textarea
+                      rows={3}
+                      required
+                      value={behaviorForm.routingTemplates.acceptanceExamples.join('\n')}
+                      onChange={(e) => setBehaviorForm({
+                        ...behaviorForm,
+                        routingTemplates: {
+                          ...behaviorForm.routingTemplates!,
+                          acceptanceExamples: e.target.value.split('\n').map((item) => item.trim()).filter(Boolean),
+                        },
+                      })}
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 leading-relaxed font-sans bg-white"
+                    />
+                    <span className="text-[10px] text-slate-500">هر نمونه را در یک خط بنویسید. تشخیص قطعی backend مستقل از این نمونه‌ها اعمال می‌شود.</span>
+                  </label>
                   {([
                     ['samePageResponse', 'متن وقتی کاربر در صفحهٔ همان محصول است'],
                     ['differentPageResponse', 'متن وقتی کاربر در صفحهٔ محصول دیگری است'],

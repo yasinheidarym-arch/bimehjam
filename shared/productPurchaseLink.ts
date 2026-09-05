@@ -9,6 +9,7 @@ export const LEGACY_PURCHASE_LINK_RULE_CATEGORY = 'SYSTEM_PURCHASE_LINK_BEFORE_Q
 
 export type QuotationRoutingTemplates = {
   version: 1;
+  acceptanceExamples: string[];
   samePageResponse: string;
   differentPageResponse: string;
   awaitingChoiceResponse: string;
@@ -17,6 +18,14 @@ export type QuotationRoutingTemplates = {
 
 export const DEFAULT_QUOTATION_ROUTING_TEMPLATES: QuotationRoutingTemplates = {
   version: 1,
+  acceptanceExamples: [
+    'برام حساب کنید',
+    'شما حساب کنید',
+    'خودتون انجام بدید',
+    'استعلام بگیرید',
+    'قیمت بگیرید',
+    'بله، شما انجام بدید',
+  ],
   samePageResponse: 'فرم استعلام آنلاین {{productName}} در همین صفحه در دسترس است و می‌توانید خودتان آن را تکمیل کنید.\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.',
   differentPageResponse: 'برای استعلام آنلاین {{productName}} از لینک زیر استفاده کنید:\n{{purchaseUrl}}\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.',
   awaitingChoiceResponse: 'اگر می‌خواهید استعلام را در چت انجام دهیم، بگویید «خودتان استعلام کنید»؛ در غیر این صورت می‌توانید فرم آنلاین را تکمیل کنید.',
@@ -42,7 +51,17 @@ export function parseQuotationRoutingTemplates(value: unknown): QuotationRouting
       }
     }
     if (!String((parsed as Record<string, unknown>).differentPageResponse).includes('{{purchaseUrl}}')) return null;
-    return parsed as QuotationRoutingTemplates;
+    const acceptanceExamples = (parsed as Record<string, unknown>).acceptanceExamples;
+    if (acceptanceExamples !== undefined && (
+      !Array.isArray(acceptanceExamples) ||
+      acceptanceExamples.some((example) => typeof example !== 'string' || !example.trim())
+    )) return null;
+    return {
+      ...(parsed as Omit<QuotationRoutingTemplates, 'acceptanceExamples'>),
+      acceptanceExamples: Array.isArray(acceptanceExamples)
+        ? acceptanceExamples.map((example) => String(example).trim())
+        : [...DEFAULT_QUOTATION_ROUTING_TEMPLATES.acceptanceExamples],
+    };
   } catch {
     return null;
   }
@@ -109,7 +128,15 @@ export function isDirectQuotationWorkflowRequest(message: string): boolean {
     /(کارشناس|اپراتور|انسان|مشاور).*(می\s*(خوام|خواهم)|وصل|انجام|تماس)/,
     /(لینک|خرید آنلاین|آنلاین)\s*(را|رو)?\s*(نمی\s*خواهم|نمیخوام|نمی خواهم|نمی‌خواهم)/,
     /(سؤال|سوال).*(بپرس|شروع)/,
+    /(برام|برای\s*من|واسم)\s*(?:قیمت\s*)?(?:حساب|محاسبه)\s*(کن|کنید|بگیر|بگیرید)/,
+    /(شما|خودتان|خودتون)\s*(?:برام|برای\s*من|واسم)?\s*(?:قیمت\s*)?(حساب|محاسبه)\s*(کن|کنید)/,
+    /(استعلام|قیمت)\s*(را|رو)?\s*(بگیر|بگیرید|حساب|محاسبه|انجام)\s*(کن|کنید)?/,
   ].some((pattern) => pattern.test(normalized));
+}
+
+export function isPositiveQuotationWorkflowResponse(message: string): boolean {
+  const normalized = String(message || '').replace(/‌/g, ' ').trim().toLowerCase();
+  return /^(آره|اره|بله|باشه|اوکی|حتما|حتماً|قبوله|موافقم)(?:\s|[،,.!؟?]|$)/.test(normalized);
 }
 
 export function isProductPurchaseIntent(message: string): boolean {
@@ -168,6 +195,7 @@ export function shouldWaitForProductPurchaseDecision(input: {
   if (
     input.quotationWorkflowActive ||
     isDirectQuotationWorkflowRequest(input.message) ||
+    isPositiveQuotationWorkflowResponse(input.message) ||
     isExplicitProductPurchaseLinkRequest(input.message)
   ) return false;
   return new Set(input.offeredProductIds || []).has(input.productId);

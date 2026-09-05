@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isDirectQuotationWorkflowRequest,
+  isPositiveQuotationWorkflowResponse,
   isExplicitProductPurchaseLinkRequest,
   isProductPurchaseIntent,
   DEFAULT_QUOTATION_ROUTING_TEMPLATES,
@@ -64,6 +65,39 @@ test('detailed quotation confirmation starts at the first question instead of be
   assert.deepEqual(purchaseLinkQuotationSelectedState(productId), {
     status: 'DETAILED_QUOTATION_SELECTED', productId,
   });
+});
+
+test('real post-link acceptance starts chat quotation instead of repeating the waiting prompt', () => {
+  for (const message of [
+    'برام حساب کنید',
+    'شما حساب کنید',
+    'خودتون انجام بدید',
+    'استعلام بگیرید',
+    'قیمت بگیرید',
+  ]) {
+    assert.equal(isDirectQuotationWorkflowRequest(message), true, message);
+    assert.equal(shouldWaitForProductPurchaseDecision({
+      productId,
+      purchaseUrl,
+      offeredProductIds: [productId],
+      quotationWorkflowActive: false,
+      message,
+    }), false, message);
+  }
+  assert.equal(isPositiveQuotationWorkflowResponse('بله، شما انجام بدید'), true);
+  assert.equal(shouldWaitForProductPurchaseDecision({
+    productId,
+    purchaseUrl,
+    offeredProductIds: [productId],
+    quotationWorkflowActive: false,
+    message: 'بله، شما انجام بدید',
+  }), false);
+  const first = currentRequiredQuestion([{
+    id: 'question-1', title: 'نوع کاربری ساختمان', aiQuestion: 'نوع کاربری ساختمان',
+    fieldName: 'buildingUsage', required: true, order: 1,
+  }], {});
+  assert.equal(quotationQuestionReply(first!), 'نوع کاربری ساختمان');
+  assert.doesNotMatch(quotationQuestionReply(first!), /اگر می‌خواهید|بگویید/);
 });
 
 test('building managers purchase link continues deterministically through the exact order-2 question', () => {
@@ -174,4 +208,7 @@ test('purchase-link behavior rule is logged and has higher priority than Ask Quo
   assert.equal(PURCHASE_LINK_RULE_TITLE, 'هدایت استعلام قیمت و خرید آنلاین');
   assert.ok(PURCHASE_LINK_RULE_SORT_ORDER < 6);
   assert.match(purchaseLinkDecisionLogSummary('بیمه مسئولیت مدیر ساختمان'), /هدایت استعلام قیمت و خرید آنلاین/);
+  assert.deepEqual(DEFAULT_QUOTATION_ROUTING_TEMPLATES.acceptanceExamples.slice(0, 5), [
+    'برام حساب کنید', 'شما حساب کنید', 'خودتون انجام بدید', 'استعلام بگیرید', 'قیمت بگیرید',
+  ]);
 });

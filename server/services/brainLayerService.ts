@@ -17,6 +17,7 @@ import {
 } from './quotationConversationFlow';
 import {
   isDirectQuotationWorkflowRequest,
+  isPositiveQuotationWorkflowResponse,
   isDetectedProductCurrentPage,
   hasRecentProductPurchaseIntent,
   purchaseLinkAwaitingState,
@@ -273,7 +274,12 @@ export async function processBrainLayer(params: {
     : detectedIntent;
   const stage = detectCustomerStage(messageHistory.length, intent, customer.leadScore || 50, historyText);
   const explicitFormRequested = isExplicitQuotationFormRequest(userMessageContent);
-  const directQuotationRequested = isDirectQuotationWorkflowRequest(userMessageContent);
+  const matchedProductWasOffered = Boolean(
+    extractedKnowledge.matchedProduct &&
+    new Set(offeredPurchaseLinkProductIds).has(extractedKnowledge.matchedProduct.id),
+  );
+  const directQuotationRequested = isDirectQuotationWorkflowRequest(userMessageContent) ||
+    (matchedProductWasOffered && isPositiveQuotationWorkflowResponse(userMessageContent));
   const currentPageMap = currentPageUrl
     ? await resolveProductByUrl(currentPageUrl, { seedIfEmpty: false })
     : null;
