@@ -52,8 +52,13 @@ import { knowledgeService } from '../services/api';
 import { AiBehaviorRule } from '../types';
 import { FULL_NAME_HANDOFF_RULE_CATEGORY } from '../../shared/humanHandoffRule';
 import {
+  DEFAULT_QUOTATION_ROUTING_TEMPLATES,
   isValidOptionalProductPurchaseUrl,
   normalizeProductPurchaseUrl,
+  parseQuotationRoutingTemplates,
+  PURCHASE_LINK_RULE_CATEGORY,
+  QuotationRoutingTemplates,
+  serializeQuotationRoutingTemplates,
 } from '../../shared/productPurchaseLink';
 
 type ModuleTab = 'categories' | 'products' | 'faqs' | 'ai-behavior';
@@ -238,10 +243,14 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     title: string;
     directive: string;
     status: 'ACTIVE' | 'INACTIVE';
+    sortOrder: number;
+    routingTemplates: QuotationRoutingTemplates | null;
   }>({
     title: '',
     directive: '',
     status: 'ACTIVE',
+    sortOrder: 0,
+    routingTemplates: null,
   });
   const [draggedBehaviorIndex, setDraggedBehaviorIndex] = useState<number | null>(null);
 
@@ -300,7 +309,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
   // --- Handlers for Dynamic AI Behavior Rules ---
   const handleOpenCreateBehaviorModal = () => {
     setEditingBehaviorRule(null);
-    setBehaviorForm({ title: '', directive: '', status: 'ACTIVE' });
+    setBehaviorForm({ title: '', directive: '', status: 'ACTIVE', sortOrder: aiBehaviorRules.length + 1, routingTemplates: null });
     setShowBehaviorModal(true);
   };
 
@@ -310,6 +319,10 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       title: rule.title,
       directive: rule.directive,
       status: rule.status,
+      sortOrder: rule.sortOrder,
+      routingTemplates: rule.category === PURCHASE_LINK_RULE_CATEGORY
+        ? parseQuotationRoutingTemplates(rule.directive) || DEFAULT_QUOTATION_ROUTING_TEMPLATES
+        : null,
     });
     setShowBehaviorModal(true);
   };
@@ -325,19 +338,23 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       if (editingBehaviorRule) {
         await knowledgeService.updateAiBehavior(editingBehaviorRule.id, {
           title: behaviorForm.title,
-          directive: behaviorForm.directive,
+          directive: behaviorForm.routingTemplates
+            ? serializeQuotationRoutingTemplates(behaviorForm.routingTemplates)
+            : behaviorForm.directive,
           status: behaviorForm.status,
+          sortOrder: behaviorForm.sortOrder,
         });
       } else {
         await knowledgeService.createAiBehavior({
           title: behaviorForm.title,
           directive: behaviorForm.directive,
           status: behaviorForm.status,
+          sortOrder: behaviorForm.sortOrder,
         });
       }
       setShowBehaviorModal(false);
       setEditingBehaviorRule(null);
-      setBehaviorForm({ title: '', directive: '', status: 'ACTIVE' });
+      setBehaviorForm({ title: '', directive: '', status: 'ACTIVE', sortOrder: 0, routingTemplates: null });
       await loadTabContent();
     } catch (err: any) {
       alert('خطا در ذخیره‌سازی قانون رفتار: ' + err.message);
@@ -1860,6 +1877,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                 .map((rule, idx) => {
                   const isActive = rule.status === 'ACTIVE';
                   const isFullNameHandoffRule = rule.category === FULL_NAME_HANDOFF_RULE_CATEGORY;
+                  const isQuotationRoutingRule = rule.category === PURCHASE_LINK_RULE_CATEGORY;
                   const isFirst = idx === 0;
                   const isLast = idx === aiBehaviorRules.length - 1;
 
@@ -1895,7 +1913,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                         <div className="space-y-1 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <h4 className="font-bold text-slate-900 text-sm">{rule.title}</h4>
-                            {isFullNameHandoffRule && (
+                            {(isFullNameHandoffRule || isQuotationRoutingRule) && (
                               <span className="rounded-full bg-indigo-100 px-2.5 py-0.5 text-[10px] font-bold text-indigo-700">
                                 متصل به مسیر واقعی گفتینو
                               </span>
@@ -1926,7 +1944,9 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                           </div>
 
                           <p className="text-xs text-slate-600 leading-relaxed font-sans bg-slate-50/80 p-2.5 rounded-xl border border-slate-100">
-                            {rule.directive}
+                            {isQuotationRoutingRule
+                              ? 'متن هدایت فرم همین صفحه، لینک صفحهٔ دیگر، انتظار انتخاب و شروع استعلام چتی از این قانون خوانده می‌شود.'
+                              : rule.directive}
                           </p>
                         </div>
                       </div>
@@ -1975,7 +1995,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                         </button>}
 
                         {/* Delete Button */}
-                        {!isFullNameHandoffRule && <button
+                        {!isFullNameHandoffRule && !isQuotationRoutingRule && <button
                           onClick={() => handleDeleteBehaviorRule(rule.id)}
                           className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors"
                           title="حذف قانون"
@@ -3528,6 +3548,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                 <input
                   type="text"
                   required
+                  disabled={Boolean(behaviorForm.routingTemplates)}
                   value={behaviorForm.title}
                   onChange={(e) => setBehaviorForm({ ...behaviorForm, title: e.target.value })}
                   placeholder="مثلاً: نحوه سلام و درود، طول پاسخ، سیاست اعلام قیمت..."
@@ -3535,16 +3556,55 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                 />
               </div>
 
+              {behaviorForm.routingTemplates ? (
+                <div className="space-y-3 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-3">
+                  <p className="text-[11px] leading-relaxed text-indigo-700">
+                    متغیرهای مجاز: <code>{'{{productName}}'}</code>، <code>{'{{purchaseUrl}}'}</code> و <code>{'{{currentPageUrl}}'}</code>
+                  </p>
+                  {([
+                    ['samePageResponse', 'متن وقتی کاربر در صفحهٔ همان محصول است'],
+                    ['differentPageResponse', 'متن وقتی کاربر در صفحهٔ محصول دیگری است'],
+                    ['awaitingChoiceResponse', 'متن انتظار برای انتخاب فرم یا استعلام چتی'],
+                    ['chatStartResponse', 'متن کوتاه پیش از سؤال اول استعلام چتی'],
+                  ] as const).map(([key, label]) => (
+                    <label key={key} className="block space-y-1">
+                      <span className="font-bold text-slate-700">{label}:</span>
+                      <textarea
+                        rows={3}
+                        required
+                        value={behaviorForm.routingTemplates![key]}
+                        onChange={(e) => setBehaviorForm({
+                          ...behaviorForm,
+                          routingTemplates: { ...behaviorForm.routingTemplates!, [key]: e.target.value },
+                        })}
+                        className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 leading-relaxed font-sans bg-white"
+                      />
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">متن و دستورالعمل قانون (Directive):</label>
+                  <textarea
+                    rows={4}
+                    required
+                    value={behaviorForm.directive}
+                    onChange={(e) => setBehaviorForm({ ...behaviorForm, directive: e.target.value })}
+                    placeholder="دستورالعمل صریح و دقیقی که هوش مصنوعی قبل از هر پاسخ باید رعایت کند..."
+                    className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-amber-500 leading-relaxed font-sans"
+                  ></textarea>
+                </div>
+              )}
+
               <div>
-                <label className="font-bold text-slate-700 block mb-1">متن و دستورالعمل قانون (Directive):</label>
-                <textarea
-                  rows={4}
-                  required
-                  value={behaviorForm.directive}
-                  onChange={(e) => setBehaviorForm({ ...behaviorForm, directive: e.target.value })}
-                  placeholder="دستورالعمل صریح و دقیقی که هوش مصنوعی قبل از هر پاسخ باید رعایت کند..."
-                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-amber-500 leading-relaxed font-sans"
-                ></textarea>
+                <label className="font-bold text-slate-700 block mb-1">اولویت اجرا:</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={behaviorForm.sortOrder}
+                  onChange={(e) => setBehaviorForm({ ...behaviorForm, sortOrder: Number(e.target.value) })}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-amber-500"
+                />
               </div>
 
               <div>

@@ -17,18 +17,17 @@ import {
 } from './quotationConversationFlow';
 import {
   isDirectQuotationWorkflowRequest,
-  currentPageQuotationReply,
   isDetectedProductCurrentPage,
-  isProductPurchaseIntent,
+  hasRecentProductPurchaseIntent,
   purchaseLinkAwaitingState,
   purchaseLinkDecisionLogSummary,
   purchaseLinkQuotationSelectedState,
-  productPurchaseLinkReply,
-  PURCHASE_LINK_RULE_TITLE,
+  renderQuotationRoutingTemplate,
   shouldOfferProductPurchaseLink,
   shouldWaitForProductPurchaseDecision,
 } from '../../shared/productPurchaseLink';
 import { resolveProductByUrl } from './productIntelligenceService';
+import { getQuotationRoutingRule } from './aiBehaviorService';
 
 
 export interface BrainResult {
@@ -63,6 +62,7 @@ export interface BrainResult {
     productId: string;
     productName: string;
     ruleTitle: string;
+    rulePriority: number;
     presentation: 'CURRENT_PAGE' | 'EXTERNAL_LINK';
   };
 
@@ -71,6 +71,7 @@ export interface BrainResult {
     currentPageProduct: { id: string; name: string } | null;
     detectedProduct: { id: string; name: string } | null;
     purchaseUrl: string | null;
+    purchaseRequested: boolean;
     orderedQuestions: Array<{ order: number; fieldName: string; text: string }>;
     registrationStatus: string;
   };
@@ -263,7 +264,11 @@ export async function processBrainLayer(params: {
 
   // Step 2: Intent & Stage Detection
   const detectedIntent = detectIntent(userMessageContent, historyText);
-  const intent = extractedKnowledge.matchedProduct && isProductPurchaseIntent(userMessageContent)
+  const productPurchaseRequested = hasRecentProductPurchaseIntent(
+    userMessageContent,
+    messageHistory.filter((message) => message.senderType === 'CUSTOMER').map((message) => message.content),
+  );
+  const intent = extractedKnowledge.matchedProduct && productPurchaseRequested
     ? 'Insurance Quotation'
     : detectedIntent;
   const stage = detectCustomerStage(messageHistory.length, intent, customer.leadScore || 50, historyText);
@@ -278,11 +283,14 @@ export async function processBrainLayer(params: {
   const registrationStatus = typeof existingCollectedData.quotationSubmission?.status === 'string'
     ? existingCollectedData.quotationSubmission.status
     : 'NOT_SUBMITTED';
+  const quotationRoutingRule = await getQuotationRoutingRule();
+  const routingRuleActive = quotationRoutingRule?.status === 'ACTIVE';
   let deterministicReply: string | null = null;
   let quotationState: BrainResult['quotationState'];
   let purchaseLinkOffer: BrainResult['purchaseLinkOffer'];
 
   if (
+    quotationRoutingRule && routingRuleActive &&
     extractedKnowledge.matchedProduct &&
     shouldOfferProductPurchaseLink({
       intent,
@@ -298,16 +306,23 @@ export async function processBrainLayer(params: {
       purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
       currentPageUrl,
     });
-    deterministicReply = samePage
-      ? currentPageQuotationReply()
-      : productPurchaseLinkReply(extractedKnowledge.matchedProduct.purchaseUrl!);
+    const routingTemplate = samePage
+      ? quotationRoutingRule.templates.samePageResponse
+      : quotationRoutingRule.templates.differentPageResponse;
+    deterministicReply = renderQuotationRoutingTemplate(routingTemplate, {
+      productName: extractedKnowledge.matchedProduct.name,
+      purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
+      currentPageUrl,
+    });
     purchaseLinkOffer = {
       productId: extractedKnowledge.matchedProduct.id,
       productName: extractedKnowledge.matchedProduct.name,
-      ruleTitle: PURCHASE_LINK_RULE_TITLE,
+      ruleTitle: quotationRoutingRule.title,
+      rulePriority: quotationRoutingRule.sortOrder,
       presentation: samePage ? 'CURRENT_PAGE' : 'EXTERNAL_LINK',
     };
   } else if (
+    quotationRoutingRule && routingRuleActive &&
     extractedKnowledge.matchedProduct &&
     shouldWaitForProductPurchaseDecision({
       productId: extractedKnowledge.matchedProduct.id,
@@ -320,6 +335,11 @@ export async function processBrainLayer(params: {
     // The link has been offered and the customer has not selected the detailed
     // quotation path yet. Do not expose nextQuestion to the LLM on this turn.
     extractedKnowledge.quotationWorkflow = null;
+    deterministicReply = renderQuotationRoutingTemplate(quotationRoutingRule.templates.awaitingChoiceResponse, {
+      productName: extractedKnowledge.matchedProduct.name,
+      purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
+      currentPageUrl,
+    });
   } else if (explicitFormRequested && extractedKnowledge.matchedProduct) {
     deterministicReply = quotationFormReply();
   } else if (
@@ -387,8 +407,16 @@ export async function processBrainLayer(params: {
       isCompleted: evaluation.isCompleted,
     };
 
-    deterministicReply = nextQuestion
-      ? quotationQuestionReply(nextQuestion)
+    const questionReply = nextQuestion ? quotationQuestionReply(nextQuestion) : null;
+    const chatStartPrefix = questionReply && directQuotationRequested && conversation.currentProductId !== product.id && quotationRoutingRule && routingRuleActive
+      ? renderQuotationRoutingTemplate(quotationRoutingRule.templates.chatStartResponse, {
+          productName: product.name,
+          purchaseUrl: product.purchaseUrl,
+          currentPageUrl,
+        })
+      : '';
+    deterministicReply = questionReply
+      ? [chatStartPrefix, questionReply].filter(Boolean).join('\n')
       : evaluation.isCompleted
         ? quotationCompletedReply()
         : null;
@@ -402,6 +430,7 @@ export async function processBrainLayer(params: {
       ? { id: extractedKnowledge.matchedProduct.id, name: extractedKnowledge.matchedProduct.name }
       : null,
     purchaseUrl: extractedKnowledge.matchedProduct?.purchaseUrl || null,
+    purchaseRequested: productPurchaseRequested,
     orderedQuestions: [...(extractedKnowledge.quotationWorkflow?.allQuestions || [])]
       .sort((a, b) => a.order - b.order)
       .map((question) => ({
@@ -750,7 +779,7 @@ Call Customer
   let generatedTask: any = undefined;
   let generatedOperatorSummary = '';
   let validation = deterministicReply
-    ? { valid: true, reason: purchaseLinkOffer ? PURCHASE_LINK_RULE_TITLE : 'Backend-enforced quotation workflow response' }
+    ? { valid: true, reason: purchaseLinkOffer ? purchaseLinkOffer.ruleTitle : 'Backend-enforced quotation workflow response' }
     : { valid: false, reason: '' };
   let retryCount = 0;
   let validationStatus: 'PASSED' | 'REJECTED' | 'REGENERATED' = 'PASSED';

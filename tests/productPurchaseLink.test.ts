@@ -4,9 +4,10 @@ import {
   isDirectQuotationWorkflowRequest,
   isExplicitProductPurchaseLinkRequest,
   isProductPurchaseIntent,
+  DEFAULT_QUOTATION_ROUTING_TEMPLATES,
   normalizeProductPurchaseUrl,
   offeredPurchaseLinkProductIds,
-  productPurchaseLinkReply,
+  renderQuotationRoutingTemplate,
   purchaseLinkAwaitingState,
   purchaseLinkQuotationSelectedState,
   purchaseLinkDecisionLogSummary,
@@ -26,13 +27,17 @@ import {
 
 const productId = 'building-managers';
 const purchaseUrl = 'https://bimehjam.example/buy/building-managers';
+const productPurchaseLinkReply = (url: string) => renderQuotationRoutingTemplate(
+  DEFAULT_QUOTATION_ROUTING_TEMPLATES.differentPageResponse,
+  { productName: 'بیمه مسئولیت مدیر ساختمان', purchaseUrl: url },
+);
 
 test('building managers price request offers its valid URL only once', () => {
   const input = { intent: 'Insurance Quotation', productId, purchaseUrl, message: 'قیمت بیمه مسئولیت مدیران ساختمان' };
   assert.equal(shouldOfferProductPurchaseLink(input), true);
   assert.equal(
     productPurchaseLinkReply(purchaseUrl),
-    `می‌توانید با لینک زیر خودتان استعلام قیمت انجام دهید:\n${purchaseUrl}\nاگر می‌خواهید ما برایتان قیمت بگیریم و مشاوره بدهیم، اعلام کنید.`,
+    `برای استعلام آنلاین بیمه مسئولیت مدیر ساختمان از لینک زیر استفاده کنید:\n${purchaseUrl}\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.`,
   );
   assert.doesNotMatch(productPurchaseLinkReply(purchaseUrl), /نوع کاربری ساختمان/);
   assert.equal(shouldOfferProductPurchaseLink({ ...input, offeredProductIds: [productId] }), false);
@@ -166,7 +171,7 @@ test('only http and https purchase URLs are accepted', () => {
 });
 
 test('purchase-link behavior rule is logged and has higher priority than Ask Quotation Questions', () => {
-  assert.equal(PURCHASE_LINK_RULE_TITLE, 'پیشنهاد لینک خرید پیش از شروع استعلام');
+  assert.equal(PURCHASE_LINK_RULE_TITLE, 'هدایت استعلام قیمت و خرید آنلاین');
   assert.ok(PURCHASE_LINK_RULE_SORT_ORDER < 6);
-  assert.match(purchaseLinkDecisionLogSummary('بیمه مسئولیت مدیر ساختمان'), /پیشنهاد لینک خرید پیش از شروع استعلام/);
+  assert.match(purchaseLinkDecisionLogSummary('بیمه مسئولیت مدیر ساختمان'), /هدایت استعلام قیمت و خرید آنلاین/);
 });

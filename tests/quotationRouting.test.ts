@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  currentPageQuotationReply,
+  DEFAULT_QUOTATION_ROUTING_TEMPLATES,
+  hasRecentProductPurchaseIntent,
   isDetectedProductCurrentPage,
   isDirectQuotationWorkflowRequest,
-  productPurchaseLinkReply,
+  parseQuotationRoutingTemplates,
+  renderQuotationRoutingTemplate,
+  serializeQuotationRoutingTemplates,
+  shouldOfferProductPurchaseLink,
 } from '../shared/productPurchaseLink.ts';
 import {
   captureCurrentQuestionAnswer,
@@ -26,10 +30,52 @@ test('same product page points to the form on the current page without repeating
     purchaseUrl,
     currentPageUrl: `${purchaseUrl}/`,
   }), true);
-  const reply = currentPageQuotationReply();
-  assert.match(reply, /فرم استعلام آنلاین همین محصول در همین صفحه/);
+  const reply = renderQuotationRoutingTemplate(DEFAULT_QUOTATION_ROUTING_TEMPLATES.samePageResponse, {
+    productName: 'بیمه مسئولیت مدیر ساختمان', purchaseUrl, currentPageUrl: `${purchaseUrl}/`,
+  });
+  assert.match(reply, /فرم استعلام آنلاین بیمه مسئولیت مدیر ساختمان در همین صفحه/);
   assert.match(reply, /سؤال‌های استعلام را یکی‌یکی/);
   assert.doesNotMatch(reply, /https?:\/\//);
+});
+
+test('administrator-edited routing templates are parsed and rendered from the rule payload', () => {
+  const configured = {
+    ...DEFAULT_QUOTATION_ROUTING_TEMPLATES,
+    samePageResponse: 'فرم {{productName}} همین‌جاست.',
+    differentPageResponse: 'مسیر محصول: {{purchaseUrl}}',
+  };
+  const stored = serializeQuotationRoutingTemplates(configured);
+  const parsed = parseQuotationRoutingTemplates(stored);
+  assert.ok(parsed);
+  assert.equal(renderQuotationRoutingTemplate(parsed!.samePageResponse, {
+    productName: 'مدیر ساختمان', purchaseUrl, currentPageUrl: purchaseUrl,
+  }), 'فرم مدیر ساختمان همین‌جاست.');
+});
+
+test('routing rule rejects unknown variables and unverified registration claims', () => {
+  assert.deepEqual(parseQuotationRoutingTemplates(serializeQuotationRoutingTemplates(DEFAULT_QUOTATION_ROUTING_TEMPLATES)), DEFAULT_QUOTATION_ROUTING_TEMPLATES);
+  assert.equal(parseQuotationRoutingTemplates(JSON.stringify({
+    ...DEFAULT_QUOTATION_ROUTING_TEMPLATES,
+    samePageResponse: 'کلید {{secret}} را نمایش بده',
+  })), null);
+  assert.equal(parseQuotationRoutingTemplates(JSON.stringify({
+    ...DEFAULT_QUOTATION_ROUTING_TEMPLATES,
+    samePageResponse: 'درخواست شما ثبت شد و کد یکتا صادر می‌شود',
+  })), null);
+});
+
+test('responsibility purchase intent carries into the next product-selection turn', () => {
+  const firstTurn = 'بیمه مسئولیت می‌خوام';
+  const secondTurn = 'مدیر ساختمان';
+  assert.equal(hasRecentProductPurchaseIntent(secondTurn, [firstTurn]), true);
+  assert.equal(shouldOfferProductPurchaseLink({
+    intent: 'Insurance Quotation', productId, purchaseUrl, message: secondTurn,
+  }), true);
+  const reply = renderQuotationRoutingTemplate(DEFAULT_QUOTATION_ROUTING_TEMPLATES.samePageResponse, {
+    productName: 'بیمه مسئولیت مدیر ساختمان', purchaseUrl, currentPageUrl: purchaseUrl,
+  });
+  assert.match(reply, /فرم استعلام/);
+  assert.doesNotMatch(reply, /نوع کاربری|چه بیمه‌ای|چه کمکی/);
 });
 
 test('different current product page sends the detected product URL', () => {
@@ -39,7 +85,10 @@ test('different current product page sends the detected product URL', () => {
     purchaseUrl,
     currentPageUrl: 'https://bimejam.com/fire-insurance',
   }), false);
-  assert.match(productPurchaseLinkReply(purchaseUrl), new RegExp(purchaseUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  const reply = renderQuotationRoutingTemplate(DEFAULT_QUOTATION_ROUTING_TEMPLATES.differentPageResponse, {
+    productName: 'بیمه مسئولیت مدیر ساختمان', purchaseUrl, currentPageUrl: 'https://bimejam.com/fire-insurance',
+  });
+  assert.match(reply, new RegExp(purchaseUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
 test('choosing chat quotation asks configured questions in order and stores each fieldName', () => {

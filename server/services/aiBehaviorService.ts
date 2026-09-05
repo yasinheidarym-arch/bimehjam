@@ -7,6 +7,9 @@ import {
 } from '../../shared/humanHandoffRule';
 import {
   LEGACY_QUOTATION_RULE_TITLE,
+  LEGACY_PURCHASE_LINK_RULE_CATEGORY,
+  LEGACY_PURCHASE_LINK_RULE_TITLE,
+  parseQuotationRoutingTemplates,
   PURCHASE_LINK_RULE_CATEGORY,
   PURCHASE_LINK_RULE_DIRECTIVE,
   PURCHASE_LINK_RULE_ID,
@@ -90,7 +93,9 @@ async function ensureSeedRules() {
       OR: [
         { id: PURCHASE_LINK_RULE_ID },
         { category: PURCHASE_LINK_RULE_CATEGORY },
+        { category: LEGACY_PURCHASE_LINK_RULE_CATEGORY },
         { title: PURCHASE_LINK_RULE_TITLE },
+        { title: LEGACY_PURCHASE_LINK_RULE_TITLE },
         { title: LEGACY_QUOTATION_RULE_TITLE },
       ],
     },
@@ -111,10 +116,8 @@ async function ensureSeedRules() {
     });
   } else if (
     purchaseLinkRule.title !== PURCHASE_LINK_RULE_TITLE ||
-    purchaseLinkRule.directive !== PURCHASE_LINK_RULE_DIRECTIVE ||
     purchaseLinkRule.category !== PURCHASE_LINK_RULE_CATEGORY ||
-    purchaseLinkRule.enforcementLevel !== 'STRICT' ||
-    purchaseLinkRule.sortOrder !== PURCHASE_LINK_RULE_SORT_ORDER
+    !parseQuotationRoutingTemplates(purchaseLinkRule.directive)
   ) {
     await prisma.aiRule.update({
       where: { id: purchaseLinkRule.id },
@@ -122,7 +125,7 @@ async function ensureSeedRules() {
         title: PURCHASE_LINK_RULE_TITLE,
         directive: PURCHASE_LINK_RULE_DIRECTIVE,
         sortOrder: PURCHASE_LINK_RULE_SORT_ORDER,
-        status: purchaseLinkRule.title === LEGACY_QUOTATION_RULE_TITLE ? 'ACTIVE' : purchaseLinkRule.status,
+        status: [LEGACY_QUOTATION_RULE_TITLE, LEGACY_PURCHASE_LINK_RULE_TITLE].includes(purchaseLinkRule.title) ? 'ACTIVE' : purchaseLinkRule.status,
         category: PURCHASE_LINK_RULE_CATEGORY,
         enforcementLevel: 'STRICT',
       },
@@ -229,7 +232,14 @@ export async function updateBehaviorRule(
   const updateData: any = {};
   const existing = await prisma.aiRule.findUnique({ where: { id } });
   if (!existing) throw new Error('قانون رفتار یافت نشد.');
-  if (existing.category === FULL_NAME_HANDOFF_RULE_CATEGORY || existing.category === PURCHASE_LINK_RULE_CATEGORY) {
+  if (existing.category === FULL_NAME_HANDOFF_RULE_CATEGORY) {
+    if (data.status !== undefined) updateData.status = data.status;
+  } else if (existing.category === PURCHASE_LINK_RULE_CATEGORY) {
+    if (data.directive !== undefined) {
+      if (!parseQuotationRoutingTemplates(data.directive)) throw new Error('متن‌های قانون هدایت استعلام نامعتبر هستند.');
+      updateData.directive = data.directive.trim();
+    }
+    if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
     if (data.status !== undefined) updateData.status = data.status;
   } else {
   if (data.title !== undefined) updateData.title = data.title.trim();
@@ -253,6 +263,21 @@ export async function updateBehaviorRule(
     enforcementLevel: updated.enforcementLevel,
     createdAt: updated.createdAt,
     updatedAt: updated.updatedAt,
+  };
+}
+
+export async function getQuotationRoutingRule() {
+  await ensureSeedRules();
+  const rule = await prisma.aiRule.findFirst({ where: { category: PURCHASE_LINK_RULE_CATEGORY } });
+  if (!rule) return null;
+  const templates = parseQuotationRoutingTemplates(rule.directive);
+  if (!templates) return null;
+  return {
+    id: rule.id,
+    title: rule.title,
+    status: rule.status === 'ACTIVE' ? 'ACTIVE' as const : 'INACTIVE' as const,
+    sortOrder: rule.sortOrder,
+    templates,
   };
 }
 

@@ -1,11 +1,67 @@
 export const PURCHASE_LINK_METADATA_KEY = 'purchaseLinkProductId';
 export const PURCHASE_LINK_RULE_ID = 'system-purchase-link-before-quotation';
-export const PURCHASE_LINK_RULE_CATEGORY = 'SYSTEM_PURCHASE_LINK_BEFORE_QUOTATION';
-export const PURCHASE_LINK_RULE_TITLE = 'پیشنهاد لینک خرید پیش از شروع استعلام';
+export const PURCHASE_LINK_RULE_CATEGORY = 'SYSTEM_QUOTATION_PURCHASE_ROUTING';
+export const PURCHASE_LINK_RULE_TITLE = 'هدایت استعلام قیمت و خرید آنلاین';
 export const LEGACY_QUOTATION_RULE_TITLE = 'استعلام قیمت آنلاین، ارجاع به کارشناس و پاسخ کوتاه و انسانی';
-export const PURCHASE_LINK_RULE_DIRECTIVE = `شرط: محصول با اطمینان مشخص شده، intent خرید/قیمت است و purchaseUrl معتبر دارد.
-رفتار: عبارت‌های «می‌خوام»، «می‌خواهم»، «نیاز دارم»، «می‌خواهم بخرم» و درخواست قیمت برای محصول مشخص، قصد خرید/استعلام هستند. پیش از هر سؤال quotation، لینک خرید/استعلام آنلاین همان محصول را فقط یک‌بار پیشنهاد بده و تا انتخاب مشتری برای «استعلام دقیق» سؤال استعلام نپرس. اگر URL خالی است، سؤال‌های استعلام مستقیماً و دقیقاً به ترتیب backend آغاز شوند. درخواست صریح مجدد لینک باید همان لینک را دوباره نمایش دهد. این قانون بر «Ask Quotation Questions» اولویت دارد و ترتیب قطعی را backend تعیین می‌کند.`;
 export const PURCHASE_LINK_RULE_SORT_ORDER = 0;
+export const LEGACY_PURCHASE_LINK_RULE_TITLE = 'پیشنهاد لینک خرید پیش از شروع استعلام';
+export const LEGACY_PURCHASE_LINK_RULE_CATEGORY = 'SYSTEM_PURCHASE_LINK_BEFORE_QUOTATION';
+
+export type QuotationRoutingTemplates = {
+  version: 1;
+  samePageResponse: string;
+  differentPageResponse: string;
+  awaitingChoiceResponse: string;
+  chatStartResponse: string;
+};
+
+export const DEFAULT_QUOTATION_ROUTING_TEMPLATES: QuotationRoutingTemplates = {
+  version: 1,
+  samePageResponse: 'فرم استعلام آنلاین {{productName}} در همین صفحه در دسترس است و می‌توانید خودتان آن را تکمیل کنید.\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.',
+  differentPageResponse: 'برای استعلام آنلاین {{productName}} از لینک زیر استفاده کنید:\n{{purchaseUrl}}\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.',
+  awaitingChoiceResponse: 'اگر می‌خواهید استعلام را در چت انجام دهیم، بگویید «خودتان استعلام کنید»؛ در غیر این صورت می‌توانید فرم آنلاین را تکمیل کنید.',
+  chatStartResponse: 'حتماً؛ سؤال‌های استعلام را یکی‌یکی می‌پرسم.',
+};
+
+export const PURCHASE_LINK_RULE_DIRECTIVE = JSON.stringify(DEFAULT_QUOTATION_ROUTING_TEMPLATES, null, 2);
+
+const ROUTING_TEMPLATE_KEYS = ['samePageResponse', 'differentPageResponse', 'awaitingChoiceResponse', 'chatStartResponse'] as const;
+const ROUTING_TEMPLATE_VARIABLES = new Set(['productName', 'purchaseUrl', 'currentPageUrl']);
+const FORBIDDEN_UNVERIFIED_CLAIM = /کد\s*یکتا|کمتر از\s*[۰-۹0-9]+\s*دقیقه|قیمت\s*قطعی|زمان\s*تضمینی|درخواست.*(?:ثبت|ارسال|ارجاع)\s*(?:شد|گردید)/i;
+
+export function parseQuotationRoutingTemplates(value: unknown): QuotationRoutingTemplates | null {
+  try {
+    const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+    if (!parsed || typeof parsed !== 'object' || (parsed as Record<string, unknown>).version !== 1) return null;
+    for (const key of ROUTING_TEMPLATE_KEYS) {
+      const template = (parsed as Record<string, unknown>)[key];
+      if (typeof template !== 'string' || !template.trim()) return null;
+      if (FORBIDDEN_UNVERIFIED_CLAIM.test(template)) return null;
+      for (const match of template.matchAll(/{{\s*([^{}]+?)\s*}}/g)) {
+        if (!ROUTING_TEMPLATE_VARIABLES.has(match[1])) return null;
+      }
+    }
+    if (!String((parsed as Record<string, unknown>).differentPageResponse).includes('{{purchaseUrl}}')) return null;
+    return parsed as QuotationRoutingTemplates;
+  } catch {
+    return null;
+  }
+}
+
+export function serializeQuotationRoutingTemplates(value: QuotationRoutingTemplates): string {
+  if (!parseQuotationRoutingTemplates(value)) throw new Error('قالب‌های قانون هدایت استعلام نامعتبر هستند.');
+  return JSON.stringify(value, null, 2);
+}
+
+export function renderQuotationRoutingTemplate(
+  template: string,
+  context: { productName: string; purchaseUrl?: string | null; currentPageUrl?: string | null },
+): string {
+  return template.replace(/{{\s*([^{}]+?)\s*}}/g, (_match, key: string) => {
+    if (!ROUTING_TEMPLATE_VARIABLES.has(key)) return '';
+    return String(context[key as keyof typeof context] || '');
+  }).trim();
+}
 
 export function normalizeProductPurchaseUrl(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
@@ -66,6 +122,21 @@ export function isProductPurchaseIntent(message: string): boolean {
   ].some((pattern) => pattern.test(normalized));
 }
 
+export function hasRecentProductPurchaseIntent(
+  currentMessage: string,
+  recentCustomerMessages: Iterable<string>,
+): boolean {
+  if (isProductPurchaseIntent(currentMessage) || isInsurancePriceIntent(currentMessage)) return true;
+  return [...recentCustomerMessages].slice(-4).some((message) =>
+    isProductPurchaseIntent(message) || isInsurancePriceIntent(message)
+  );
+}
+
+function isInsurancePriceIntent(message: string): boolean {
+  const normalized = String(message || '').replace(/‌/g, ' ').trim().toLowerCase();
+  return /قیمت|استعلام|خرید|هزینه|نرخ|چقدر/.test(normalized);
+}
+
 export function isExplicitProductPurchaseLinkRequest(message: string): boolean {
   const normalized = String(message || '').replace(/‌/g, ' ').trim().toLowerCase();
   return /(لینک).*(بفرست|ارسال|نمایش|بده|می\s*خوام|می\s*خواهم)|((بفرست|ارسال|نمایش|بده).*(لینک))/.test(normalized);
@@ -108,17 +179,6 @@ export function purchaseLinkAwaitingState(productId: string) {
 
 export function purchaseLinkQuotationSelectedState(productId: string) {
   return { status: 'DETAILED_QUOTATION_SELECTED', productId } as const;
-}
-
-export function productPurchaseLinkReply(purchaseUrl: string): string {
-  const safeUrl = normalizeProductPurchaseUrl(purchaseUrl);
-  if (!safeUrl) throw new Error('A valid http/https product purchase URL is required.');
-
-  return `می‌توانید با لینک زیر خودتان استعلام قیمت انجام دهید:\n${safeUrl}\nاگر می‌خواهید ما برایتان قیمت بگیریم و مشاوره بدهیم، اعلام کنید.`;
-}
-
-export function currentPageQuotationReply(): string {
-  return 'فرم استعلام آنلاین همین محصول در همین صفحه در دسترس است و می‌توانید خودتان آن را تکمیل کنید.\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.';
 }
 
 export function purchaseLinkDecisionLogSummary(productName: string): string {
