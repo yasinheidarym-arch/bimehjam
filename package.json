@@ -15,6 +15,7 @@
     "test:quotation-workflow": "tsx --test tests/quotationConversationFlow.test.ts"
     ,"test:task-sms": "tsx --test tests/fastNotifyTaskSms.test.ts"
     ,"test:product-purchase-link": "tsx --test tests/productPurchaseLink.test.ts"
+    ,"test:quotation-routing": "tsx --test tests/quotationRouting.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

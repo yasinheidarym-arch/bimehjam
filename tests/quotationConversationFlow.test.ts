@@ -63,7 +63,8 @@ test('answering every required question completes the quotation workflow', () =>
 
   assert.equal(Object.keys(collected).length, 20);
   assert.equal(currentRequiredQuestion(questions, collected), null);
-  assert.match(quotationCompletedReply(), /اطلاعات استعلام شما کامل شد/);
+  assert.match(quotationCompletedReply(), /پاسخ سؤال‌های استعلام کامل شد/);
+  assert.match(quotationCompletedReply(), /هنوز ثبت نشده|تأیید نهایی/);
 });
 
 test('an explicit customer request for the online form uses the alternate form path', () => {

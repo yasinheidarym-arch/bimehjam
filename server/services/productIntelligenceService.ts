@@ -266,7 +266,7 @@ export async function seedProductMapData() {
             name: item.product_name,
             slug: uniqueSlug,
             category: item.category,
-            description: `پوشش تخصصی و آنلاین ${item.product_name} با صدور فوری در بیمه جم`,
+            description: `پوشش تخصصی و استعلام آنلاین ${item.product_name} در بیمه جم`,
             status: 'ACTIVE',
             coverage: `پوشش کامل جانی و مالی مرتبط با ${item.product_name}`,
             benefits: 'ارسال رایگان بیمه‌نامه، تخفیف نقد و اقساط ویژه',
@@ -365,8 +365,10 @@ export function normalizeUrlPath(urlOrPath: string): string {
 /**
  * Resolves an incoming URL/Path to its exact Insurance Product & Quotation Questions
  */
-export async function resolveProductByUrl(urlOrPath: string) {
-  await seedProductMapData();
+export async function resolveProductByUrl(urlOrPath: string, options: { seedIfEmpty?: boolean } = {}) {
+  if (options.seedIfEmpty !== false) {
+    await seedProductMapData();
+  }
 
   const cleanPath = normalizeUrlPath(urlOrPath);
   if (!cleanPath) return null;

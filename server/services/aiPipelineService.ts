@@ -18,6 +18,11 @@ import {
   offeredPurchaseLinkProductIds,
   PURCHASE_LINK_METADATA_KEY,
 } from '../../shared/productPurchaseLink';
+import {
+  advanceQuotationSubmission,
+  QuotationSubmissionState,
+  startQuotationSubmission,
+} from './quotationSubmissionFlow';
 
 const DEFAULT_GOFTINO_HANDOFF_MESSAGE = 'برای بررسی دقیق درخواست شما، همکاران متخصص بیمه جم ادامهٔ گفتگو را پیگیری می‌کنند. 🌹';
 
@@ -68,6 +73,7 @@ function humanHandoffResult(input: {
   fullName?: string | null;
   task?: { create: true; title: string; type: string; priority: string; description: string };
   deferHumanHandoff?: boolean;
+  handoffCompleted?: boolean;
 }) {
   return {
     intent: 'Human Operator Request', stage: 'Human Handoff', missingInfo: '', loadedKnowledgeSummary: '',
@@ -78,7 +84,7 @@ function humanHandoffResult(input: {
     modelUsed: 'Backend Rule Engine', task: input.task,
     operatorSummary: input.task?.description || '', deferHumanHandoff: input.deferHumanHandoff,
     handoffReason: input.reason, customerFullName: input.fullName,
-    handoffCompleted: Boolean(input.task),
+    handoffCompleted: input.handoffCompleted ?? Boolean(input.task),
   };
 }
 
@@ -556,12 +562,93 @@ export async function runAiPipelineForMessage(params: {
     const handoffRequestRegex = /کارشناس|اپراتور|انسان|تماس|مشاور تلفنی|وصل کن/i;
     const customerRequestedHuman = handoffRequestRegex.test(userMessageContent);
     const existingCollectedData = parseConversationCollectedData(conversation.collectedData);
+    const pendingQuotationSubmission = existingCollectedData.quotationSubmission?.pending === true
+      ? existingCollectedData.quotationSubmission as QuotationSubmissionState
+      : null;
+    const productQuotationActive = Boolean(
+      conversation.currentProductId ||
+      existingCollectedData.purchaseLinkState?.status === 'AWAITING_CUSTOMER_CHOICE',
+    );
     const pendingHandoff = existingCollectedData.humanHandoff?.pending === true
       ? existingCollectedData.humanHandoff as HumanHandoffNameState
       : null;
     const fullNameHandoffRuleActive = await isFullNameHandoffRuleActive();
 
-    if (pendingHandoff) {
+    if (pendingQuotationSubmission) {
+      const decision = advanceQuotationSubmission(pendingQuotationSubmission, userMessageContent);
+      const profile = decision.state.profile;
+      await prisma.customer.update({
+        where: { id: customer.id },
+        data: {
+          ...(profile.fullName ? { name: profile.fullName } : {}),
+          ...(profile.mobile ? { phone: profile.mobile } : {}),
+          ...(profile.city ? { city: profile.city } : {}),
+        },
+      });
+      if (profile.fullName) customer.name = profile.fullName;
+      if (profile.mobile) customer.phone = profile.mobile;
+      if (profile.city) customer.city = profile.city;
+
+      if (decision.action === 'SUBMIT') {
+        const taskTitle = `محاسبه قیمت ${decision.state.productName}`;
+        try {
+          const existingTask = await prisma.task.findFirst({
+            where: { conversationId, title: taskTitle, type: 'Prepare Quotation', source: 'AI' },
+            orderBy: { createdAt: 'desc' },
+          });
+          const task = existingTask || await createSystemTask({
+              customerId,
+              conversationId,
+              title: taskTitle,
+              description: `درخواست تأییدشده مشتری برای ${decision.state.productName}\n${decision.state.answers.map((answer) => `${answer.question}: ${answer.value}`).join('\n')}`,
+              type: 'Prepare Quotation',
+              priority: 'HIGH',
+              assignedUserId: conversation.assignedUserId || undefined,
+            });
+          brainResult = humanHandoffResult({
+            replyText: 'درخواست شما با موفقیت ثبت شد و برای بررسی در اختیار کارشناس قرار گرفت.',
+            reason: 'QUOTATION_COMPLETED',
+            fullName: profile.fullName,
+            collectedData: {
+              ...existingCollectedData,
+              quotationSubmission: { ...decision.state, pending: false, status: 'SUBMITTED', taskId: task.id },
+            },
+            handoffCompleted: true,
+          });
+        } catch (submissionError: any) {
+          console.error('QUOTATION SUBMISSION ERROR:', submissionError?.message || 'unknown error');
+          const persistedTask = await prisma.task.findFirst({
+            where: { conversationId, title: taskTitle, type: 'Prepare Quotation', source: 'AI' },
+            orderBy: { createdAt: 'desc' },
+          }).catch(() => null);
+          brainResult = humanHandoffResult(persistedTask ? {
+            replyText: 'درخواست شما با موفقیت ثبت شد و برای بررسی در اختیار کارشناس قرار گرفت.',
+            reason: 'QUOTATION_COMPLETED',
+            fullName: profile.fullName,
+            collectedData: {
+              ...existingCollectedData,
+              quotationSubmission: { ...decision.state, pending: false, status: 'SUBMITTED', taskId: persistedTask.id },
+            },
+            handoffCompleted: true,
+          } : {
+            replyText: 'ثبت درخواست در حال حاضر انجام نشد. اطلاعات شما حفظ شده است؛ لطفاً دوباره تأیید کنید.',
+            reason: 'QUOTATION_COMPLETED',
+            collectedData: {
+              ...existingCollectedData,
+              quotationSubmission: { ...decision.state, pending: true, status: 'NOT_SUBMITTED' },
+            },
+            deferHumanHandoff: true,
+          });
+        }
+      } else {
+        brainResult = humanHandoffResult({
+          replyText: decision.replyText,
+          reason: 'QUOTATION_COMPLETED',
+          collectedData: { ...existingCollectedData, quotationSubmission: decision.state },
+          deferHumanHandoff: true,
+        });
+      }
+    } else if (pendingHandoff) {
       const decision = resolveHumanHandoffNameRule({
         ruleActive: fullNameHandoffRuleActive,
         reason: pendingHandoff.reason,
@@ -610,7 +697,7 @@ export async function runAiPipelineForMessage(params: {
         status: 'WARNING',
         details: `پاسخ تخصصی AI متوقف شد: ${policyDecision.reason}`,
       });
-    } else if (customerRequestedHuman) {
+    } else if (customerRequestedHuman && !productQuotationActive) {
       const decision = resolveHumanHandoffNameRule({ ruleActive: fullNameHandoffRuleActive, reason: 'DIRECT_HUMAN_REQUEST', existingCustomerName: customer.name });
       if (decision.action === 'ASK_NAME') {
         brainResult = humanHandoffResult({
@@ -653,22 +740,40 @@ export async function runAiPipelineForMessage(params: {
         goftinoPolicyTitle: policyDecision.policy.goftinoTopicTitle,
         restrictKnowledgeScope: true,
         offeredPurchaseLinkProductIds: offeredPurchaseLinkProductIds(priorPurchaseLinkMessages),
+        currentPageUrl: (() => {
+          try {
+            const metadata = JSON.parse(customer.metadata || '{}');
+            return typeof metadata.lastUrl === 'string' ? metadata.lastUrl : null;
+          } catch {
+            return null;
+          }
+        })(),
       });
 
       if (brainResult.quotationState?.isCompleted && brainResult.task?.create) {
-        const decision = resolveHumanHandoffNameRule({ ruleActive: fullNameHandoffRuleActive, reason: 'QUOTATION_COMPLETED', existingCustomerName: customer.name });
-        if (decision.action === 'ASK_NAME') {
-          brainResult.replyText = decision.replyText;
-          brainResult.task = undefined;
-          brainResult.deferHumanHandoff = true;
-          brainResult.collectedData = { ...brainResult.collectedData, humanHandoff: decision.state };
-        } else {
-          const reasonText = handoffReasonLabel(decision.reason);
-          brainResult.customerFullName = decision.fullName;
-          brainResult.handoffReason = decision.reason;
-          brainResult.collectedData = { ...brainResult.collectedData, humanHandoff: null, customerIdentity: { fullName: decision.fullName, status: decision.nameStatus }, handoffReason: reasonText };
-          brainResult.task.description = `${brainResult.task.description || ''}\nعلت ارجاع: ${reasonText}\nنام مشتری: ${decision.fullName || 'ثبت نشده'}`.trim();
-        }
+        const answeredFields = brainResult.extractedKnowledge.quotationWorkflow?.answeredFields || {};
+        const answers = (brainResult.extractedKnowledge.quotationWorkflow?.allQuestions || [])
+          .filter((question) => answeredFields[question.fieldName] !== undefined && answeredFields[question.fieldName] !== '')
+          .map((question) => ({
+            order: question.order,
+            question: question.aiQuestion || question.title,
+            fieldName: question.fieldName,
+            value: String(answeredFields[question.fieldName]),
+          }));
+        const submission = startQuotationSubmission({
+          sessionId: brainResult.quotationState.sessionId,
+          productId: brainResult.quotationState.productId,
+          productName: brainResult.quotationState.productName,
+          answers,
+          existingProfile: { fullName: customer.name, mobile: customer.phone, city: customer.city },
+        });
+        brainResult.replyText = submission.replyText;
+        brainResult.task = undefined;
+        brainResult.deferHumanHandoff = true;
+        brainResult.collectedData = {
+          ...brainResult.collectedData,
+          quotationSubmission: submission.state,
+        };
       }
 
     }
@@ -718,8 +823,15 @@ export async function runAiPipelineForMessage(params: {
         });
         console.log('=====================================');
 
+        if (brainResult.handoffCompleted) {
+          brainResult.replyText = 'درخواست شما با موفقیت ثبت شد و برای بررسی در اختیار کارشناس قرار گرفت.';
+        }
+
       } catch (taskError: any) {
         console.error('AI TASK CREATION ERROR:', taskError.message);
+        brainResult.replyText = 'ثبت درخواست در حال حاضر انجام نشد. لطفاً کمی بعد دوباره تلاش کنید.';
+        brainResult.handoffCompleted = false;
+        brainResult.deferHumanHandoff = true;
       }
     }
 
@@ -738,6 +850,7 @@ export async function runAiPipelineForMessage(params: {
         relevantArticlesCount: brainResult.extractedKnowledge.relevantArticles?.length || 0,
         matchedObjectionsCount: brainResult.extractedKnowledge.matchedObjections?.length || 0,
         extractedFields: brainResult.extractedKnowledge.quotationWorkflow?.answeredFields || {},
+        workflowContext: brainResult.workflowContext || null,
       }, null, 2),
       durationMs: Date.now() - brainStart,
     });

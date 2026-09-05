@@ -35,7 +35,7 @@ export function quotationFormReply(): string {
 }
 
 export function quotationCompletedReply(): string {
-  return 'اطلاعات استعلام شما کامل شد. برای بررسی و اعلام قیمت نهایی در اختیار کارشناس مربوطه قرار گرفت.';
+  return 'پاسخ سؤال‌های استعلام کامل شد. برای ثبت درخواست، اطلاعات تماس و تأیید نهایی شما لازم است.';
 }
 
 export function currentRequiredQuestion(

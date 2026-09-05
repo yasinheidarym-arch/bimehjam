@@ -19,6 +19,26 @@ export function normalizeProductPurchaseUrl(value: unknown): string | null {
   }
 }
 
+export function normalizeComparablePageUrl(value: unknown): string | null {
+  const normalized = normalizeProductPurchaseUrl(value);
+  if (!normalized) return null;
+  const parsed = new URL(normalized);
+  const pathname = decodeURIComponent(parsed.pathname).replace(/\/+$/, '') || '/';
+  return `${parsed.hostname.toLowerCase()}${pathname.toLowerCase()}`;
+}
+
+export function isDetectedProductCurrentPage(input: {
+  productId: string;
+  currentPageProductId?: string | null;
+  purchaseUrl?: string | null;
+  currentPageUrl?: string | null;
+}): boolean {
+  if (input.currentPageProductId === input.productId) return true;
+  const purchasePage = normalizeComparablePageUrl(input.purchaseUrl);
+  const currentPage = normalizeComparablePageUrl(input.currentPageUrl);
+  return Boolean(purchasePage && currentPage && purchasePage === currentPage);
+}
+
 export function isValidOptionalProductPurchaseUrl(value: unknown): boolean {
   return typeof value !== 'string' || !value.trim() || normalizeProductPurchaseUrl(value) !== null;
 }
@@ -29,6 +49,8 @@ export function isDirectQuotationWorkflowRequest(message: string): boolean {
     /استعلام\s*(دقیق|کامل)/,
     /(خودتان|خودتون|شما|همینجا|همین جا)\s*(انجام|پیگیری|استعلام)/,
     /(آره|اره|بله|باشه|حتما|حتماً)?.*(شما|خودتان|خودتون).*(زحمت).*(بکش|بده)/,
+    /فرم.*(نمی\s*(خوام|خواهم)|مشکل|باز\s*نمی|کار\s*نمی)/,
+    /(کارشناس|اپراتور|انسان|مشاور).*(می\s*(خوام|خواهم)|وصل|انجام|تماس)/,
     /(لینک|خرید آنلاین|آنلاین)\s*(را|رو)?\s*(نمی\s*خواهم|نمیخوام|نمی خواهم|نمی‌خواهم)/,
     /(سؤال|سوال).*(بپرس|شروع)/,
   ].some((pattern) => pattern.test(normalized));
@@ -93,6 +115,10 @@ export function productPurchaseLinkReply(purchaseUrl: string): string {
   if (!safeUrl) throw new Error('A valid http/https product purchase URL is required.');
 
   return `می‌توانید با لینک زیر خودتان استعلام قیمت انجام دهید:\n${safeUrl}\nاگر می‌خواهید ما برایتان قیمت بگیریم و مشاوره بدهیم، اعلام کنید.`;
+}
+
+export function currentPageQuotationReply(): string {
+  return 'فرم استعلام آنلاین همین محصول در همین صفحه در دسترس است و می‌توانید خودتان آن را تکمیل کنید.\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.';
 }
 
 export function purchaseLinkDecisionLogSummary(productName: string): string {

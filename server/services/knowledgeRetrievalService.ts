@@ -1,6 +1,13 @@
 import prisma from '../db/client';
 import { categoryKnowledgeScope, composeScopedKnowledge } from './categoryKnowledgeScope';
 
+export function stripUnverifiedOperationalClaims(value: string): string {
+  return String(value || '')
+    .replace(/[^\n.؟!]*(?:کد\s*یکتا|کمتر از\s*[۰-۹0-9]+\s*دقیقه|زمان\s*تضمینی)[^\n.؟!]*[.؟!]?/gi, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 const CATEGORY_DB_MAP: Record<string, string> = {
   VEHICLE: 'خودرو',
   HEALTH: 'درمان',
@@ -117,7 +124,7 @@ export async function ensureTrainingCenterSeeded() {
         },
         {
           title: 'پاسخگویی هوشمندانه به اعتراض قیمت و رقبا (Objection Handling)',
-          directive: 'در مواجهه با اعتراض به قیمت یا مقایسه با سایر شرکت‌ها، مزایای ویژه بیمه جم از جمله صدور آنی کد یکتا کمتر از ۵ دقیقه، امکان پرداخت اقساطی بدون چک و سود، تخفیف‌های ویژه و پشتیبانی ۲۴ ساعته خسارت را برجسته نمایید.',
+          directive: 'در مواجهه با اعتراض به قیمت یا مقایسه با سایر شرکت‌ها، فقط مزایای ثبت‌شده و قابل‌اثبات بیمه جم را بیان کنید و دربارهٔ زمان صدور یا نتیجهٔ ثبت تضمین ندهید.',
           category: 'OBJECTION_HANDLING',
           enforcementLevel: 'STRICT',
           status: 'ACTIVE',
@@ -148,7 +155,7 @@ export async function ensureTrainingCenterSeeded() {
         introduction: 'بیمه شخص ثالث خسارات مالی و جانی وارد شده به اشخاص ثالث در حوادث رانندگی و همچنین خسارت جانی راننده مقصر حادثه را طبق دیه قانونی جبران می‌نماید.',
         coverage: 'دیه فوت و نقص عضو تا سقف قانونی سال ۱۴۰۴/۱۴۰۵ (۱.۶ میلیارد تومان)، خسارت مالی اشخاص ثالث از ۴۰ میلیون تا ۸۰۰ میلیون تومان، حوادث راننده مقصر.',
         exclusions: 'خسارت وارده به خودروی راننده مقصر، خسارات ناشی از عمد و تبانی، حوادث ناشی از مسکرات یا بدون گواهینامه معتبر.',
-        benefits: 'صدور فوری کمتر از ۵ دقیقه، امکان پرداخت اقساطی تا ۷۰٪ پیش‌پرداخت بدون چک، انتقال کامل سوابق تخفیف عدم خسارت.',
+        benefits: 'امکان پرداخت اقساطی و انتقال سوابق تخفیف عدم خسارت مطابق شرایط تأییدشده محصول.',
         purchaseConditions: 'ارائه تصویر کارت خودرو یا برگ سبز، کارت ملی مالک و بیمه‌نامه سال قبل.',
         renewalRules: 'تخفیف عدم خسارت سالانه ۵٪ محاسبه شده و حداکثر تا ۷۰٪ (۱۴ سال) اعمال می‌گردد.',
         claimProcess: 'اعلام حادثه ظرف ۵ روز، دریافت خسارت مالی بدون کروکی تا سقف ۴۰ میلیون تومان در مراکز پرداخت خسارت بیمه جم.',
@@ -322,7 +329,7 @@ export async function ensureTrainingCenterSeeded() {
         },
         {
           objection: 'قیمت شما از سایر سامانه‌ها گران‌تر است / شرکت دیگر تخفیف بیشتری می‌دهد',
-          recommendedResponse: 'تمامی نرخ‌های پایه مطابق مصوبه بیمه مرکزی یکسان هستند؛ مزیت بیمه جم ارائه طرح اقساطی بدون کارمزد و چک، صدور آنی کد یکتا در ۵ دقیقه، پوشش‌های تکمیلی رایگان و پشتیبانی ۲۴ ساعته کارشناس خسارت در صحنه تصادف است.',
+          recommendedResponse: 'نرخ و شرایط نهایی فقط پس از استعلام واقعی مشخص می‌شود؛ مزایای قابل‌اثبات و شرایط پرداخت ثبت‌شدهٔ محصول را توضیح دهید.',
           responseGoal: 'تاکید بر ارزش افزوده و خدمات پس از فروش و اقساط بدون بهره',
           category: 'رقابت و قیمت',
           status: 'ACTIVE',
@@ -352,7 +359,7 @@ export async function ensureTrainingCenterSeeded() {
         },
         {
           title: 'راهنمای استعلام و صدور فوری بیمه شخص ثالث پژو ۲۰۶',
-          content: 'پژو ۲۰۶ در تیپ‌های ۲، ۳، ۵، ۶ و صندوق‌دار (SD) جزو خودروهای ۴ سیلندر دسته سواری متوسط قرار دارد. برای استعلام دقیق نرخ، سال ساخت خودرو و درصد تخفیف عدم خسارت مندرج بر روی بیمه‌نامه سال قبل ضروری است. امکان صدور اقساطی در کمتر از ۱۰ دقیقه فراهم است.',
+          content: 'پژو ۲۰۶ در تیپ‌های ۲، ۳، ۵، ۶ و صندوق‌دار (SD) جزو خودروهای ۴ سیلندر دسته سواری متوسط قرار دارد. برای استعلام دقیق نرخ، سال ساخت خودرو و درصد تخفیف عدم خسارت مندرج بر روی بیمه‌نامه سال قبل ضروری است.',
           category: 'خودرو',
           tags: 'پژو 206, ثالث پژو, استعلام شخص ثالث',
           status: 'PUBLISHED',
@@ -401,7 +408,7 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
   let appliedRules = activeRules.map((r) => ({
     id: r.id,
     title: r.title,
-    directive: r.directive,
+    directive: stripUnverifiedOperationalClaims(r.directive),
     enforcementLevel: r.enforcementLevel,
     category: r.category,
   }));
@@ -416,6 +423,14 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
   let matchedSubCategoryRaw: any = null;
 
   const normalizedContext = fullContextText
+    .replace(/ي/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .toLowerCase();
+  const normalizedConversationContext = `${params.userMessage}\n${params.conversationHistoryText || ''}`
+    .replace(/ي/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .toLowerCase();
+  const normalizedLatestMessage = params.userMessage
     .replace(/ي/g, 'ی')
     .replace(/ك/g, 'ک')
     .toLowerCase();
@@ -452,21 +467,21 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
       .split(/[\s،,؛:()\-_/|]+/)
       .filter((word: string) => word.length >= 2);
 
-  const scoreTextAgainstContext = (value: string) => {
+  const scoreTextAgainstContext = (value: string, context = normalizedContext) => {
     const normalizedValue = normalizeForMatch(value);
 
     if (!normalizedValue) return 0;
 
     let score = 0;
 
-    if (normalizedContext.includes(normalizedValue)) {
+    if (context.includes(normalizedValue)) {
       score += 10;
     }
 
     const words = tokenize(normalizedValue);
 
     for (const word of words) {
-      if (normalizedContext.includes(word)) {
+      if (context.includes(word)) {
         score += word.length >= 5 ? 2 : 1;
       }
     }
@@ -523,7 +538,7 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
         .map((rule) => ({
           id: rule.id,
           title: rule.title,
-          directive: rule.directive,
+          directive: stripUnverifiedOperationalClaims(rule.directive),
           enforcementLevel: rule.enforcementLevel,
           category: rule.category,
         }))
@@ -540,13 +555,13 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
     const scoredSubCategories = matchedCategoryRaw.subCategories
       .map((subCategory: any) => {
         const subCategoryText = `${subCategory.name} ${subCategory.description || ''}`;
-        let score = scoreTextAgainstContext(subCategoryText);
+        let score = scoreTextAgainstContext(subCategoryText, normalizedConversationContext);
 
         const normalizedSubCategoryName = normalizeForMatch(subCategory.name);
 
         if (
           normalizedSubCategoryName &&
-          normalizedContext.includes(normalizedSubCategoryName)
+          normalizedConversationContext.includes(normalizedSubCategoryName)
         ) {
           score += 20;
         }
@@ -623,12 +638,16 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
       let score = 0;
 
       // Exact product name match is strongest.
-      if (normalizedContext.includes(productName)) {
+      if (normalizedLatestMessage.includes(productName)) {
+        score += 60;
+      } else if (normalizedConversationContext.includes(productName)) {
         score += 20;
       }
 
       for (const word of productWords) {
-        if (normalizedContext.includes(word)) {
+        if (normalizedLatestMessage.includes(word)) {
+          score += word.length >= 5 ? 4 : 2;
+        } else if (normalizedConversationContext.includes(word)) {
           score += word.length >= 5 ? 2 : 1;
         }
       }

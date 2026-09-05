@@ -17,6 +17,8 @@ import {
 } from './quotationConversationFlow';
 import {
   isDirectQuotationWorkflowRequest,
+  currentPageQuotationReply,
+  isDetectedProductCurrentPage,
   isProductPurchaseIntent,
   purchaseLinkAwaitingState,
   purchaseLinkDecisionLogSummary,
@@ -26,6 +28,7 @@ import {
   shouldOfferProductPurchaseLink,
   shouldWaitForProductPurchaseDecision,
 } from '../../shared/productPurchaseLink';
+import { resolveProductByUrl } from './productIntelligenceService';
 
 
 export interface BrainResult {
@@ -60,6 +63,16 @@ export interface BrainResult {
     productId: string;
     productName: string;
     ruleTitle: string;
+    presentation: 'CURRENT_PAGE' | 'EXTERNAL_LINK';
+  };
+
+  workflowContext?: {
+    currentPageUrl: string | null;
+    currentPageProduct: { id: string; name: string } | null;
+    detectedProduct: { id: string; name: string } | null;
+    purchaseUrl: string | null;
+    orderedQuestions: Array<{ order: number; fieldName: string; text: string }>;
+    registrationStatus: string;
   };
 
   task?: {
@@ -148,6 +161,11 @@ export function validateResponse(replyText: string, previousReplies: string[], m
     return { valid: false, reason: 'پاسخ شامل ارجاع کلیشه‌ای "با ما تماس بگیرید" است و سوال کاربر را در چت حل نکرده است.' };
   }
 
+  const unverifiedOutcomeRegex = /کد\s*یکتا|کمتر از\s*[۰-۹0-9]+\s*دقیقه|تا\s*[۰-۹0-9]+\s*دقیقه.*(تماس|ثبت|صدور)|قیمت\s*قطعی|زمان\s*تضمینی|درخواست.*(?:ثبت|ارسال|ارجاع)\s*(?:شد|گردید)|اطلاعات.*ارجاع\s*(?:شد|گردید)/i;
+  if (unverifiedOutcomeRegex.test(replyText)) {
+    return { valid: false, reason: 'پاسخ شامل ادعای ثبت، صدور، قیمت یا زمان تضمینی بدون نتیجهٔ واقعی سیستم است.' };
+  }
+
   // Check for robotic AI cliches
   const roboticRegex = /به عنوان یک مدل زبانی|به عنوان هوش مصنوعی|من یک ربات هستم|امیدوارم حال شما عالی باشد|امیدوارم حالتون عالی باشه/i;
   if (roboticRegex.test(replyText)) {
@@ -179,8 +197,9 @@ export async function processBrainLayer(params: {
   goftinoPolicyTitle?: string;
   restrictKnowledgeScope?: boolean;
   offeredPurchaseLinkProductIds?: string[];
+  currentPageUrl?: string | null;
 }): Promise<BrainResult> {
-  const { customer, conversation, userMessageContent, messageHistory, allowedCategoryId, goftinoPolicyTitle, restrictKnowledgeScope, offeredPurchaseLinkProductIds = [] } = params;
+  const { customer, conversation, userMessageContent, messageHistory, allowedCategoryId, goftinoPolicyTitle, restrictKnowledgeScope, offeredPurchaseLinkProductIds = [], currentPageUrl: suppliedCurrentPageUrl } = params;
 
   const historyText = messageHistory
     .map((m) => `${m.senderType === 'CUSTOMER' ? 'مشتری' : 'مشاور بیمه جم'}: ${m.content}`)
@@ -215,6 +234,8 @@ export async function processBrainLayer(params: {
     customerMetadata = {};
   }
 
+  const currentPageUrl = suppliedCurrentPageUrl || (typeof customerMetadata.lastUrl === 'string' ? customerMetadata.lastUrl : null);
+
   // Step 1: Intelligent Knowledge Retrieval from AI Training Center (5 Sources)
   const extractedKnowledge = await retrieveRelevantKnowledgeFromTrainingCenter({
     userMessage: userMessageContent,
@@ -222,7 +243,7 @@ export async function processBrainLayer(params: {
     customerContext: {
       name: customer.name,
       city: customer.city,
-      pageUrl: typeof customerMetadata.lastUrl === 'string' ? customerMetadata.lastUrl : undefined,
+      pageUrl: currentPageUrl || undefined,
       interestedInsuranceTypes: customer.interestedInsuranceTypes,
       categoryId: allowedCategoryId || null,
       restrictToCategory: Boolean(restrictKnowledgeScope),
@@ -248,6 +269,15 @@ export async function processBrainLayer(params: {
   const stage = detectCustomerStage(messageHistory.length, intent, customer.leadScore || 50, historyText);
   const explicitFormRequested = isExplicitQuotationFormRequest(userMessageContent);
   const directQuotationRequested = isDirectQuotationWorkflowRequest(userMessageContent);
+  const currentPageMap = currentPageUrl
+    ? await resolveProductByUrl(currentPageUrl, { seedIfEmpty: false })
+    : null;
+  const currentPageProduct = currentPageMap?.product
+    ? { id: currentPageMap.product.id, name: currentPageMap.product.name }
+    : null;
+  const registrationStatus = typeof existingCollectedData.quotationSubmission?.status === 'string'
+    ? existingCollectedData.quotationSubmission.status
+    : 'NOT_SUBMITTED';
   let deterministicReply: string | null = null;
   let quotationState: BrainResult['quotationState'];
   let purchaseLinkOffer: BrainResult['purchaseLinkOffer'];
@@ -262,11 +292,20 @@ export async function processBrainLayer(params: {
       message: userMessageContent,
     })
   ) {
-    deterministicReply = productPurchaseLinkReply(extractedKnowledge.matchedProduct.purchaseUrl!);
+    const samePage = isDetectedProductCurrentPage({
+      productId: extractedKnowledge.matchedProduct.id,
+      currentPageProductId: currentPageProduct?.id,
+      purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
+      currentPageUrl,
+    });
+    deterministicReply = samePage
+      ? currentPageQuotationReply()
+      : productPurchaseLinkReply(extractedKnowledge.matchedProduct.purchaseUrl!);
     purchaseLinkOffer = {
       productId: extractedKnowledge.matchedProduct.id,
       productName: extractedKnowledge.matchedProduct.name,
       ruleTitle: PURCHASE_LINK_RULE_TITLE,
+      presentation: samePage ? 'CURRENT_PAGE' : 'EXTERNAL_LINK',
     };
   } else if (
     extractedKnowledge.matchedProduct &&
@@ -356,6 +395,22 @@ export async function processBrainLayer(params: {
   }
 
   const missingInfo = detectMissingInfo(intent, userMessageContent, historyText, extractedKnowledge.quotationWorkflow);
+  const workflowContext: NonNullable<BrainResult['workflowContext']> = {
+    currentPageUrl,
+    currentPageProduct,
+    detectedProduct: extractedKnowledge.matchedProduct
+      ? { id: extractedKnowledge.matchedProduct.id, name: extractedKnowledge.matchedProduct.name }
+      : null,
+    purchaseUrl: extractedKnowledge.matchedProduct?.purchaseUrl || null,
+    orderedQuestions: [...(extractedKnowledge.quotationWorkflow?.allQuestions || [])]
+      .sort((a, b) => a.order - b.order)
+      .map((question) => ({
+        order: question.order,
+        fieldName: question.fieldName,
+        text: question.aiQuestion || question.title,
+      })),
+    registrationStatus,
+  };
 
   const productSelectionRequired =
     extractedKnowledge.productSelectionRequired === true;
@@ -560,8 +615,7 @@ ${extractedKnowledge.promptFormattedRules || 'قانون اختصاصی مرتب
 
 مثال:
 
-ممنون از اطلاعاتی که ارائه کردید 🌹
-کارشناس تا 5 دقیقه دیگه باهاتون تماس میگیره
+ممنون از اطلاعاتی که ارائه کردید. پس از تأیید شما، نتیجهٔ واقعی ثبت درخواست را اعلام می‌کنم.
 
 
 
@@ -577,6 +631,8 @@ Task فقط زمانی ایجاد شود که گفتگو به مرحله‌ای 
 - در تکمیل استعلام یا درخواست مستقیم کارشناس، نام و نام خانوادگی مشتری باید پیش از ارجاع دریافت شود؛ اگر فقط نام کوچک ارائه شد، نام خانوادگی را بپرس.
 - اگر نام معتبر قبلاً در پرونده موجود است، دوباره آن را نپرس. اگر مشتری از اعلام نام خودداری کرد، ارجاع را متوقف نکن و نام را «ثبت نشده» در نظر بگیر.
 - اطلاعات دریافت شده را در collectedData ذخیره کن.
+- پیش از تأیید صریح مشتری، هیچ Task یا ادعای ثبت درخواست ایجاد نکن.
+- هرگز زمان تماس، قیمت قطعی، کد یکتا یا صدور را تضمین نکن؛ نتیجه فقط پس از موفقیت واقعی سیستم اعلام می‌شود.
 
 برای موارد زیر Task ایجاد کن:
 
@@ -917,6 +973,7 @@ Call Customer
     retryCount,
     modelUsed,
     quotationState,
+    workflowContext,
     purchaseLinkOffer,
     task: generatedTask,
     operatorSummary: generatedOperatorSummary,

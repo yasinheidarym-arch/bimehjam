@@ -89,6 +89,17 @@ function parseCustomerMetadata(value?: string | null): Record<string, unknown> {
   }
 }
 
+export function extractCurrentPageUrl(payload: GoftinoWebhookPayload): string | null {
+  const data = payload.data as Record<string, unknown> | undefined;
+  const client = data?.client && typeof data.client === 'object' ? data.client as Record<string, unknown> : null;
+  const topLevel = payload as Record<string, unknown>;
+  return [
+    data?.currentPageUrl, data?.current_page_url, data?.pageUrl, data?.page_url, data?.url,
+    client?.currentPageUrl, client?.pageUrl, client?.page_url, client?.url,
+    topLevel.currentPageUrl, topLevel.current_page_url, topLevel.pageUrl, topLevel.page_url, topLevel.url,
+  ].find((value): value is string => typeof value === 'string' && /^https?:\/\//i.test(value.trim())) || null;
+}
+
 export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
   const eventName = payload?.event || 'new_message';
 
@@ -211,6 +222,10 @@ export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
   const selectedCategoryId = selectedPolicy.kind === 'ALLOW'
     ? selectedPolicy.policy.insuranceCategoryId
     : null;
+  // Refresh page context for every real message. Payload data wins; user_data
+  // is the reliable fallback when Goftino omits the URL from the webhook.
+  const goftinoUser = await getGoftinoUserData(String(chatId));
+  const currentPageUrl = extractCurrentPageUrl(payload) || goftinoUser?.last_url || null;
 
   // 4. Create or update Customer (isolated by userId / chatId)
   let customer = await prisma.customer.findFirst({
@@ -230,22 +245,24 @@ export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
           lastActivity: new Date(),
           goftinoChatId: String(chatId),
           ...(formPhone && !customer.phone ? { phone: String(formPhone) } : {}),
+          metadata: JSON.stringify({
+            ...previousMetadata,
+            ...(currentPageUrl ? { lastUrl: currentPageUrl } : {}),
+            ...(selectedTopic.title || selectedTopic.id ? {
+              goftinoCategoryId: selectedCategoryId,
+              goftinoTopicId: selectedTopic.id,
+              goftinoTopicTitle: selectedTopic.title,
+            } : {}),
+          }),
           ...(selectedTopic.title || selectedTopic.id
             ? {
                 interestedInsuranceTypes: JSON.stringify([selectedTopic.title || selectedTopic.id]),
-                metadata: JSON.stringify({
-                  ...previousMetadata,
-                  goftinoCategoryId: selectedCategoryId,
-                  goftinoTopicId: selectedTopic.id,
-                  goftinoTopicTitle: selectedTopic.title,
-                }),
               }
             : {}),
           ...(senderName && customer.name === 'مشتری گفتینو' ? { name: senderName } : {}),
         },
       });
     } else {
-      const goftinoUser = await getGoftinoUserData(String(chatId));
       const visitedPages = await getGoftinoVisitedPages(String(userId));
 
       console.log('🔎 Goftino User ID:', userId);
@@ -272,7 +289,7 @@ export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
               browser: goftinoUser?.browser || null,
               os: goftinoUser?.os || null,
               ip: goftinoUser?.ip || null,
-              lastUrl: goftinoUser?.last_url || null,
+              lastUrl: currentPageUrl,
               pageView: goftinoUser?.page_view || null,
               goftinoCategoryId: selectedCategoryId,
               goftinoTopicId: selectedTopic.id,
@@ -308,15 +325,18 @@ export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
               ...(formPhone && !customer.phone
                 ? { phone: String(formPhone) }
                 : {}),
+              metadata: JSON.stringify({
+                ...parseCustomerMetadata(customer.metadata),
+                ...(currentPageUrl ? { lastUrl: currentPageUrl } : {}),
+                ...(selectedTopic.title || selectedTopic.id ? {
+                  goftinoCategoryId: selectedCategoryId,
+                  goftinoTopicId: selectedTopic.id,
+                  goftinoTopicTitle: selectedTopic.title,
+                } : {}),
+              }),
               ...(selectedTopic.title || selectedTopic.id
                 ? {
                     interestedInsuranceTypes: JSON.stringify([selectedTopic.title || selectedTopic.id]),
-                    metadata: JSON.stringify({
-                      ...parseCustomerMetadata(customer.metadata),
-                      goftinoCategoryId: selectedCategoryId,
-                      goftinoTopicId: selectedTopic.id,
-                      goftinoTopicTitle: selectedTopic.title,
-                    }),
                   }
                 : {}),
             },

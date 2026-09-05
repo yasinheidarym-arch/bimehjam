@@ -509,54 +509,10 @@ export async function processSessionAnswers(
     },
   });
 
-  // If completed, register or qualify Lead
-  let leadId = null;
-  if (isCompleted) {
-    let customer = null;
-    if (session.customerId) {
-      customer = await prisma.customer.findUnique({ where: { id: session.customerId } });
-    } else if (session.conversationId) {
-      const conv = await prisma.conversation.findUnique({ where: { id: session.conversationId } });
-      if (conv && conv.customerId) {
-        customer = await prisma.customer.findUnique({ where: { id: conv.customerId } });
-      }
-    }
-
-    if (customer) {
-      const existingLead = await prisma.lead.findFirst({
-        where: { customerId: customer.id, conversationId: session.conversationId || undefined },
-      });
-
-      const collectedSummary = Object.entries(updatedData)
-        .map(([k, v]) => `${k}: ${v}`)
-        .join(', ');
-
-      if (existingLead) {
-        await prisma.lead.update({
-          where: { id: existingLead.id },
-          data: {
-            status: 'QUALIFIED',
-            score: 95,
-            notes: `استعلام قیمت تکمیل شد [${session.product.name}]: ${collectedSummary}`,
-          },
-        });
-        leadId = existingLead.id;
-      } else {
-        const newLead = await prisma.lead.create({
-          data: {
-            customerId: customer.id,
-            conversationId: session.conversationId || null,
-            insuranceType: session.product.category || 'GENERAL',
-            status: 'QUALIFIED',
-            score: 95,
-            intent: `استعلام آنلاین ${session.product.name}`,
-            notes: `فرم استعلام خودکار تکمیل شد: ${collectedSummary}`,
-          },
-        });
-        leadId = newLead.id;
-      }
-    }
-  }
+  // Completion means only that the questionnaire is complete. Registration
+  // and operator referral happen later, after profile completion and explicit
+  // customer confirmation in the AI pipeline.
+  const leadId = null;
 
   return {
     sessionId: session.id,
@@ -622,8 +578,8 @@ export async function generateQuotationEnginePromptContext(params: {
 ${collectedSummaryText}
 
 🛑 دستورالعمل پاسخ هوش مصنوعی:
-۱. صدور لید و استعلام به پایان رسیده است. بر اساس مشخصات فوق، قیمت و حق‌بیمه تخمینی را محاسبه و اعلام کنید.
-۲. پیشنهاد ثبت نام، ارسال مدارک یا درخواست تماس فوری کارشناس را ارائه دهید.
+۱. پرسش‌های بیمه‌ای کامل شده‌اند، اما ثبت درخواست هنوز انجام نشده است.
+۲. هیچ قیمت قطعی، کد، زمان تضمینی یا ادعای ارجاع مطرح نکنید؛ جمع‌آوری اطلاعات تماس و تأیید نهایی در لایهٔ قطعی بعدی انجام می‌شود.
 `;
   }
 
