@@ -17,6 +17,7 @@
     ,"test:product-purchase-link": "tsx --test tests/productPurchaseLink.test.ts"
     ,"test:quotation-routing": "tsx --test tests/quotationRouting.test.ts"
     ,"test:current-page-product": "tsx --test tests/currentPageProductSuggestion.test.ts"
+    ,"test:quotation-options": "tsx --test tests/quotationOptionMatching.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

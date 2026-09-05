@@ -7,7 +7,6 @@ import {
 } from './knowledgeRetrievalService';
 import { getOrCreateQuotationSession, processSessionAnswers } from './quotationWorkflowService';
 import {
-  captureCurrentQuestionAnswer,
   analyzeQuotationMessage,
   invalidQuotationAnswerReason,
   invalidQuotationAnswerReply,
@@ -16,8 +15,13 @@ import {
   quotationCompletedReply,
   quotationFormReply,
   quotationQuestionReply,
-  shouldCaptureCurrentQuestionAnswer,
 } from './quotationConversationFlow';
+import {
+  quotationOptionFollowup,
+  quotationQuestionOptions,
+  QuotationOptionSelection,
+  resolveQuotationOptionSelection,
+} from './quotationOptionMatchingService';
 import {
   isDirectQuotationWorkflowRequest,
   isPositiveQuotationWorkflowResponse,
@@ -89,6 +93,8 @@ export interface BrainResult {
     registrationStatus: string;
     matchedCategory: { id: string; name: string } | null;
     currentPageProductSuggestionDecision: 'NONE' | 'OFFERED' | 'AWAITING_CONFIRMATION' | 'ACCEPTED' | 'REJECTED';
+    quotationAnswerValidationReason?: string;
+    quotationOptionSelection?: QuotationOptionSelection;
   };
 
   task?: {
@@ -323,6 +329,7 @@ export async function processBrainLayer(params: {
   let quotationInvalidReply: string | null = null;
   let quotationAnswerValidationState: Record<string, unknown> | null | undefined = undefined;
   let quotationAnswerValidationReason: string | null = null;
+  let quotationOptionSelection: QuotationOptionSelection | null = null;
   let pageProductSuggestionState: CurrentPageProductSuggestionState | null = existingPageSuggestion;
   let pageProductSuggestionDecision: NonNullable<BrainResult['workflowContext']>['currentPageProductSuggestionDecision'] = 'NONE';
 
@@ -438,23 +445,72 @@ export async function processBrainLayer(params: {
     });
     let evaluation = await processSessionAnswers(session.id, {}, 'customer');
     const workflowWasActive = conversation.currentProductId === product.id;
-    const messageAnalysis = workflowWasActive
+    let messageAnalysis = workflowWasActive
       ? analyzeQuotationMessage(evaluation.nextQuestion, userMessageContent)
       : { validAnswer: false, answerValue: null, asksQuestion: false };
     const pendingQuestion = evaluation.nextQuestion;
 
+    if (
+      workflowWasActive && pendingQuestion && !messageAnalysis.asksQuestion &&
+      quotationQuestionOptions(pendingQuestion).length > 0
+    ) {
+      quotationOptionSelection = await resolveQuotationOptionSelection({
+        question: pendingQuestion,
+        message: userMessageContent,
+        modelSelector: async (selectionInput) => {
+          const config = await getAiConfig();
+          const apiKey = config.openaiApiKey || process.env.OPENAI_API_KEY || '';
+          if (!apiKey) return null;
+          const client = new OpenAI({ apiKey });
+          const response = await client.chat.completions.create({
+            model: config.openaiModel || 'gpt-5',
+            response_format: {
+              type: 'json_schema',
+              json_schema: {
+                name: 'quotation_option_selection',
+                strict: true,
+                schema: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: {
+                    fieldName: { type: 'string' },
+                    selectedOptionId: { type: ['string', 'null'] },
+                    selectedOptionValue: { type: ['string', 'null'] },
+                    confidence: { type: 'number', minimum: 0, maximum: 1 },
+                  },
+                  required: ['fieldName', 'selectedOptionId', 'selectedOptionValue', 'confidence'],
+                },
+              },
+            },
+            messages: [{
+              role: 'system',
+              content: 'فقط یک گزینه از allowlist داده‌شده را برای پاسخ کاربر معنی‌گذاری کن. گزینه یا سؤال جدید نساز. اگر مبهم یا بی‌ربط است selectedOptionId و selectedOptionValue را null بده. خروجی فقط JSON با fieldName، selectedOptionId، selectedOptionValue و confidence بین صفر و یک باشد.',
+            }, {
+              role: 'user',
+              content: JSON.stringify(selectionInput),
+            }],
+          });
+          return JSON.parse(response.choices[0]?.message?.content || '{}');
+        },
+      });
+      if (quotationOptionSelection.status === 'MATCHED' && quotationOptionSelection.selectedOptionValue) {
+        messageAnalysis = {
+          validAnswer: true,
+          answerValue: quotationOptionSelection.selectedOptionValue,
+          asksQuestion: false,
+        };
+      } else {
+        messageAnalysis = { validAnswer: false, answerValue: null, asksQuestion: false };
+      }
+    }
+
     // A message answers the pending question only after this conversation has
     // already entered the deterministic workflow for the same product.
-    if (shouldCaptureCurrentQuestionAnswer(
-      workflowWasActive,
-      evaluation.nextQuestion,
-      userMessageContent,
-    )) {
-      const answer = captureCurrentQuestionAnswer(evaluation.nextQuestion, userMessageContent);
-      if (Object.keys(answer).length > 0) {
-        evaluation = await processSessionAnswers(session.id, answer, 'customer');
-        quotationAnswerValidationState = null;
-      }
+    if (workflowWasActive && pendingQuestion && messageAnalysis.validAnswer && messageAnalysis.answerValue) {
+      evaluation = await processSessionAnswers(session.id, {
+        [pendingQuestion.fieldName]: messageAnalysis.answerValue,
+      }, 'customer');
+      quotationAnswerValidationState = null;
     }
 
     if (workflowWasActive && pendingQuestion && !messageAnalysis.validAnswer && !messageAnalysis.asksQuestion) {
@@ -472,7 +528,11 @@ export async function processBrainLayer(params: {
         invalidAttempts,
         lastReason: quotationAnswerValidationReason,
       };
-      quotationInvalidReply = invalidQuotationAnswerReply(pendingQuestion, invalidAttempts);
+      quotationInvalidReply = invalidAttempts >= 2
+        ? invalidQuotationAnswerReply(pendingQuestion, invalidAttempts)
+        : quotationOptionSelection
+          ? quotationOptionFollowup(pendingQuestion, quotationOptionSelection)
+          : invalidQuotationAnswerReply(pendingQuestion, invalidAttempts);
     }
 
     if (workflowWasActive && messageAnalysis.asksQuestion) {
@@ -563,6 +623,9 @@ export async function processBrainLayer(params: {
     currentPageProductSuggestionDecision: pageProductSuggestionDecision,
     ...(quotationAnswerValidationReason
       ? { quotationAnswerValidationReason }
+      : {}),
+    ...(quotationOptionSelection
+      ? { quotationOptionSelection }
       : {}),
   };
 
@@ -1073,6 +1136,7 @@ Call Customer
     currentPageProduct,
     matchedCategory: workflowContext.matchedCategory,
     currentPageProductSuggestionDecision: pageProductSuggestionDecision,
+    quotationOptionSelection,
   });
 
   // Record BrainLog in Database
@@ -1132,6 +1196,9 @@ Call Customer
       : {}),
     ...(quotationAnswerValidationState !== undefined
       ? { quotationAnswerValidation: quotationAnswerValidationState }
+      : {}),
+    ...(quotationOptionSelection
+      ? { quotationOptionSelection }
       : {}),
   };
 
