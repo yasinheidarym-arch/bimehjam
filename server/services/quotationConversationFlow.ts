@@ -123,6 +123,35 @@ export function analyzeQuotationMessage(
   return { validAnswer: validLength, answerValue: validLength ? textAnswer.trim() : null, asksQuestion };
 }
 
+export function invalidQuotationAnswerReason(question: QuotationTurnQuestion): string {
+  const type = normalize(question.type || 'text');
+  if (type === 'number') {
+    const range = [
+      question.minVal != null ? `حداقل ${question.minVal}` : '',
+      question.maxVal != null ? `حداکثر ${question.maxVal}` : '',
+    ].filter(Boolean).join(' و ');
+    return `پاسخ فیلد ${question.fieldName} باید عدد معتبر${range ? ` در بازهٔ ${range}` : ''} باشد.`;
+  }
+  const options = parseOptions(question.options);
+  if (options.length > 0) return `پاسخ فیلد ${question.fieldName} باید یکی از گزینه‌های تعریف‌شده باشد.`;
+  if (type === 'date') return `پاسخ فیلد ${question.fieldName} باید تاریخ معتبر باشد.`;
+  if (type === 'boolean') return `پاسخ فیلد ${question.fieldName} باید بله یا خیر باشد.`;
+  return `پاسخ فیلد ${question.fieldName} با نوع تعریف‌شده سازگار نیست.`;
+}
+
+export function invalidQuotationAnswerReply(question: QuotationTurnQuestion, invalidAttempts: number): string {
+  if (invalidAttempts >= 2) {
+    return 'این پاسخ هم قابل ثبت نبود؛ برای جلوگیری از تکرار، این مرحله فعلاً متوقف شد. هر زمان مقدار دقیق را داشتید همان را بفرستید.';
+  }
+  const type = normalize(question.type || 'text');
+  if (type === 'number') {
+    return 'پاسخ این مورد باید یک عدد معتبر باشد؛ می‌توانید عدد را با واحدی مثل «سال» یا «طبقه» بفرستید.';
+  }
+  const options = parseOptions(question.options);
+  if (options.length > 0) return `لطفاً یکی از گزینه‌های معتبر را بفرستید: ${options.join('، ')}`;
+  return 'پاسخ با قالب این سؤال سازگار نبود؛ لطفاً مقدار را کوتاه و مستقیم بفرستید.';
+}
+
 export function isInsuranceQuotationRequest(message: string): boolean {
   const text = String(message || '').toLowerCase();
   return isDirectQuotationWorkflowRequest(text) || ['قیمت', 'استعلام', 'خرید', 'صدور', 'چقدر میشه', 'چنده', 'چند درمیاد', 'چند در میاد', 'هزینه', 'نرخ', 'محاسبه']

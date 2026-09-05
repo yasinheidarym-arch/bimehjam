@@ -608,9 +608,10 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
 
   if (params.customerContext?.productId) {
     productWhere.id = params.customerContext.productId;
-  }
-
-  if (matchedSubCategoryRaw) {
+    // Preserve the Goftino allowlist boundary while keeping an active
+    // quotation session independent from fragile text/subcategory rematching.
+    if (matchedCategoryRaw) productWhere.categoryId = matchedCategoryRaw.id;
+  } else if (matchedSubCategoryRaw) {
     productWhere.categoryId = matchedSubCategoryRaw.categoryId;
 
     productWhere.subCategoryId = matchedSubCategoryRaw.id;

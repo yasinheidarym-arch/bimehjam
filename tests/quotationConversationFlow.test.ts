@@ -6,6 +6,8 @@ import {
   currentRequiredQuestion,
   isExplicitQuotationFormRequest,
   isInsuranceQuotationRequest,
+  invalidQuotationAnswerReason,
+  invalidQuotationAnswerReply,
   quotationCompletedReply,
   quotationFormReply,
   quotationQuestionReply,
@@ -123,4 +125,38 @@ test('configured choices reject unrelated text and store the canonical option', 
   };
   assert.deepEqual(captureCurrentQuestionAnswer(usageQuestion, 'درباره پوشش‌ها توضیح می‌دهید؟'), {});
   assert.deepEqual(captureCurrentQuestionAnswer(usageQuestion, 'مجتمع مسکونی'), { usage: 'مجتمع مسکونی' });
+});
+
+test('building age accepts English, Persian and suffixed numeric answers and advances', () => {
+  const ageQuestion: QuotationTurnQuestion = {
+    id: 'building-age',
+    title: 'سن ساختمان',
+    aiQuestion: 'ساختمان مورد بیمه چند سال ساخته؟',
+    fieldName: 'buildingAge',
+    type: 'number',
+    required: true,
+    order: 4,
+    minVal: 0,
+    maxVal: 100,
+  };
+  const nextQuestion: QuotationTurnQuestion = {
+    id: 'floors', title: 'تعداد طبقات', aiQuestion: 'ساختمان چند طبقه دارد؟',
+    fieldName: 'floorCount', type: 'number', required: true, order: 5,
+  };
+  for (const message of ['2', '۲', '۲ ساله', '  2 سال  ', '۲ طبقه']) {
+    const answer = captureCurrentQuestionAnswer(ageQuestion, message);
+    assert.deepEqual(answer, { buildingAge: '2' }, message);
+    assert.equal(currentRequiredQuestion([ageQuestion, nextQuestion], answer), nextQuestion, message);
+  }
+});
+
+test('invalid numeric replies explain once, pause after two attempts and expose a log reason', () => {
+  const question: QuotationTurnQuestion = {
+    id: 'building-age', title: 'سن ساختمان', fieldName: 'buildingAge',
+    type: 'number', required: true, order: 1, minVal: 0, maxVal: 100,
+  };
+  assert.match(invalidQuotationAnswerReply(question, 1), /عدد معتبر/);
+  assert.doesNotMatch(invalidQuotationAnswerReply(question, 1), /سن ساختمان/);
+  assert.match(invalidQuotationAnswerReply(question, 2), /متوقف شد/);
+  assert.match(invalidQuotationAnswerReason(question), /buildingAge.*عدد معتبر.*حداقل 0.*حداکثر 100/);
 });

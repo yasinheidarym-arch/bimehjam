@@ -9,6 +9,8 @@ import { getOrCreateQuotationSession, processSessionAnswers } from './quotationW
 import {
   captureCurrentQuestionAnswer,
   analyzeQuotationMessage,
+  invalidQuotationAnswerReason,
+  invalidQuotationAnswerReply,
   isInsuranceQuotationRequest,
   isExplicitQuotationFormRequest,
   quotationCompletedReply,
@@ -276,7 +278,7 @@ export async function processBrainLayer(params: {
       pageUrl: currentPageUrl || undefined,
       interestedInsuranceTypes: customer.interestedInsuranceTypes,
       categoryId: allowedCategoryId || null,
-      productId: suggestionAccepted ? existingPageSuggestion.productId : null,
+      productId: conversation.currentProductId || (suggestionAccepted ? existingPageSuggestion.productId : null),
       restrictToCategory: Boolean(restrictKnowledgeScope),
     },
     existingCollectedData,
@@ -318,6 +320,9 @@ export async function processBrainLayer(params: {
   let quotationState: BrainResult['quotationState'];
   let purchaseLinkOffer: BrainResult['purchaseLinkOffer'];
   let quotationInterruptionQuestion: { text: string } | null = null;
+  let quotationInvalidReply: string | null = null;
+  let quotationAnswerValidationState: Record<string, unknown> | null | undefined = undefined;
+  let quotationAnswerValidationReason: string | null = null;
   let pageProductSuggestionState: CurrentPageProductSuggestionState | null = existingPageSuggestion;
   let pageProductSuggestionDecision: NonNullable<BrainResult['workflowContext']>['currentPageProductSuggestionDecision'] = 'NONE';
 
@@ -436,6 +441,7 @@ export async function processBrainLayer(params: {
     const messageAnalysis = workflowWasActive
       ? analyzeQuotationMessage(evaluation.nextQuestion, userMessageContent)
       : { validAnswer: false, answerValue: null, asksQuestion: false };
+    const pendingQuestion = evaluation.nextQuestion;
 
     // A message answers the pending question only after this conversation has
     // already entered the deterministic workflow for the same product.
@@ -447,7 +453,26 @@ export async function processBrainLayer(params: {
       const answer = captureCurrentQuestionAnswer(evaluation.nextQuestion, userMessageContent);
       if (Object.keys(answer).length > 0) {
         evaluation = await processSessionAnswers(session.id, answer, 'customer');
+        quotationAnswerValidationState = null;
       }
+    }
+
+    if (workflowWasActive && pendingQuestion && !messageAnalysis.validAnswer && !messageAnalysis.asksQuestion) {
+      const previousValidation = existingCollectedData.quotationAnswerValidation;
+      const previousAttempts = previousValidation?.productId === product.id &&
+        previousValidation?.fieldName === pendingQuestion.fieldName
+        ? Number(previousValidation.invalidAttempts || 0)
+        : 0;
+      const invalidAttempts = previousAttempts + 1;
+      quotationAnswerValidationReason = invalidQuotationAnswerReason(pendingQuestion);
+      quotationAnswerValidationState = {
+        status: invalidAttempts >= 2 ? 'PAUSED_AFTER_REPEATED_INVALID_ANSWER' : 'AWAITING_VALID_ANSWER',
+        productId: product.id,
+        fieldName: pendingQuestion.fieldName,
+        invalidAttempts,
+        lastReason: quotationAnswerValidationReason,
+      };
+      quotationInvalidReply = invalidQuotationAnswerReply(pendingQuestion, invalidAttempts);
     }
 
     if (workflowWasActive && messageAnalysis.asksQuestion) {
@@ -508,11 +533,11 @@ export async function processBrainLayer(params: {
       : '';
     deterministicReply = quotationInterruptionQuestion
       ? null
-      : questionReply
+      : quotationInvalidReply || (questionReply
       ? [chatStartPrefix, questionReply].filter(Boolean).join('\n')
       : evaluation.isCompleted
         ? quotationCompletedReply()
-        : null;
+        : null);
   }
 
   const missingInfo = detectMissingInfo(intent, userMessageContent, historyText, extractedKnowledge.quotationWorkflow);
@@ -536,6 +561,9 @@ export async function processBrainLayer(params: {
       ? { id: extractedKnowledge.matchedCategoryId, name: extractedKnowledge.matchedCategory }
       : null,
     currentPageProductSuggestionDecision: pageProductSuggestionDecision,
+    ...(quotationAnswerValidationReason
+      ? { quotationAnswerValidationReason }
+      : {}),
   };
 
   const productSelectionRequired =
@@ -1071,7 +1099,7 @@ Call Customer
       rawPrompt: systemPrompt.substring(0, 1500),
       generatedReply: finalReplyText,
       validationResult: validationStatus,
-      validationReason: validation.reason,
+      validationReason: quotationAnswerValidationReason || validation.reason,
       retryCount,
       },
     });
@@ -1102,6 +1130,9 @@ Call Customer
     ...(pageProductSuggestionState
       ? { currentPageProductSuggestion: pageProductSuggestionState }
       : {}),
+    ...(quotationAnswerValidationState !== undefined
+      ? { quotationAnswerValidation: quotationAnswerValidationState }
+      : {}),
   };
 
   return {
@@ -1119,7 +1150,7 @@ Call Customer
     promptTokens,
     completionTokens,
     validationResult: validationStatus,
-    validationReason: validation.reason,
+    validationReason: quotationAnswerValidationReason || validation.reason,
     retryCount,
     modelUsed,
     quotationState,
