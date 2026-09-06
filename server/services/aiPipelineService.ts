@@ -1,4 +1,6 @@
 import OpenAI from 'openai';
+import { withConversationTurn } from './conversationTurnQueue';
+import { isQuotationCorrection, isQuotationInterruption } from './quotationStateMachine';
 import prisma from '../db/client';
 import axios from 'axios';
 import { processBrainLayer } from './brainLayerService';
@@ -302,14 +304,24 @@ export async function setGoftinoTyping(
   }
 }
 
-export async function runAiPipelineForMessage(params: {
+type AiPipelineParams = {
   conversationId: string;
   customerId: string;
   messageId: string;
   userMessageContent: string;
   aiCategory?: string;
   effectiveAiMode?: AiMode;
-}) {
+};
+export async function runAiPipelineForMessage(params: AiPipelineParams) {
+  return withConversationTurn(params.conversationId, async () => {
+    const alreadyHandled = await prisma.message.findFirst({
+      where: { conversationId: params.conversationId, senderType: 'AI', metadata: { contains: `"sourceMessageId":${JSON.stringify(params.messageId)}` } },
+      select: { id: true },
+    });
+    if (!alreadyHandled) return runAiPipelineTurn(params);
+  });
+}
+async function runAiPipelineTurn(params: AiPipelineParams) {
   const startTime = Date.now();
   const {
     conversationId,
@@ -565,7 +577,8 @@ export async function runAiPipelineForMessage(params: {
     const pendingQuotationSubmission = existingCollectedData.quotationSubmission?.pending === true
       ? existingCollectedData.quotationSubmission as QuotationSubmissionState
       : null;
-    const productQuotationActive = Boolean(
+    const requestedHelpAfterAmbiguity = existingCollectedData.quotationTurnState?.ambiguity === 'HELP' && /کارشناس|اپراتور/.test(userMessageContent);
+    const productQuotationActive = !requestedHelpAfterAmbiguity && Boolean(
       conversation.currentProductId ||
       existingCollectedData.purchaseLinkState?.status === 'AWAITING_CUSTOMER_CHOICE',
     );
@@ -574,7 +587,7 @@ export async function runAiPipelineForMessage(params: {
       : null;
     const fullNameHandoffRuleActive = await isFullNameHandoffRuleActive();
 
-    if (pendingQuotationSubmission) {
+    if (pendingQuotationSubmission && !isQuotationCorrection(userMessageContent) && !isQuotationInterruption(userMessageContent)) {
       const decision = advanceQuotationSubmission(pendingQuotationSubmission, userMessageContent);
       const profile = decision.state.profile;
       await prisma.customer.update({
@@ -946,6 +959,7 @@ export async function runAiPipelineForMessage(params: {
       messageType: 'TEXT',
       isTestMode: isTestModeActive,
       metadata: JSON.stringify({
+        sourceMessageId: messageId,
         isTestMode: isTestModeActive,
         notice: isTestModeActive ? 'این پاسخ فقط برای بررسی مدیر ایجاد شده و برای مشتری ارسال نشده است.' : '',
         modelUsed: brainResult.modelUsed,

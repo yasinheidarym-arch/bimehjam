@@ -1,4 +1,5 @@
 import { validStoredFullName } from './humanHandoffNameFlow';
+import { isQuotationInterruption } from './quotationStateMachine';
 
 export type QuotationSubmissionStep = 'FULL_NAME' | 'LAST_NAME' | 'MOBILE' | 'CITY' | 'CONFIRM';
 export type QuotationSubmissionStatus = 'COLLECTING_PROFILE' | 'AWAITING_CONFIRMATION' | 'SUBMITTED' | 'NOT_SUBMITTED';
@@ -110,6 +111,10 @@ export function startQuotationSubmission(input: {
 
 export function advanceQuotationSubmission(state: QuotationSubmissionState, message: string): QuotationSubmissionDecision {
   const next = { ...state, profile: { ...state.profile } };
+  const normalizedResponse = message.replace(/‌/g, ' ').trim();
+  if (isQuotationInterruption(message) || (state.step !== 'CONFIRM' && /^(آره|اره|بله|نه|خیر|باشه)$/.test(normalizedResponse))) {
+    return { action: 'ASK', replyText: `اطلاعات قبلی محفوظ است. ${questionFor(state.step)}`, state: next };
+  }
   if (state.step === 'FULL_NAME') {
     const name = parseName(message);
     if (name.fullName) next.profile.fullName = name.fullName;
@@ -134,7 +139,7 @@ export function advanceQuotationSubmission(state: QuotationSubmissionState, mess
     next.profile.city = city;
   } else {
     const normalized = String(message || '').replace(/‌/g, ' ').trim();
-    if (/^(تأیید|تایید)( می کنم| میکنم| است)?$|^(بله|آره|اره)،?\s*(تأیید|تایید|ثبت)/i.test(normalized)) {
+    if (/^(بله|آره|اره)$|^(تأیید|تایید)( می کنم| میکنم| است)?$|^(بله|آره|اره)،?\s*(تأیید|تایید|ثبت)/i.test(normalized)) {
       next.status = 'AWAITING_CONFIRMATION';
       return { action: 'SUBMIT', replyText: '', state: next };
     }

@@ -1,4 +1,5 @@
 import prisma from '../db/client';
+import { applicableQuotationQuestions } from './quotationStateMachine';
 import { GoogleGenAI } from '@google/genai';
 
 const apiKey = process.env.GEMINI_API_KEY;
@@ -301,6 +302,7 @@ export async function getOrCreateQuotationSession(params: {
   conversationId?: string;
   customerId?: string;
   productId: string;
+  sessionId?: string;
 }) {
   const workflow = await ensureProductQuotationWorkflow(params.productId);
 
@@ -311,8 +313,9 @@ export async function getOrCreateQuotationSession(params: {
       where: {
         conversationId: params.conversationId,
         productId: params.productId,
-        status: 'IN_PROGRESS',
+        ...(params.sessionId ? { id: params.sessionId } : { status: 'IN_PROGRESS' }),
       },
+      orderBy: { createdAt: 'desc' },
       include: {
         answers: { include: { question: true } },
         workflow: { include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }] } } },
@@ -403,7 +406,8 @@ export async function processSessionAnswers(
   newAnswers: Record<string, string>,
   source: 'customer' | 'ai_extracted' | 'operator' = 'customer'
 ) {
-  const session = await prisma.quotationSession.findUnique({
+  return prisma.$transaction(async (tx) => {
+  const session = await tx.quotationSession.findUnique({
     where: { id: sessionId },
     include: {
       answers: true,
@@ -425,17 +429,20 @@ export async function processSessionAnswers(
   }
 
   // Merge new answers
-  const updatedData = { ...currentData, ...newAnswers };
+  const allowedAnswers = Object.fromEntries(Object.entries(newAnswers).filter(([key, value]) =>
+    value !== undefined && value !== null && value !== '' && session.workflow?.questions.some(q => q.fieldName === key),
+  ));
+  const updatedData = { ...currentData, ...allowedAnswers };
 
   // Save each answer in QuotationAnswer table
-  for (const [key, val] of Object.entries(newAnswers)) {
+  for (const [key, val] of Object.entries(allowedAnswers)) {
     if (val === undefined || val === null || val === '') continue;
 
     const matchedQuestion = session.workflow?.questions.find((q) => q.fieldName === key);
 
     const existingAns = session.answers.find((a) => a.fieldName === key);
     if (existingAns) {
-      await prisma.quotationAnswer.update({
+      await tx.quotationAnswer.update({
         where: { id: existingAns.id },
         data: {
           value: String(val),
@@ -443,7 +450,7 @@ export async function processSessionAnswers(
         },
       });
     } else {
-      await prisma.quotationAnswer.create({
+      await tx.quotationAnswer.create({
         data: {
           sessionId,
           questionId: matchedQuestion ? matchedQuestion.id : null,
@@ -461,30 +468,7 @@ export async function processSessionAnswers(
   const allQuestions = [...(session.workflow?.questions || [])].sort(
     (a, b) => a.order - b.order || a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id),
   );
-  const activeQuestions: typeof allQuestions = [];
-
-  for (const q of allQuestions) {
-    let isApplicable = true;
-
-    // Check condition logic e.g. {"dependsOn": "has_trainer", "value": "true"}
-    if (q.condition && q.condition !== '{}') {
-      try {
-        const condObj = JSON.parse(q.condition);
-        if (condObj.dependsOn) {
-          const parentVal = updatedData[condObj.dependsOn];
-          if (String(parentVal) !== String(condObj.value)) {
-            isApplicable = false;
-          }
-        }
-      } catch {
-        // ignore parse error
-      }
-    }
-
-    if (isApplicable) {
-      activeQuestions.push(q);
-    }
-  }
+  const activeQuestions = applicableQuotationQuestions(allQuestions, updatedData);
 
   // Determine missing questions
   const missingQuestions = activeQuestions.filter(
@@ -495,7 +479,7 @@ export async function processSessionAnswers(
   const nextQuestion = missingQuestions[0] || null;
 
   // Update session state
-  const updatedSession = await prisma.quotationSession.update({
+  const updatedSession = await tx.quotationSession.update({
     where: { id: sessionId },
     data: {
       collectedData: JSON.stringify(updatedData),
@@ -525,6 +509,7 @@ export async function processSessionAnswers(
     leadId,
     session: updatedSession,
   };
+  });
 }
 
 /**

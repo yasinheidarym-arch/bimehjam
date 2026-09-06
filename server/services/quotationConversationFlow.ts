@@ -13,6 +13,7 @@ export type QuotationTurnQuestion = {
   maxVal?: number | null;
   minLength?: number | null;
   maxLength?: number | null;
+  condition?: string | null;
 };
 
 export type QuotationMessageAnalysis = {
@@ -59,7 +60,7 @@ function questionStartIndex(value: string): number {
   return match?.index ?? -1;
 }
 
-function answerPortion(value: string, asksQuestion: boolean): string {
+export function answerPortion(value: string, asksQuestion: boolean): string {
   if (!asksQuestion) return value.trim();
   const start = questionStartIndex(value);
   if (start > 0) return value.slice(0, start).replace(/[،,.!؛\s]+$/g, '').trim();
@@ -80,6 +81,9 @@ export function analyzeQuotationMessage(
   const candidate = answerPortion(value, asksQuestion) || (asksQuestion ? '' : value);
   const type = normalize(question.type || 'text');
   const options = parseOptions(question.options);
+  if (type !== 'boolean' && options.length === 0 && /^(آره|اره|بله|نه|خیر|باشه)$/.test(candidate)) {
+    return { validAnswer: false, answerValue: null, asksQuestion };
+  }
 
   if (['select', 'radio', 'checkbox'].includes(type) || options.length > 0) {
     const source = candidate || (!asksQuestion ? value : '');
@@ -93,9 +97,10 @@ export function analyzeQuotationMessage(
 
   if (type === 'number') {
     const source = asciiDigits(candidate || (!asksQuestion ? value : ''));
-    const numericMatch = source.match(/-?\d+(?:[.,]\d+)?/);
+    const matches = source.match(/-?\d+(?:[.,٫]\d+)?/g) || [];
+    const numericMatch = matches.length === 1 ? matches : null;
     const wordMatch = Object.entries(NUMBER_WORDS).find(([word]) => new RegExp(`(?:^|\\s)${word}(?:\\s|$)`).test(source));
-    const answerValue = numericMatch?.[0]?.replace(',', '.') || wordMatch?.[1] || null;
+    const answerValue = numericMatch?.[0]?.replace(/[,٫]/, '.') || (matches.length === 0 ? wordMatch?.[1] : null) || null;
     const numericValue = answerValue === null ? NaN : Number(answerValue);
     const inRange = Number.isFinite(numericValue) &&
       (question.minVal == null || numericValue >= question.minVal) &&
@@ -141,7 +146,7 @@ export function invalidQuotationAnswerReason(question: QuotationTurnQuestion): s
 
 export function invalidQuotationAnswerReply(question: QuotationTurnQuestion, invalidAttempts: number): string {
   if (invalidAttempts >= 2) {
-    return 'این پاسخ هم قابل ثبت نبود؛ برای جلوگیری از تکرار، این مرحله فعلاً متوقف شد. هر زمان مقدار دقیق را داشتید همان را بفرستید.';
+    return 'پاسخ‌های قبلی شما محفوظ است. می‌توانید برای همین مورد توضیح بیشتر بخواهید، مقدار را دوباره بفرستید یا درخواست راهنمایی کارشناس کنید.';
   }
   const type = normalize(question.type || 'text');
   if (type === 'number') {

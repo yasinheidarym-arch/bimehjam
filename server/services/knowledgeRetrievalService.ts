@@ -22,6 +22,7 @@ export interface ExtractedKnowledgePayload {
     name: string;
     category: string;
     purchaseUrl: string | null;
+    aiKnowledgeArticle?: string;
     description: string;
     coverage: string;
     purchaseConditions: string;

@@ -40,6 +40,9 @@ export function normalizeQuotationOptionText(value: unknown): string {
       return String(persianIndex >= 0 ? persianIndex : ARABIC_DIGITS.indexOf(digit));
     })
     .replace(/ي/g, 'ی')
+    .replace(/٫/g, '.')
+    .replace(/٬/g, '')
+    .replace(/\b\d{1,3}(?:,\d{3})+\b/g, value => value.replace(/,/g, ''))
     .replace(/ك/g, 'ک')
     .replace(/ۀ|ة/g, 'ه')
     .replace(/‌/g, ' ')
@@ -62,8 +65,9 @@ export function quotationQuestionOptions(question: QuotationTurnQuestion): Canon
   return values.map((value, index) => ({ id: `option-${index + 1}`, value: value.trim() })).filter((item) => item.value);
 }
 
-function numbersIn(value: string, requireAnswerShape = false): number[] {
+export function numbersIn(value: string, requireAnswerShape = false): number[] {
   const normalized = normalizeQuotationOptionText(value);
+  if (requireAnswerShape && /^(نه|آره|اره|بله|خیر)$/.test(normalized)) return [];
   const numeric = [...normalized.matchAll(/-?\d+(?:[.,]\d+)?/g)].map((match) => Number(match[0].replace(',', '.')));
   if (numeric.length > 0) return numeric.filter(Number.isFinite);
   const tokens = normalized.split(/[\s،,.!؟?؛:()\-_/]+/).filter(Boolean);
@@ -88,6 +92,12 @@ function numbersIn(value: string, requireAnswerShape = false): number[] {
   return found;
 }
 
+export function isPlainQuotationNumber(value: string): boolean {
+  const tokens = normalizeQuotationOptionText(value).replace(/-?\d+(?:[.,٫]\d+)?/g, ' ').split(/\s+/).filter(Boolean);
+  const units = new Set(['و', 'سال', 'ساله', 'طبقه', 'دستگاه', 'واحد', 'ماه', 'روز', 'نفر', 'متر', 'مترمربع', 'تا', 'حدود', 'حدودا', 'تقریبا', 'است', 'هست', 'دارم', 'داریم', 'عدد']);
+  return tokens.every(token => NUMBER_UNITS[token] !== undefined || units.has(token));
+}
+
 function optionContainsNumber(option: string, value: number): boolean {
   const normalized = normalizeQuotationOptionText(option);
   const bounds = numbersIn(normalized);
@@ -95,7 +105,7 @@ function optionContainsNumber(option: string, value: number): boolean {
   if (bounds.length === 1) {
     if (/بیش\s*از|بالاتر\s*از/.test(normalized)) return value > bounds[0];
     if (/کمتر\s*از/.test(normalized)) return value < bounds[0];
-    if (/^تا\s|حداکثر/.test(normalized)) return value <= bounds[0];
+    if (/^تا\s|حداکثر/.test(normalized)) return value >= 0 && value <= bounds[0];
     if (/به\s*بالا|حداقل/.test(normalized)) return value >= bounds[0];
     return value === bounds[0];
   }
@@ -107,18 +117,21 @@ function deterministicSelection(
   normalizedAnswer: string,
   options: CanonicalQuotationOption[],
 ): QuotationOptionSelection | null {
+  const hasWord = (text: string, word: string) => (` ${text} `).includes(` ${word} `);
   const exact = options.filter((option) => {
     const normalizedOption = normalizeQuotationOptionText(option.value);
-    if (normalizedAnswer === normalizedOption || normalizedAnswer.includes(normalizedOption)) return true;
+    if (normalizedAnswer === normalizedOption) return true;
+    if (/نیست|نیستم|ندارد|ندارم|نباشد/.test(normalizedAnswer)) return false;
+    if (hasWord(normalizedAnswer, normalizedOption)) return true;
     return Object.entries(SEMANTIC_ALIASES).some(([canonical, aliases]) =>
-      normalizedOption.includes(canonical) && aliases.some((alias) => normalizedAnswer.includes(normalizeQuotationOptionText(alias))),
+      normalizedOption.includes(canonical) && aliases.some((alias) => hasWord(normalizedAnswer, normalizeQuotationOptionText(alias))),
     );
   });
   if (exact.length === 1) return matched(fieldName, exact[0], 0.99, 'DETERMINISTIC');
 
   const answerNumbers = numbersIn(normalizedAnswer, true);
-  if (answerNumbers.length === 1) {
-    const ranged = options.filter((option) => optionContainsNumber(option.value, answerNumbers[0]));
+  if (answerNumbers.length === 1 || (answerNumbers.length === 2 && /تا|الی/.test(normalizedAnswer))) {
+    const ranged = options.filter((option) => answerNumbers.every((number) => optionContainsNumber(option.value, number)));
     if (ranged.length === 1) return matched(fieldName, ranged[0], 0.99, 'DETERMINISTIC');
   }
   return null;
@@ -162,7 +175,7 @@ export async function resolveQuotationOptionSelection(input: {
     raw = null;
   }
   const candidate = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-  const confidence = Math.max(0, Math.min(1, Number(candidate.confidence) || 0));
+  const confidence = typeof candidate.confidence === 'number' && Number.isFinite(candidate.confidence) && candidate.confidence >= 0 && candidate.confidence <= 1 ? candidate.confidence : 0;
   const option = options.find((item) =>
     candidate.fieldName === input.question.fieldName &&
     candidate.selectedOptionId === item.id &&

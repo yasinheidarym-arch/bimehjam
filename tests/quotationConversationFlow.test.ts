@@ -150,13 +150,14 @@ test('building age accepts English, Persian and suffixed numeric answers and adv
   }
 });
 
-test('invalid numeric replies explain once, pause after two attempts and expose a log reason', () => {
+test('invalid numeric replies offer help after two attempts without stopping', () => {
   const question: QuotationTurnQuestion = {
     id: 'building-age', title: 'سن ساختمان', fieldName: 'buildingAge',
     type: 'number', required: true, order: 1, minVal: 0, maxVal: 100,
   };
   assert.match(invalidQuotationAnswerReply(question, 1), /عدد معتبر/);
   assert.doesNotMatch(invalidQuotationAnswerReply(question, 1), /سن ساختمان/);
-  assert.match(invalidQuotationAnswerReply(question, 2), /متوقف شد/);
+  assert.doesNotMatch(invalidQuotationAnswerReply(question, 2), /متوقف شد/);
+  assert.match(invalidQuotationAnswerReply(question, 2), /محفوظ.*کارشناس/);
   assert.match(invalidQuotationAnswerReason(question), /buildingAge.*عدد معتبر.*حداقل 0.*حداکثر 100/);
 });

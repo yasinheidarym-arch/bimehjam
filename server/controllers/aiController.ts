@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import prisma from '../db/client';
-import { processAiConversation, getActiveSystemPrompt } from '../services/aiConversationService';
+import { getActiveSystemPrompt } from '../services/aiConversationService';
+import { runAiPipelineForMessage } from '../services/aiPipelineService';
 
 /**
  * Controller endpoint: POST /api/ai/process-message
@@ -17,7 +18,19 @@ export async function processMessageController(req: Request, res: Response) {
       });
     }
 
-    const result = await processAiConversation({ conversationId, messageId });
+    // Use the same mode/policy gates, turn serialization and quotation state
+    // machine as Goftino. The legacy free-form answer extractor must not write
+    // a second, conflicting state through this endpoint.
+    const conversation = await prisma.conversation.findUnique({ where: { id: conversationId } });
+    if (!conversation) return res.status(404).json({ success: false, error: 'Conversation not found' });
+    const message = await prisma.message.findFirst({
+      where: { conversationId, senderType: 'CUSTOMER', ...(messageId ? { id: messageId } : {}) },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!message) return res.status(400).json({ success: false, error: 'Customer message not found' });
+    await runAiPipelineForMessage({ conversationId, customerId: conversation.customerId, messageId: message.id, userMessageContent: message.content });
+    const reply = await prisma.message.findFirst({ where: { conversationId, senderType: 'AI', metadata: { contains: `"sourceMessageId":${JSON.stringify(message.id)}` } }, orderBy: { createdAt: 'desc' } });
+    const result = { success: true, conversationId, aiMessageId: reply?.id || null, aiResponse: reply ? { answer: reply.content } : null };
 
     return res.status(200).json({
       success: true,
