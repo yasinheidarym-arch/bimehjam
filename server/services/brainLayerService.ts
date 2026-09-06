@@ -563,6 +563,7 @@ export async function processBrainLayer(params: {
     deterministicReply = quotationInterruptionQuestion
       ? await explainQuotationInterruption({
           message: userMessageContent,
+          question: pendingQuestion,
           knowledge: product.aiKnowledgeArticle || '',
           select: async (context) => {
             const config = await getAiConfig();

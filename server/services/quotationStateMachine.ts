@@ -1,4 +1,5 @@
 import { analyzeQuotationMessage, answerPortion, quotationQuestionReply, type QuotationTurnQuestion } from './quotationConversationFlow';
+import { isQuotationHelpRequest } from './quotationQuestionHelp';
 import { normalizeQuotationOptionText as normalize, numbersIn, isPlainQuotationNumber, quotationQuestionOptions, resolveQuotationOptionSelection } from './quotationOptionMatchingService';
 
 export type QuotationTurnState = {
@@ -35,7 +36,7 @@ export function applicableQuotationQuestions<T extends QuotationTurnQuestion>(qu
 }
 
 export function isQuotationInterruption(text: string): boolean {
-  return /[؟?]|چرا|چطور|چگونه|چقدر|توضیح|راهنمایی|پوشش.*چی|چی.*پوشش/.test(text);
+  return isQuotationHelpRequest(text) || /[؟?]|چرا|چطور|چگونه|چقدر|توضیح|راهنمایی|پوشش.*چی|چی.*پوشش/.test(text);
 }
 function answerLike(text: string): boolean {
   return !/سلام|هوا|فوتبال|قیمت|هزینه|تومان|نمی\s*دانم|نمی\s*دونم|شاید|یا\s/.test(text);
@@ -111,7 +112,7 @@ export async function advanceQuotationTurn(input: {
     if (value !== null && !/[؛;\n:]/.test(source) && !otherLabel) save(current, value, 1);
   }
 
-  if (!Object.keys(updates).length && !offContextYesNo && input.model) {
+  if (!Object.keys(updates).length && !offContextYesNo && !(isQuotationHelpRequest(message) && !source) && input.model) {
     let raw: unknown;
     try { raw = await input.model({ message, currentQuestion: current, questions: input.questions, answers, correction }); } catch { raw = null; }
     const result = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};

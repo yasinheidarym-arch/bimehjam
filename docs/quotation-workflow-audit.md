@@ -39,6 +39,12 @@ field labels. Ambiguity preserves all prior answers and offers help, not a stop.
 BrainLog contains the question before processing, decisions/reasons/confidence,
 saved field names and state after processing. No schema change is needed.
 
+Operational help uses the pending question's existing `helpText` first, then
+type/text-based general guidance (area summation, counting, building age).
+It does not require a product article or a model call. Help-only messages never
+write answers or advance the pending question. Insurance coverage questions
+continue to use product knowledge rather than operational guidance.
+
 ## Validation and scope
 
 `npm run test:quotation-workflow` includes a mock-persisted conversation suite;

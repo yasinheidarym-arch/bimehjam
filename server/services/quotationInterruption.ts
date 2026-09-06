@@ -1,8 +1,12 @@
-/** Extractive grounding keeps the explanatory model out of question generation. */
+import type { QuotationTurnQuestion } from './quotationConversationFlow';
+import { isQuotationHelpRequest, quotationQuestionHelp } from './quotationQuestionHelp';
+/** Operational guidance uses the field schema; insurance claims remain grounded in knowledge. */
 export async function explainQuotationInterruption(input: {
   message: string; knowledge: string;
+  question?: QuotationTurnQuestion | null;
   select: (context: { message: string; knowledge: string }) => Promise<unknown>;
 }): Promise<string> {
+  if (input.question && isQuotationHelpRequest(input.message)) return quotationQuestionHelp(input.question);
   const fallback = 'برای این مورد توضیح قابل اتکایی در محتوای همین محصول ندارم؛ می‌توانید راهنمایی کارشناس بخواهید. پاسخ‌های قبلی شما محفوظ است.';
   if (!input.knowledge.trim()) return fallback;
   try {

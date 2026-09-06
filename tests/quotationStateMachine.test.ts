@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { advanceQuotationTurn, applicableQuotationQuestions, type QuotationTurnState, type QuotationTurnModel } from '../server/services/quotationStateMachine';
 import { explainQuotationInterruption } from '../server/services/quotationInterruption';
+import { quotationQuestionHelp } from '../server/services/quotationQuestionHelp';
 import { withConversationTurn } from '../server/services/conversationTurnQueue';
 import type { QuotationTurnQuestion } from '../server/services/quotationConversationFlow';
 import { startQuotationSubmission, advanceQuotationSubmission } from '../server/services/quotationSubmissionFlow';
@@ -188,4 +189,39 @@ test('completion collects contact information then requires actual confirmation'
   assert.equal(decision.action, 'ASK');
   assert.equal(advanceQuotationSubmission(decision.state, 'نه').action, 'ASK');
   assert.equal(advanceQuotationSubmission(decision.state, 'آره').action, 'SUBMIT');
+});
+
+test('area help without an article explains summation and preserves the exact pending question', async () => {
+  const message = 'چجوری حسابش کنم؟';
+  const result = await conversation({ usage: 'مجتمع مسکونی' }, async () => { assert.fail('help must not invoke answer model'); })(message);
+  assert.deepEqual(result.updates, {});
+  assert.equal(result.state.currentQuestion?.fieldName, 'area');
+  assert.equal(result.state.attempts.area, undefined);
+  const reply = await explainQuotationInterruption({ message, question: questions[1], knowledge: '', select: async () => { assert.fail('no article/model needed'); } });
+  assert.match(reply, /همکف.*منفی/);
+  assert.match(reply, /۱۰۰.*۵۰.*۳۵۰/);
+  assert.match(reply, /مجموع تقریبی/);
+  assert.doesNotMatch(reply, /کارشناس|اطلاعات ندارم|متوقف/);
+  assert.equal(result.nextQuestionText, questions[1].aiQuestion);
+});
+test('elevator and building age guidance depend on the question, never advance it', async () => {
+  for (const [question, expected] of [[questions[3], /دستگاه.*نه تعداد توقف/], [questions[2], /سال ساخت را از سال جاری کم کنید/]] as const) {
+    const result = await advanceQuotationTurn({ sessionId: 'help', questions: [question], answers: {}, message: 'چجوری حسابش کنم' });
+    assert.deepEqual(result.updates, {});
+    assert.equal(result.nextQuestionText, question.aiQuestion);
+    const reply = await explainQuotationInterruption({ question, message: 'چجوری حسابش کنم', knowledge: '', select: async () => null });
+    assert.match(reply, expected);
+    assert.doesNotMatch(reply, /کارشناس|اطلاعات ندارم/);
+  }
+});
+test('admin helpText has priority and blank help uses a generic type-aware guide', () => {
+  assert.equal(quotationQuestionHelp({ ...questions[1], helpText: '  مساحت درج‌شده در نقشه را جمع کنید.  ' }), 'مساحت درج‌شده در نقشه را جمع کنید.');
+  const generic = { title: 'تعداد ورودی‌ها', fieldName: 'entrances', required: true, order: 1, type: 'number', minVal: 1, helpText: '' };
+  assert.match(quotationQuestionHelp(generic), /موارد خواسته‌شده را بشمارید.*حداقل 1/);
+  assert.doesNotMatch(quotationQuestionHelp(generic), /متراژ|زیرزمین|کارشناس/);
+});
+test('insurance coverage questions still use knowledge, not operational helpText', async () => {
+  const passage = 'این پوشش شامل مسئولیت مدیر ساختمان است.';
+  const reply = await explainQuotationInterruption({ question: { ...questions[1], helpText: 'متراژ را جمع کنید.' }, message: 'درباره پوشش بیمه توضیح بده', knowledge: passage, select: async () => ({ passages: [passage] }) });
+  assert.equal(reply, passage);
 });

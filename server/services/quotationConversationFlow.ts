@@ -14,6 +14,7 @@ export type QuotationTurnQuestion = {
   minLength?: number | null;
   maxLength?: number | null;
   condition?: string | null;
+  helpText?: string | null;
 };
 
 export type QuotationMessageAnalysis = {
@@ -56,7 +57,7 @@ function parseOptions(options: QuotationTurnQuestion['options']): string[] {
 }
 
 function questionStartIndex(value: string): number {
-  const match = /(?:^|[،,.!؛]\s*)(?:راستی\s*)?(?:این\s*)?(?:بیمه\s*)?(?:چه\s|چرا|چطور|چگونه|چقدر|آیا|میشه|می\s*شه|می\s*تونی|می\s*توانید|توضیح\s*(?:بدی|بده|دهید)|مدت\s*بیمه)/.exec(value);
+  const match = /(?:^|[،,.!؛]\s*)(?:راستی\s*)?(?:این\s*)?(?:بیمه\s*)?(?:چه\s|چرا|چجوری|چطور|چگونه|چقدر|آیا|میشه|می\s*شه|می\s*تونی|می\s*توانید|توضیح\s*(?:بدی|بده|دهید)|مدت\s*بیمه)/.exec(value);
   return match?.index ?? -1;
 }
 

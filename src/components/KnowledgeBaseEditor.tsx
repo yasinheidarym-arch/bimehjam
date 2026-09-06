@@ -3419,12 +3419,13 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
               </div>
 
               <div>
-                <label className="font-bold text-slate-700 block mb-1">توضیحات تکمیلی (Help Text):</label>
-                <input
-                  type="text"
+                <label htmlFor="quotation-help-text" className="font-bold text-slate-700 block mb-1">راهنمای پاسخ به همین سؤال (helpText):</label>
+                <textarea
+                  id="quotation-help-text"
+                  rows={3}
                   value={questionForm.helpText}
                   onChange={(e) => setQuestionForm({ ...questionForm, helpText: e.target.value })}
-                  placeholder="توضیحات بیشتر برای کاربر یا AI..."
+                  placeholder="مثلاً: متراژ تمام طبقات، همکف و زیرزمین را با هم جمع کنید."
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500"
                 />
               </div>
@@ -3622,6 +3623,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                   onChange={(e) => setBehaviorForm({ ...behaviorForm, sortOrder: Number(e.target.value) })}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-amber-500"
                 />
+                <p className="text-xs text-slate-500 mt-1">هنگام درخواست راهنمایی، همین متن نمایش داده می‌شود. اگر خالی باشد، راهنمای عمومی از متن و نوع سؤال ساخته می‌شود؛ ترتیب سؤال‌ها تغییر نمی‌کند.</p>
               </div>
 
               <div>
