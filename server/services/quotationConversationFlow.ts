@@ -2,6 +2,7 @@ import { isDirectQuotationWorkflowRequest } from '../../shared/productPurchaseLi
 
 export type QuotationTurnQuestion = {
   id?: string;
+  createdAt?: Date | string | null;
   title: string;
   aiQuestion?: string | null;
   fieldName: string;
@@ -190,9 +191,17 @@ export function currentRequiredQuestion(
   questions: QuotationTurnQuestion[],
   collectedData: Record<string, string>,
 ): QuotationTurnQuestion | null {
-  return [...questions]
-    .sort((a, b) => a.order - b.order || String(a.id || '').localeCompare(String(b.id || '')))
+  return sortQuotationQuestions(questions)
     .find((question) => question.required && !collectedData[question.fieldName]) || null;
+}
+
+export function sortQuotationQuestions<T extends QuotationTurnQuestion>(questions: T[]): T[] {
+  return [...questions].sort((a, b) => {
+    if (a.order !== b.order) return a.order - b.order;
+    const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return aTime - bTime || String(a.id || '').localeCompare(String(b.id || ''));
+  });
 }
 
 export function captureCurrentQuestionAnswer(

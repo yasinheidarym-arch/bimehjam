@@ -742,7 +742,7 @@ export async function getProducts(req: Request, res: Response) {
     const products = await prisma.insuranceProduct.findMany({
       include: {
         quotationQuestions: {
-          orderBy: { order: 'asc' },
+          orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
         },
         knowledgeItems: true,
       },
@@ -872,7 +872,7 @@ export async function getQuotationQuestions(req: Request, res: Response) {
     const questions = await prisma.quotationQuestion.findMany({
       where: productId ? { productId: String(productId) } : undefined,
       include: { product: { select: { name: true } } },
-      orderBy: { order: 'asc' },
+      orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
     });
 
     return res.status(200).json({ success: true, count: questions.length, data: questions });

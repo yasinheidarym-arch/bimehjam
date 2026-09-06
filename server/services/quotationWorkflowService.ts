@@ -55,7 +55,7 @@ export async function getAllQuotationWorkflows() {
         select: { id: true, name: true, category: true, status: true },
       },
       questions: {
-        orderBy: { order: 'asc' },
+        orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       },
       sessions: {
         select: {
@@ -119,7 +119,7 @@ export async function getQuotationWorkflowById(id: string) {
         select: { id: true, name: true, category: true, status: true, description: true },
       },
       questions: {
-        orderBy: { order: 'asc' },
+        orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       },
       sessions: {
         take: 20,
@@ -263,7 +263,7 @@ export async function deleteQuotationWorkflow(id: string) {
 async function ensureProductQuotationWorkflow(productId: string) {
   let workflow = await prisma.quotationWorkflow.findFirst({
     where: { insuranceProductId: productId, status: 'ACTIVE' },
-    orderBy: { createdAt: 'asc' },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
   });
 
   if (!workflow) {
@@ -291,7 +291,7 @@ async function ensureProductQuotationWorkflow(productId: string) {
 
   return prisma.quotationWorkflow.findUnique({
     where: { id: workflow.id },
-    include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }] } },
+    include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] } },
   });
 }
 
@@ -315,12 +315,25 @@ export async function getOrCreateQuotationSession(params: {
         productId: params.productId,
         ...(params.sessionId ? { id: params.sessionId } : { status: 'IN_PROGRESS' }),
       },
-      orderBy: { createdAt: 'desc' },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       include: {
         answers: { include: { question: true } },
-        workflow: { include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }] } } },
+        workflow: { include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] } } },
       },
     });
+    // A workflow can be replaced or reactivated while a conversation is in
+    // progress. Always rebind the session to the product's current canonical
+    // workflow before deriving current/remaining questions.
+    if (session && workflow && session.workflowId !== workflow.id) {
+      session = await prisma.quotationSession.update({
+        where: { id: session.id },
+        data: { workflowId: workflow.id },
+        include: {
+          answers: { include: { question: true } },
+          workflow: { include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] } } },
+        },
+      });
+    }
   }
 
   if (!session) {
@@ -336,7 +349,7 @@ export async function getOrCreateQuotationSession(params: {
       },
       include: {
         answers: { include: { question: true } },
-        workflow: { include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }] } } },
+        workflow: { include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] } } },
       },
     });
   }
@@ -413,7 +426,7 @@ export async function processSessionAnswers(
       answers: true,
       product: true,
       workflow: {
-        include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }] } },
+        include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] } },
       },
     },
   });

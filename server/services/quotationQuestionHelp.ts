@@ -5,12 +5,12 @@ export function isQuotationHelpRequest(message: string): boolean {
   const text = normalizeQuotationOptionText(message);
   // Coverage/pricing questions still need product knowledge, not arithmetic guidance.
   if (/پوشش|خسارت|حق بیمه|قیمت بیمه|استثنا|بیمه (?:چیست|یعنی)/.test(text) && !/همین سؤال|همین سوال/.test(text)) return false;
-  return /چجوری|چه جوری|چگونه|چطور|نحوه|روش|حسابش|محاسبه.*کن|چی.*وارد|چی.*بنویس|چی.*بفرست|منظور.*سوال|منظور.*سؤال|یعنی چی|نفهمیدم|متوجه نشدم|راهنمایی|توضیح.*(?:بده|بدی|بدید|دهید)/.test(text);
+  return /چجوری|چه جوری|چگونه|چطور|نحوه|روش|حسابش|محاسبه.*کن|چی.*وارد|چی.*بنویس|چی.*بفرست|چی\s*شد(?:\s*پس)?|حالا\s*چی|منظور.*سوال|منظور.*سؤال|یعنی چی|نفهمیدم|متوجه نشدم|راهنمایی|توضیح.*(?:بده|بدی|بدید|دهید)/.test(text);
 }
 
 /** Only explain how to supply this field; never infer insurance terms or customer values. */
 export function quotationQuestionHelp(question: QuotationTurnQuestion): string {
-  if (question.helpText?.trim()) return question.helpText.trim();
+  if (question.helpText?.trim()) return `راهنمای این سؤال: ${question.helpText.trim()}`;
   const text = normalizeQuotationOptionText(`${question.title} ${question.aiQuestion || ''}`);
   if (/متراژ|مساحت/.test(text)) {
     if (/جمع|مجموع|کل/.test(text) && /طبقات|طبقه/.test(text)) {

@@ -32,6 +32,8 @@ export interface ExtractedKnowledgePayload {
   quotationWorkflow: {
     totalQuestions: number;
     allQuestions: Array<{
+      id?: string;
+      createdAt?: Date | string | null;
       order: number;
       title: string;
       fieldName: string;
@@ -39,14 +41,18 @@ export interface ExtractedKnowledgePayload {
       required: boolean;
       type: string;
       options?: string[];
+      helpText?: string | null;
     }>;
     answeredFields: Record<string, any>;
     nextQuestion: {
+      id?: string;
+      createdAt?: Date | string | null;
       order: number;
       title: string;
       fieldName: string;
       aiQuestion: string;
       options?: string[];
+      helpText?: string | null;
     } | null;
     isCompleted: boolean;
   } | null;
@@ -627,7 +633,7 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
     where: productWhere,
     include: {
       quotationQuestions: {
-        orderBy: { order: 'asc' },
+        orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       },
       categoryRef: true,
       subCategoryRef: true,
@@ -746,6 +752,8 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
     }
 
     const allQuestions = questions.map((q) => ({
+      id: q.id,
+      createdAt: q.createdAt,
       order: q.order,
       title: q.title,
       fieldName: q.fieldName,
@@ -753,6 +761,7 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
       required: q.required,
       type: q.type,
       options: q.options && q.options !== '[]' ? JSON.parse(q.options) : undefined,
+      helpText: q.helpText || null,
     }));
 
     // Find next unanswered required question

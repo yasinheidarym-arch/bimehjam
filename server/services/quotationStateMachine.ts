@@ -1,4 +1,4 @@
-import { analyzeQuotationMessage, answerPortion, quotationQuestionReply, type QuotationTurnQuestion } from './quotationConversationFlow';
+import { analyzeQuotationMessage, answerPortion, quotationQuestionReply, sortQuotationQuestions, type QuotationTurnQuestion } from './quotationConversationFlow';
 import { isQuotationHelpRequest } from './quotationQuestionHelp';
 import { normalizeQuotationOptionText as normalize, numbersIn, isPlainQuotationNumber, quotationQuestionOptions, resolveQuotationOptionSelection } from './quotationOptionMatchingService';
 
@@ -26,7 +26,7 @@ export function isQuotationCorrection(message: string): boolean {
 
 export function applicableQuotationQuestions<T extends QuotationTurnQuestion>(questions: T[], answers: Record<string, string>): T[] {
   const comparable = (value: unknown) => /^(بله|true)$/.test(String(value)) ? 'true' : /^(خیر|false)$/.test(String(value)) ? 'false' : String(value);
-  return [...questions].sort((a, b) => a.order - b.order || String(a.id || '').localeCompare(String(b.id || ''))).filter(q => {
+  return sortQuotationQuestions(questions).filter(q => {
     if (!q.condition || q.condition === '{}') return true;
     try {
       const condition = JSON.parse(q.condition);

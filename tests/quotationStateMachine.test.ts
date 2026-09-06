@@ -215,10 +215,53 @@ test('elevator and building age guidance depend on the question, never advance i
   }
 });
 test('admin helpText has priority and blank help uses a generic type-aware guide', () => {
-  assert.equal(quotationQuestionHelp({ ...questions[1], helpText: '  مساحت درج‌شده در نقشه را جمع کنید.  ' }), 'مساحت درج‌شده در نقشه را جمع کنید.');
+  assert.equal(quotationQuestionHelp({ ...questions[1], helpText: '  مساحت درج‌شده در نقشه را جمع کنید.  ' }), 'راهنمای این سؤال: مساحت درج‌شده در نقشه را جمع کنید.');
   const generic = { title: 'تعداد ورودی‌ها', fieldName: 'entrances', required: true, order: 1, type: 'number', minVal: 1, helpText: '' };
   assert.match(quotationQuestionHelp(generic), /موارد خواسته‌شده را بشمارید.*حداقل 1/);
   assert.doesNotMatch(quotationQuestionHelp(generic), /متراژ|زیرزمین|کارشناس/);
+});
+
+test('building-manager helpText is used and the same exact question survives reload', async () => {
+  const amenities: QuotationTurnQuestion = {
+    id: 'amenities', createdAt: '2026-01-01T00:00:09Z', order: 9,
+    title: 'امکانات رفاهی ساختمان', aiQuestion: 'ساختمان چه امکانات رفاهی دارد؟',
+    fieldName: 'amenities', type: 'text', required: true,
+    helpText: 'مواردی مثل استخر، باشگاه، سونا و جکوزی را که در ساختمان فعال است نام ببرید.',
+  };
+  const initial = await advanceQuotationTurn({ sessionId: 'manager-session', questions: [amenities], answers: {}, message: 'چی شد پس' });
+  assert.deepEqual(initial.updates, {});
+  assert.equal(initial.currentQuestionBefore?.helpText, amenities.helpText);
+  const reply = await explainQuotationInterruption({ message: 'چی شد پس', question: initial.currentQuestionBefore, knowledge: '', select: async () => null });
+  assert.match(reply, /راهنمای این سؤال:.*استخر.*باشگاه.*سونا.*جکوزی/);
+  assert.equal(initial.nextQuestionText, amenities.aiQuestion);
+
+  const reloaded = await advanceQuotationTurn({
+    sessionId: 'manager-session', questions: [amenities], answers: initial.state.answers,
+    previous: JSON.parse(JSON.stringify(initial.state)), message: 'چجوری باید جواب بدم؟',
+  });
+  assert.deepEqual(reloaded.updates, {});
+  assert.equal(reloaded.state.currentQuestion?.fieldName, 'amenities');
+  assert.equal(reloaded.nextQuestionText, amenities.aiQuestion);
+});
+
+test('database order, createdAt and id deterministically rebuild queue after reload', async () => {
+  const panelQuestions: QuotationTurnQuestion[] = [
+    { id: 'z', createdAt: '2026-01-03T00:00:00Z', order: 2, title: 'سؤال دوم ب', aiQuestion: 'متن دوم ب', fieldName: 'secondB', type: 'number', required: true },
+    { id: 'first', createdAt: '2026-01-04T00:00:00Z', order: 1, title: 'سؤال اول', aiQuestion: 'متن اول', fieldName: 'first', type: 'number', required: true },
+    { id: 'a', createdAt: '2026-01-03T00:00:00Z', order: 2, title: 'سؤال دوم الف', aiQuestion: 'متن دوم الف', fieldName: 'secondA', type: 'number', required: true },
+    { id: 'old', createdAt: '2026-01-02T00:00:00Z', order: 2, title: 'سؤال دوم قدیمی', aiQuestion: 'متن دوم قدیمی', fieldName: 'secondOld', type: 'number', required: true },
+  ];
+  let result = await advanceQuotationTurn({ sessionId: 'reload', questions: panelQuestions, answers: {}, message: '1' });
+  assert.deepEqual(result.updates, { first: '1' });
+  assert.equal(result.nextQuestionText, 'متن دوم قدیمی');
+
+  // Persist answers only; deliberately corrupt the cached question to prove it
+  // cannot reorder a freshly loaded database queue.
+  const staleState = { ...result.state, currentQuestion: panelQuestions[0] };
+  result = await advanceQuotationTurn({ sessionId: 'reload', questions: [...panelQuestions].reverse(), answers: result.state.answers, previous: staleState, message: '2' });
+  assert.deepEqual(result.updates, { secondOld: '2' });
+  assert.equal(result.nextQuestionText, 'متن دوم الف');
+  assert.equal(result.state.answers.secondB, undefined);
 });
 test('insurance coverage questions still use knowledge, not operational helpText', async () => {
   const passage = 'این پوشش شامل مسئولیت مدیر ساختمان است.';

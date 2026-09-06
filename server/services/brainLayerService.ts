@@ -14,6 +14,7 @@ import {
   quotationCompletedReply,
   quotationFormReply,
   quotationQuestionReply,
+  sortQuotationQuestions,
 } from './quotationConversationFlow';
 import type { QuotationOptionSelection } from './quotationOptionMatchingService';
 import {
@@ -66,7 +67,9 @@ export interface BrainResult {
     productId: string;
     productName: string;
     currentQuestionFieldName: string | null;
+    currentQuestion: { id: string; order: number; fieldName: string; helpText: string | null } | null;
     remainingQuestions: string[];
+    remainingQuestionFields: Array<{ id: string; order: number; fieldName: string; helpText: string | null }>;
     isCompleted: boolean;
   };
 
@@ -84,7 +87,7 @@ export interface BrainResult {
     detectedProduct: { id: string; name: string } | null;
     purchaseUrl: string | null;
     purchaseRequested: boolean;
-    orderedQuestions: Array<{ order: number; fieldName: string; text: string }>;
+    orderedQuestions: Array<{ order: number; fieldName: string; text: string; helpText?: string | null }>;
     registrationStatus: string;
     matchedCategory: { id: string; name: string } | null;
     currentPageProductSuggestionDecision: 'NONE' | 'OFFERED' | 'AWAITING_CONFIRMATION' | 'ACCEPTED' | 'REJECTED';
@@ -520,6 +523,8 @@ export async function processBrainLayer(params: {
     extractedKnowledge.quotationWorkflow = {
       totalQuestions: evaluation.totalQuestionsCount,
       allQuestions: questions.map((question) => ({
+        id: question.id,
+        createdAt: question.createdAt,
         order: question.order,
         title: question.title,
         fieldName: question.fieldName,
@@ -529,9 +534,12 @@ export async function processBrainLayer(params: {
         options: question.options && question.options !== '[]'
           ? JSON.parse(question.options)
           : undefined,
+        helpText: question.helpText || null,
       })),
       answeredFields: answered,
       nextQuestion: nextQuestion ? {
+        id: nextQuestion.id,
+        createdAt: nextQuestion.createdAt,
         order: nextQuestion.order,
         title: nextQuestion.title,
         fieldName: nextQuestion.fieldName,
@@ -539,6 +547,7 @@ export async function processBrainLayer(params: {
         options: nextQuestion.options && nextQuestion.options !== '[]'
           ? JSON.parse(nextQuestion.options)
           : undefined,
+        helpText: nextQuestion.helpText || null,
       } : null,
       isCompleted: evaluation.isCompleted,
     };
@@ -548,7 +557,19 @@ export async function processBrainLayer(params: {
       productId: product.id,
       productName: product.name,
       currentQuestionFieldName: nextQuestion?.fieldName || null,
+      currentQuestion: nextQuestion ? {
+        id: nextQuestion.id,
+        order: nextQuestion.order,
+        fieldName: nextQuestion.fieldName,
+        helpText: nextQuestion.helpText || null,
+      } : null,
       remainingQuestions,
+      remainingQuestionFields: evaluation.remainingQuestions.map((question) => ({
+        id: question.id,
+        order: question.order,
+        fieldName: question.fieldName,
+        helpText: question.helpText || null,
+      })),
       isCompleted: evaluation.isCompleted,
     };
 
@@ -596,12 +617,12 @@ export async function processBrainLayer(params: {
       : null,
     purchaseUrl: extractedKnowledge.matchedProduct?.purchaseUrl || null,
     purchaseRequested: productPurchaseRequested,
-    orderedQuestions: [...(extractedKnowledge.quotationWorkflow?.allQuestions || [])]
-      .sort((a, b) => a.order - b.order)
+    orderedQuestions: sortQuotationQuestions(extractedKnowledge.quotationWorkflow?.allQuestions || [])
       .map((question) => ({
         order: question.order,
         fieldName: question.fieldName,
         text: question.aiQuestion || question.title,
+        helpText: question.helpText || null,
       })),
     registrationStatus,
     matchedCategory: extractedKnowledge.matchedCategoryId && extractedKnowledge.matchedCategory
