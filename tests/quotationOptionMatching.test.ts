@@ -5,6 +5,7 @@ import {
   quotationOptionFollowup,
   resolveQuotationOptionSelection,
 } from '../server/services/quotationOptionMatchingService.ts';
+import { parseQuotationMoney, quotationMoneyMismatchReply, resolveQuotationMoney } from '../server/services/quotationMoney.ts';
 
 const ageQuestion = {
   title: 'سن ساختمان', aiQuestion: 'ساختمان مورد بیمه چند سال ساخته؟', fieldName: 'buildingAgeBand',
@@ -77,4 +78,37 @@ test('ambiguous answer asks one short clarification and unrelated answer lists r
   assert.equal(unrelated.status, 'UNRELATED');
   assert.match(quotationOptionFollowup(ageQuestion, unrelated), /تا ۵ سال ساخت.*بیش از ۲۵ سال ساخت/);
   assert.equal(normalizeQuotationOptionText('  ۲  ساله‌ '), '2 ساله');
+});
+
+const moneyQuestion = {
+  title: 'سقف سرمایه درخواستی (تومان)', fieldName: 'capital', type: 'select', required: true, order: 1,
+  options: ['۵۰۰ میلیون تومان', '۱ میلیارد و ۵۰۰ میلیون تومان', '۲ میلیارد تومان'],
+};
+
+test('Persian and English conversational money is normalized to integer toman', () => {
+  assert.equal(parseQuotationMoney('۱ میلیارد و ۵۰۰ میلیون تومان'), 1_500_000_000);
+  assert.equal(parseQuotationMoney('1 میلیارد و 500 میلیون تومان'), 1_500_000_000);
+  assert.equal(parseQuotationMoney('یک و نیم میلیارد'), 1_500_000_000);
+  assert.equal(parseQuotationMoney('۵۰۰ میلیون تومان'), 500_000_000);
+  assert.equal(parseQuotationMoney('500 تومن', true), 500_000_000);
+});
+
+test('money equal to a real option is selected canonically', async () => {
+  for (const message of ['۱ میلیارد و ۵۰۰ میلیون تومان', 'یک و نیم میلیارد', '1.5 میلیارد']) {
+    const result = await resolveQuotationOptionSelection({ question: moneyQuestion, message });
+    assert.equal(result.status, 'MATCHED', message);
+    assert.equal(result.selectedOptionValue, '۱ میلیارد و ۵۰۰ میلیون تومان', message);
+  }
+  const colloquial = await resolveQuotationOptionSelection({ question: moneyQuestion, message: '500 تومن' });
+  assert.equal(colloquial.selectedOptionValue, '۵۰۰ میلیون تومان');
+});
+
+test('clear money outside real options is confirmed and gets nearby valid choices', () => {
+  const decision = resolveQuotationMoney(moneyQuestion, '۸۰۰ میلیون تومان');
+  assert.equal(decision?.status, 'OUT_OF_OPTIONS');
+  assert.equal(decision?.amountToman, 800_000_000);
+  const reply = quotationMoneyMismatchReply(decision!);
+  assert.match(reply, /۸۰۰٬۰۰۰٬۰۰۰ تومان.*جزو گزینه/);
+  assert.match(reply, /۵۰۰ میلیون تومان/);
+  assert.doesNotMatch(reply, /منظورتان چیست/);
 });

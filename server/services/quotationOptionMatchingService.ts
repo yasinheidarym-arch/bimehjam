@@ -1,4 +1,5 @@
 import type { QuotationTurnQuestion } from './quotationConversationFlow';
+import { resolveQuotationMoney } from './quotationMoney';
 
 export type CanonicalQuotationOption = { id: string; value: string };
 export type QuotationOptionSelection = {
@@ -117,6 +118,14 @@ function deterministicSelection(
   normalizedAnswer: string,
   options: CanonicalQuotationOption[],
 ): QuotationOptionSelection | null {
+  const money = resolveQuotationMoney({
+    title: 'مبلغ (تومان)', fieldName, required: true, order: 0,
+    options: options.map(option => option.value),
+  }, normalizedAnswer);
+  if (money?.status === 'MATCHED' && money.matchedOption) {
+    const option = options.find(item => item.value === money.matchedOption);
+    if (option) return matched(fieldName, option, 1, 'DETERMINISTIC');
+  }
   const hasWord = (text: string, word: string) => (` ${text} `).includes(` ${word} `);
   const exact = options.filter((option) => {
     const normalizedOption = normalizeQuotationOptionText(option.value);

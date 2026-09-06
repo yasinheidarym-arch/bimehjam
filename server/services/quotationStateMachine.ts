@@ -1,6 +1,7 @@
 import { analyzeQuotationMessage, answerPortion, quotationQuestionReply, sortQuotationQuestions, type QuotationTurnQuestion } from './quotationConversationFlow';
 import { isQuotationHelpRequest } from './quotationQuestionHelp';
 import { normalizeQuotationOptionText as normalize, numbersIn, isPlainQuotationNumber, quotationQuestionOptions, resolveQuotationOptionSelection } from './quotationOptionMatchingService';
+import { isAmbiguousQuotationMoney, quotationMoneyMismatchReply, resolveQuotationMoney } from './quotationMoney';
 
 export type QuotationTurnState = {
   version: 1;
@@ -39,7 +40,7 @@ export function isQuotationInterruption(text: string): boolean {
   return isQuotationHelpRequest(text) || /[؟?]|چرا|چطور|چگونه|چقدر|توضیح|راهنمایی|پوشش.*چی|چی.*پوشش/.test(text);
 }
 function answerLike(text: string): boolean {
-  return !/سلام|هوا|فوتبال|قیمت|هزینه|تومان|نمی\s*دانم|نمی\s*دونم|شاید|یا\s/.test(text);
+  return !/سلام|هوا|فوتبال|قیمت|هزینه|نمی\s*دانم|نمی\s*دونم|شاید|یا\s/.test(text);
 }
 
 function mentionsField(message: string, q: QuotationTurnQuestion): boolean {
@@ -56,6 +57,9 @@ async function canonicalAnswer(q: QuotationTurnQuestion, evidence: string, propo
       !options.some(o => /^(بله|خیر|آره|نه|دارد|ندارد)$/.test(o.value))) return null;
   if (!text || isQuotationInterruption(text) || !answerLike(text)) return null;
   if (options.length) {
+    const money = resolveQuotationMoney(q, text);
+    if (money?.status === 'MATCHED') return money.matchedOption || null;
+    if (money?.status === 'OUT_OF_OPTIONS') return null;
     if (numbersIn(text, true).length && !isPlainQuotationNumber(text) && !options.some(o => normalize(o.value) === text)) return null;
     if (q.type === 'checkbox') {
       const chosen = options.filter(o => text.includes(normalize(o.value)));
@@ -98,6 +102,8 @@ export async function advanceQuotationTurn(input: {
   let source = answerPortion(message, interruption);
   const offContextYesNo = /^(آره|اره|بله|نه|خیر|باشه)$/.test(message) && current?.type !== 'boolean' &&
     !quotationQuestionOptions(current || { title: '', fieldName: '', required: true, order: 0 }).some(o => /^(بله|خیر|آره|نه|دارد|ندارد)$/.test(o.value));
+  const moneyDecision = current ? resolveQuotationMoney(current, source || message) : null;
+  const ambiguousMoney = current ? isAmbiguousQuotationMoney(current, source || message) : false;
 
   const save = (q: QuotationTurnQuestion, value: string, confidence: number) => {
     updates[q.fieldName] = value;
@@ -112,7 +118,7 @@ export async function advanceQuotationTurn(input: {
     if (value !== null && !/[؛;\n:]/.test(source) && !otherLabel) save(current, value, 1);
   }
 
-  if (!Object.keys(updates).length && !offContextYesNo && !(isQuotationHelpRequest(message) && !source) && input.model) {
+  if (!Object.keys(updates).length && moneyDecision?.status !== 'OUT_OF_OPTIONS' && !ambiguousMoney && !offContextYesNo && !(isQuotationHelpRequest(message) && !source) && input.model) {
     let raw: unknown;
     try { raw = await input.model({ message, currentQuestion: current, questions: input.questions, answers, correction }); } catch { raw = null; }
     const result = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
@@ -154,10 +160,22 @@ export async function advanceQuotationTurn(input: {
     const count = attempts[current.fieldName];
     ambiguity = count > 1 ? 'HELP' : 'CLARIFY';
     const options = quotationQuestionOptions(current).map(o => o.value);
-    clarification = count === 1
-      ? `برای «${current.title}» ${current.type === 'number' ? 'چه عددی را ثبت کنم؟' : 'منظورتان دقیقاً چیست؟'}`
-      : `${options.length ? `گزینه‌های همین سؤال: ${options.join('، ')}. ` : ''}پاسخ‌های قبلی محفوظ است؛ می‌توانید برای همین مورد توضیح بیشتر یا راهنمایی کارشناس بخواهید، یا پاسخ را دوباره بفرستید.`;
-    decisions.push({ fieldName: current.fieldName, confidence: 0, reason: offContextYesNo ? 'Yes/no outside a boolean question' : 'No unambiguous valid answer for current field', outcome: 'CLARIFY' });
+    clarification = moneyDecision?.status === 'OUT_OF_OPTIONS'
+      ? quotationMoneyMismatchReply(moneyDecision)
+      : ambiguousMoney
+        ? 'مبلغ را دقیق‌تر همراه واحد بفرستید؛ مثلاً «۵۰۰ میلیون تومان» یا «یک و نیم میلیارد تومان».'
+      : count === 1
+        ? `برای «${current.title}» ${current.type === 'number' ? 'چه عددی را ثبت کنم؟' : 'منظورتان دقیقاً چیست؟'}`
+        : `${options.length ? `گزینه‌های همین سؤال: ${options.join('، ')}. ` : ''}پاسخ‌های قبلی محفوظ است؛ می‌توانید برای همین مورد توضیح بیشتر یا راهنمایی کارشناس بخواهید، یا پاسخ را دوباره بفرستید.`;
+    decisions.push({
+      fieldName: current.fieldName,
+      confidence: moneyDecision?.status === 'OUT_OF_OPTIONS' ? 1 : 0,
+      reason: moneyDecision?.status === 'OUT_OF_OPTIONS'
+        ? `Normalized monetary amount ${moneyDecision.amountToman} has no exact real option`
+        : ambiguousMoney ? 'Monetary answer contains a unit but cannot be normalized unambiguously'
+        : offContextYesNo ? 'Yes/no outside a boolean question' : 'No unambiguous valid answer for current field',
+      outcome: 'CLARIFY',
+    });
   }
   if (correction && !Object.keys(updates).length && !interruption) {
     ambiguity = 'CLARIFY';

@@ -268,3 +268,25 @@ test('insurance coverage questions still use knowledge, not operational helpText
   const reply = await explainQuotationInterruption({ question: { ...questions[1], helpText: 'متراژ را جمع کنید.' }, message: 'درباره پوشش بیمه توضیح بده', knowledge: passage, select: async () => ({ passages: [passage] }) });
   assert.equal(reply, passage);
 });
+
+test('money options save exact canonical value and never save a clear out-of-list amount', async () => {
+  const money = {
+    id: 'capital', title: 'سرمایه درخواستی (تومان)', aiQuestion: 'چه مبلغی را انتخاب می‌کنید؟',
+    fieldName: 'capital', type: 'select', required: true, order: 1,
+    options: ['۵۰۰ میلیون تومان', '۱ میلیارد و ۵۰۰ میلیون تومان', '۲ میلیارد تومان'],
+  };
+  const afterMoney = { id: 'after-money', title: 'تعداد کارکنان', aiQuestion: 'چند نفر کارمند دارید؟', fieldName: 'staff', type: 'number', required: true, order: 2 };
+  const exact = await advanceQuotationTurn({ sessionId: 'money', questions: [afterMoney, money], answers: {}, message: 'یک و نیم میلیارد' });
+  assert.deepEqual(exact.updates, { capital: '۱ میلیارد و ۵۰۰ میلیون تومان' });
+  assert.equal(exact.nextQuestionText, afterMoney.aiQuestion);
+
+  const outside = await advanceQuotationTurn({ sessionId: 'money', questions: [money], answers: {}, message: '800 میلیون تومان', model: async () => ({ assignments: [{ fieldName: 'capital', value: '۵۰۰ میلیون تومان', evidence: '800 میلیون تومان', confidence: 1 }] }) });
+  assert.deepEqual(outside.updates, {});
+  assert.equal(outside.state.currentQuestion?.fieldName, 'capital');
+  assert.match(outside.clarification!, /۸۰۰٬۰۰۰٬۰۰۰ تومان.*گزینه‌های معتبر نزدیک/);
+  assert.match(outside.decisions[0].reason, /800000000.*no exact real option/);
+
+  const ambiguous = await advanceQuotationTurn({ sessionId: 'money', questions: [money], answers: {}, message: 'یک میلیارد و خورده‌ای', model: async () => ({ assignments: [{ fieldName: 'capital', value: '۱ میلیارد و ۵۰۰ میلیون تومان', evidence: 'یک میلیارد و خورده‌ای', confidence: 1 }] }) });
+  assert.deepEqual(ambiguous.updates, {});
+  assert.match(ambiguous.clarification!, /مبلغ را دقیق‌تر.*واحد/);
+});
