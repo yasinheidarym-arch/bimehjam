@@ -17,6 +17,15 @@ import {
   PURCHASE_LINK_RULE_TITLE,
   serializeQuotationRoutingTemplates,
 } from '../../shared/productPurchaseLink';
+import {
+  parseQuotationResponseEngineConfig,
+  QUOTATION_RESPONSE_ENGINE_CATEGORY,
+  QUOTATION_RESPONSE_ENGINE_DIRECTIVE,
+  QUOTATION_RESPONSE_ENGINE_RULE_ID,
+  QUOTATION_RESPONSE_ENGINE_TITLE,
+  serializeQuotationResponseEngineConfig,
+  type QuotationResponseEngineConfig,
+} from '../../shared/quotationResponseEngine';
 
 export interface AiBehaviorRuleItem {
   id: string;
@@ -138,6 +147,20 @@ async function ensureSeedRules() {
       },
     });
   }
+
+  const responseEngineRule = await prisma.aiRule.findFirst({
+    where: { OR: [{ id: QUOTATION_RESPONSE_ENGINE_RULE_ID }, { category: QUOTATION_RESPONSE_ENGINE_CATEGORY }] },
+  });
+  if (!responseEngineRule) {
+    const aggregate = await prisma.aiRule.aggregate({ _max: { sortOrder: true } });
+    await prisma.aiRule.create({ data: {
+      id: QUOTATION_RESPONSE_ENGINE_RULE_ID,
+      title: QUOTATION_RESPONSE_ENGINE_TITLE,
+      directive: QUOTATION_RESPONSE_ENGINE_DIRECTIVE,
+      sortOrder: (aggregate._max.sortOrder || 0) + 1,
+      status: 'ACTIVE', category: QUOTATION_RESPONSE_ENGINE_CATEGORY, enforcementLevel: 'STRICT',
+    }}).catch((error: { code?: string }) => { if (error.code !== 'P2002') throw error; });
+  }
 }
 
 export async function ensureSystemAiBehaviorRules(): Promise<void> {
@@ -178,7 +201,7 @@ export async function getAllBehaviorRules(): Promise<AiBehaviorRuleItem[]> {
 export async function getFormattedAiBehaviorPrompt(): Promise<string> {
   await ensureSeedRules();
   const activeRules = await prisma.aiRule.findMany({
-    where: { status: 'ACTIVE' },
+    where: { status: 'ACTIVE', category: { notIn: [PURCHASE_LINK_RULE_CATEGORY, QUOTATION_RESPONSE_ENGINE_CATEGORY] } },
     orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
   });
 
@@ -248,6 +271,14 @@ export async function updateBehaviorRule(
     }
     if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
     if (data.status !== undefined) updateData.status = data.status;
+  } else if (existing.category === QUOTATION_RESPONSE_ENGINE_CATEGORY) {
+    if (data.directive !== undefined) {
+      const config = parseQuotationResponseEngineConfig(data.directive);
+      if (!config) throw new Error('پیکربندی موتور پاسخ استعلام نامعتبر است.');
+      updateData.directive = serializeQuotationResponseEngineConfig(config);
+    }
+    if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
+    if (data.status !== undefined) updateData.status = data.status;
   } else {
   if (data.title !== undefined) updateData.title = data.title.trim();
   if (data.directive !== undefined) updateData.directive = data.directive.trim();
@@ -288,12 +319,32 @@ export async function getQuotationRoutingRule() {
   };
 }
 
+export async function getQuotationResponseEngineRule() {
+  await ensureSeedRules();
+  const rule = await prisma.aiRule.findFirst({ where: { category: QUOTATION_RESPONSE_ENGINE_CATEGORY } });
+  if (!rule) return null;
+  const config = parseQuotationResponseEngineConfig(rule.directive);
+  if (!config) return null;
+  return { id: rule.id, title: rule.title, status: rule.status === 'ACTIVE' ? 'ACTIVE' as const : 'INACTIVE' as const, sortOrder: rule.sortOrder, config };
+}
+
+export async function updateQuotationQuestionExamples(questionId: string, examples: string[]): Promise<QuotationResponseEngineConfig> {
+  const rule = await getQuotationResponseEngineRule();
+  if (!rule) throw new Error('قانون موتور پاسخ استعلام یافت نشد.');
+  const cleaned = examples.map(item => item.trim()).filter(Boolean).slice(0, 30);
+  const config = { ...rule.config, questionExamples: { ...rule.config.questionExamples } };
+  if (cleaned.length) config.questionExamples[questionId] = cleaned;
+  else delete config.questionExamples[questionId];
+  await prisma.aiRule.update({ where: { id: rule.id }, data: { directive: serializeQuotationResponseEngineConfig(config) } });
+  return config;
+}
+
 /**
  * Delete an AI Behavior Rule
  */
 export async function deleteBehaviorRule(id: string): Promise<boolean> {
   const existing = await prisma.aiRule.findUnique({ where: { id }, select: { category: true } });
-  if (existing?.category === FULL_NAME_HANDOFF_RULE_CATEGORY || existing?.category === PURCHASE_LINK_RULE_CATEGORY) {
+  if (existing?.category === FULL_NAME_HANDOFF_RULE_CATEGORY || existing?.category === PURCHASE_LINK_RULE_CATEGORY || existing?.category === QUOTATION_RESPONSE_ENGINE_CATEGORY) {
     throw new Error('این قانون سیستمی قابل حذف نیست؛ می‌توانید آن را غیرفعال کنید.');
   }
   await prisma.aiRule.delete({

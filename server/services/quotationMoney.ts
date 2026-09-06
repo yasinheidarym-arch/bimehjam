@@ -52,9 +52,9 @@ export function parseQuotationMoney(value: unknown, inferColloquialMillion = fal
 }
 
 function optionValues(question: QuotationTurnQuestion): string[] {
-  if (Array.isArray(question.options)) return question.options.map(String);
+  if (Array.isArray(question.options)) return question.options.flatMap((raw) => typeof raw === 'string' ? [raw] : raw && typeof raw === 'object' && typeof (raw as { value?: unknown }).value === 'string' ? [(raw as { value: string }).value] : []);
   if (!question.options) return [];
-  try { const parsed = JSON.parse(question.options); return Array.isArray(parsed) ? parsed.map(String) : []; }
+  try { const parsed = JSON.parse(question.options); return Array.isArray(parsed) ? parsed.flatMap((raw) => typeof raw === 'string' ? [raw] : raw && typeof raw === 'object' && typeof raw.value === 'string' ? [raw.value] : []) : []; }
   catch { return String(question.options).split(',').map(v => v.trim()).filter(Boolean); }
 }
 

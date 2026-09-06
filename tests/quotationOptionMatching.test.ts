@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   normalizeQuotationOptionText,
-  quotationOptionFollowup,
   resolveQuotationOptionSelection,
 } from '../server/services/quotationOptionMatchingService.ts';
 import { parseQuotationMoney, quotationMoneyMismatchReply, resolveQuotationMoney } from '../server/services/quotationMoney.ts';
@@ -32,9 +31,11 @@ test('2, Persian 2 and colloquial two years map to the canonical first age band'
 
 test('colloquial answer is semantically restricted to a real canonical option', async () => {
   const question = { ...ageQuestion, fieldName: 'usage', options: ['مجتمع مسکونی', 'مجتمع تجاری'] };
-  const result = await resolveQuotationOptionSelection({ question, message: 'خونه و محل سکونته' });
+  const result = await resolveQuotationOptionSelection({ question, message: 'خونه و محل سکونته', modelSelector: async () => ({
+    fieldName: 'usage', selectedOptionId: 'option-1', selectedOptionValue: 'مجتمع مسکونی', confidence: .96,
+  }) });
   assert.equal(result.selectedOptionValue, 'مجتمع مسکونی');
-  assert.equal(result.source, 'DETERMINISTIC');
+  assert.equal(result.source, 'AI');
 });
 
 test('AI structured selection is accepted only with exact field, id, value and confidence', async () => {
@@ -68,7 +69,6 @@ test('ambiguous answer asks one short clarification and unrelated answer lists r
     modelSelector: async () => ({ fieldName: 'buildingAgeBand', selectedOptionId: null, selectedOptionValue: null, confidence: 0.55 }),
   });
   assert.equal(ambiguous.status, 'AMBIGUOUS');
-  assert.match(quotationOptionFollowup(ageQuestion, ambiguous), /دقیقاً کدام بازه یا گزینه/);
 
   const unrelated = await resolveQuotationOptionSelection({
     question: ageQuestion,
@@ -76,7 +76,6 @@ test('ambiguous answer asks one short clarification and unrelated answer lists r
     modelSelector: async () => ({ fieldName: 'buildingAgeBand', selectedOptionId: null, selectedOptionValue: null, confidence: 0.1 }),
   });
   assert.equal(unrelated.status, 'UNRELATED');
-  assert.match(quotationOptionFollowup(ageQuestion, unrelated), /تا ۵ سال ساخت.*بیش از ۲۵ سال ساخت/);
   assert.equal(normalizeQuotationOptionText('  ۲  ساله‌ '), '2 ساله');
 });
 

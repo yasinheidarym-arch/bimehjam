@@ -60,6 +60,14 @@ import {
   QuotationRoutingTemplates,
   serializeQuotationRoutingTemplates,
 } from '../../shared/productPurchaseLink';
+import {
+  DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG,
+  parseQuotationResponseEngineConfig,
+  QUOTATION_RESPONSE_ENGINE_CATEGORY,
+  QUOTATION_RESPONSE_STATES,
+  serializeQuotationResponseEngineConfig,
+  type QuotationResponseEngineConfig,
+} from '../../shared/quotationResponseEngine';
 
 type ModuleTab = 'categories' | 'products' | 'faqs' | 'ai-behavior';
 type ModuleLoadState = 'loading' | 'ready' | 'error';
@@ -128,6 +136,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     validationRule: string;
     placeholder: string;
     helpText: string;
+    validAnswerExamples: string;
     order: number;
     minVal: string;
     maxVal: string;
@@ -146,6 +155,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     validationRule: '',
     placeholder: '',
     helpText: '',
+    validAnswerExamples: '',
     order: 1,
     minVal: '',
     maxVal: '',
@@ -245,13 +255,18 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     status: 'ACTIVE' | 'INACTIVE';
     sortOrder: number;
     routingTemplates: QuotationRoutingTemplates | null;
+    engineConfig: QuotationResponseEngineConfig | null;
   }>({
     title: '',
     directive: '',
     status: 'ACTIVE',
     sortOrder: 0,
     routingTemplates: null,
+    engineConfig: null,
   });
+  const [quotationSimulator, setQuotationSimulator] = useState({ question: '', fieldName: 'current_field', type: 'text', options: '', message: '' });
+  const [quotationSimulatorResult, setQuotationSimulatorResult] = useState<any>(null);
+  const [quotationSimulatorLoading, setQuotationSimulatorLoading] = useState(false);
   const [draggedBehaviorIndex, setDraggedBehaviorIndex] = useState<number | null>(null);
 
   const fetchModuleData = async (tab: ModuleTab): Promise<void> => {
@@ -309,7 +324,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
   // --- Handlers for Dynamic AI Behavior Rules ---
   const handleOpenCreateBehaviorModal = () => {
     setEditingBehaviorRule(null);
-    setBehaviorForm({ title: '', directive: '', status: 'ACTIVE', sortOrder: aiBehaviorRules.length + 1, routingTemplates: null });
+    setBehaviorForm({ title: '', directive: '', status: 'ACTIVE', sortOrder: aiBehaviorRules.length + 1, routingTemplates: null, engineConfig: null });
     setShowBehaviorModal(true);
   };
 
@@ -323,13 +338,16 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       routingTemplates: rule.category === PURCHASE_LINK_RULE_CATEGORY
         ? parseQuotationRoutingTemplates(rule.directive) || DEFAULT_QUOTATION_ROUTING_TEMPLATES
         : null,
+      engineConfig: rule.category === QUOTATION_RESPONSE_ENGINE_CATEGORY
+        ? parseQuotationResponseEngineConfig(rule.directive) || DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG
+        : null,
     });
     setShowBehaviorModal(true);
   };
 
   const handleSaveBehaviorRule = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!behaviorForm.title.trim() || !behaviorForm.directive.trim()) {
+    if (!behaviorForm.title.trim() || (!behaviorForm.directive.trim() && !behaviorForm.routingTemplates && !behaviorForm.engineConfig)) {
       alert('لطفاً عنوان و متن دستورالعمل قانون را وارد نمایید.');
       return;
     }
@@ -338,9 +356,8 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       if (editingBehaviorRule) {
         await knowledgeService.updateAiBehavior(editingBehaviorRule.id, {
           title: behaviorForm.title,
-          directive: behaviorForm.routingTemplates
-            ? serializeQuotationRoutingTemplates(behaviorForm.routingTemplates)
-            : behaviorForm.directive,
+          directive: behaviorForm.routingTemplates ? serializeQuotationRoutingTemplates(behaviorForm.routingTemplates)
+            : behaviorForm.engineConfig ? serializeQuotationResponseEngineConfig(behaviorForm.engineConfig) : behaviorForm.directive,
           status: behaviorForm.status,
           sortOrder: behaviorForm.sortOrder,
         });
@@ -354,7 +371,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       }
       setShowBehaviorModal(false);
       setEditingBehaviorRule(null);
-      setBehaviorForm({ title: '', directive: '', status: 'ACTIVE', sortOrder: 0, routingTemplates: null });
+      setBehaviorForm({ title: '', directive: '', status: 'ACTIVE', sortOrder: 0, routingTemplates: null, engineConfig: null });
       await loadTabContent();
     } catch (err: any) {
       alert('خطا در ذخیره‌سازی قانون رفتار: ' + err.message);
@@ -374,6 +391,20 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       alert('خطا در ویرایش وضعیت: ' + err.message);
       await loadTabContent();
     }
+  };
+
+  const handleSimulateQuotationResponse = async () => {
+    if (!quotationSimulator.question.trim() || !quotationSimulator.message.trim()) return;
+    setQuotationSimulatorLoading(true);
+    setQuotationSimulatorResult(null);
+    try {
+      const options = quotationSimulator.options.split('\n').map((value, index) => ({ id: `option-${index + 1}`, value: value.trim() })).filter(item => item.value);
+      const question = { id: 'simulated-question', title: quotationSimulator.question, aiQuestion: quotationSimulator.question, fieldName: quotationSimulator.fieldName || 'current_field', type: quotationSimulator.type, required: true, order: 1, options };
+      const response = await knowledgeService.simulateQuotationResponse({ question, questions: [question], answers: {}, message: quotationSimulator.message });
+      setQuotationSimulatorResult((response as any).data);
+    } catch (error: any) {
+      setQuotationSimulatorResult({ error: error.message });
+    } finally { setQuotationSimulatorLoading(false); }
   };
 
   const handleDeleteBehaviorRule = async (id: string) => {
@@ -451,7 +482,8 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       setShowArticleModal(false);
       setEditingItem(null);
       resetArticleForm();
-      loadTabContent();
+      void loadTabContent();
+      void loadModule('ai-behavior', true);
     } catch (err) {
       console.error(err);
     }
@@ -539,6 +571,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       validationRule: '',
       placeholder: '',
       helpText: '',
+      validAnswerExamples: '',
       order: (productQuestions?.length || 0) + 1,
       minVal: '',
       maxVal: '',
@@ -690,6 +723,12 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       validationRule: q.validationRule || '',
       placeholder: q.placeholder || '',
       helpText: q.helpText || '',
+      validAnswerExamples: (() => {
+        if (Array.isArray(q.validAnswerExamples)) return q.validAnswerExamples.join('\n');
+        const engineRule = aiBehaviorRules.find(rule => rule.category === QUOTATION_RESPONSE_ENGINE_CATEGORY);
+        const config = engineRule ? parseQuotationResponseEngineConfig(engineRule.directive) : null;
+        return (config?.questionExamples[q.id] || []).join('\n');
+      })(),
       order: q.order || idx + 1,
       minVal: q.minVal !== null && q.minVal !== undefined ? String(q.minVal) : '',
       maxVal: q.maxVal !== null && q.maxVal !== undefined ? String(q.maxVal) : '',
@@ -729,6 +768,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
         validationRule: questionForm.validationRule,
         placeholder: questionForm.placeholder,
         helpText: questionForm.helpText,
+        validAnswerExamples: questionForm.validAnswerExamples.split('\n').map(item => item.trim()).filter(Boolean),
         order: Number(questionForm.order) || 1,
         options: optionsPayload,
         minVal: questionForm.minVal !== '' ? Number(questionForm.minVal) : null,
@@ -760,7 +800,8 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       if (resQuestions.data?.success && Array.isArray(resQuestions.data.data)) {
         setProductQuestions(resQuestions.data.data);
       }
-      loadTabContent();
+      void loadTabContent();
+      void loadModule('ai-behavior', true);
 
       console.log('[DEBUG LOG] Step 8: UI Updated');
     } catch (err: any) {
@@ -1878,6 +1919,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                   const isActive = rule.status === 'ACTIVE';
                   const isFullNameHandoffRule = rule.category === FULL_NAME_HANDOFF_RULE_CATEGORY;
                   const isQuotationRoutingRule = rule.category === PURCHASE_LINK_RULE_CATEGORY;
+                  const isQuotationResponseEngine = rule.category === QUOTATION_RESPONSE_ENGINE_CATEGORY;
                   const isFirst = idx === 0;
                   const isLast = idx === aiBehaviorRules.length - 1;
 
@@ -1913,7 +1955,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                         <div className="space-y-1 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <h4 className="font-bold text-slate-900 text-sm">{rule.title}</h4>
-                            {(isFullNameHandoffRule || isQuotationRoutingRule) && (
+                            {(isFullNameHandoffRule || isQuotationRoutingRule || isQuotationResponseEngine) && (
                               <span className="rounded-full bg-indigo-100 px-2.5 py-0.5 text-[10px] font-bold text-indigo-700">
                                 متصل به مسیر واقعی گفتینو
                               </span>
@@ -1946,6 +1988,8 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                           <p className="text-xs text-slate-600 leading-relaxed font-sans bg-slate-50/80 p-2.5 rounded-xl border border-slate-100">
                             {isQuotationRoutingRule
                               ? 'متن هدایت فرم همین صفحه، لینک صفحهٔ دیگر، انتظار انتخاب و شروع استعلام چتی از این قانون خوانده می‌شود.'
+                              : isQuotationResponseEngine
+                                ? 'طبقه‌بندی شش‌حالته، لحن، متن پاسخ و مثال‌های موتور استعلام از این قانون خوانده می‌شود.'
                               : rule.directive}
                           </p>
                         </div>
@@ -1995,7 +2039,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                         </button>}
 
                         {/* Delete Button */}
-                        {!isFullNameHandoffRule && !isQuotationRoutingRule && <button
+                        {!isFullNameHandoffRule && !isQuotationRoutingRule && !isQuotationResponseEngine && <button
                           onClick={() => handleDeleteBehaviorRule(rule.id)}
                           className="p-2 text-slate-500 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-colors"
                           title="حذف قانون"
@@ -3429,6 +3473,18 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500"
                 />
               </div>
+              <div>
+                <label htmlFor="quotation-valid-examples" className="font-bold text-slate-700 block mb-1">نمونه پاسخ‌های معتبر:</label>
+                <textarea
+                  id="quotation-valid-examples"
+                  rows={3}
+                  value={questionForm.validAnswerExamples}
+                  onChange={(e) => setQuestionForm({ ...questionForm, validAnswerExamples: e.target.value })}
+                  placeholder={'هر نمونه در یک خط؛ مثل:\nدو ساله\nحدود ۳۰۰ متر'}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 leading-relaxed"
+                />
+                <p className="mt-1 text-[10px] text-slate-500">این نمونه‌ها به classifier همان سؤال داده می‌شوند و اجازهٔ ساخت گزینهٔ جدید نمی‌دهند.</p>
+              </div>
 
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
                 <button
@@ -3527,7 +3583,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       {/* 6. AI Behavior Rule Modal */}
       {showBehaviorModal && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 space-y-5 animate-in fade-in zoom-in-95">
+          <div className="bg-white rounded-3xl max-w-4xl max-h-[92vh] overflow-y-auto w-full p-6 shadow-2xl border border-slate-100 space-y-5 animate-in fade-in zoom-in-95">
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div className="flex items-center gap-2">
                 <Sparkles className="w-5 h-5 text-amber-500" />
@@ -3549,7 +3605,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                 <input
                   type="text"
                   required
-                  disabled={Boolean(behaviorForm.routingTemplates)}
+                  disabled={Boolean(behaviorForm.routingTemplates || behaviorForm.engineConfig)}
                   value={behaviorForm.title}
                   onChange={(e) => setBehaviorForm({ ...behaviorForm, title: e.target.value })}
                   placeholder="مثلاً: نحوه سلام و درود، طول پاسخ، سیاست اعلام قیمت..."
@@ -3557,7 +3613,35 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                 />
               </div>
 
-              {behaviorForm.routingTemplates ? (
+              {behaviorForm.engineConfig ? (
+                <div className="space-y-4 rounded-2xl border border-amber-200 bg-amber-50/30 p-4">
+                  <p className="text-[11px] leading-relaxed text-amber-800">برای هر وضعیت متن پاسخ، لحن و مثال‌های مثبت/منفی را تنظیم کنید. متغیرهای مجاز: <code>{'{{currentQuestion}}'}</code>، <code>{'{{nextQuestion}}'}</code>، <code>{'{{helpText}}'}</code>، <code>{'{{clarification}}'}</code>، <code>{'{{relatedExplanation}}'}</code> و <code>{'{{options}}'}</code>.</p>
+                  {QUOTATION_RESPONSE_STATES.map((status) => {
+                    const item = behaviorForm.engineConfig!.states[status];
+                    return <details key={status} className="rounded-xl border border-slate-200 bg-white p-3" open={status === 'VALID_ANSWER'}>
+                      <summary className="cursor-pointer font-bold text-slate-800">{status}</summary>
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        <label className="md:col-span-2"><span className="mb-1 block font-bold">متن پاسخ</span><textarea rows={3} value={item.template} onChange={(e) => setBehaviorForm({ ...behaviorForm, engineConfig: { ...behaviorForm.engineConfig!, states: { ...behaviorForm.engineConfig!.states, [status]: { ...item, template: e.target.value } } } })} className="w-full rounded-xl border border-slate-200 p-2.5" /></label>
+                        <label><span className="mb-1 block font-bold">لحن</span><input value={item.tone} onChange={(e) => setBehaviorForm({ ...behaviorForm, engineConfig: { ...behaviorForm.engineConfig!, states: { ...behaviorForm.engineConfig!.states, [status]: { ...item, tone: e.target.value } } } })} className="w-full rounded-xl border border-slate-200 p-2.5" /></label>
+                        <label><span className="mb-1 block font-bold">مثال‌های مثبت (هر خط یک نمونه)</span><textarea rows={3} value={item.positiveExamples.join('\n')} onChange={(e) => setBehaviorForm({ ...behaviorForm, engineConfig: { ...behaviorForm.engineConfig!, states: { ...behaviorForm.engineConfig!.states, [status]: { ...item, positiveExamples: e.target.value.split('\n').filter(Boolean) } } } })} className="w-full rounded-xl border border-slate-200 p-2.5" /></label>
+                        <label className="md:col-span-2"><span className="mb-1 block font-bold">مثال‌های منفی (هر خط یک نمونه)</span><textarea rows={2} value={item.negativeExamples.join('\n')} onChange={(e) => setBehaviorForm({ ...behaviorForm, engineConfig: { ...behaviorForm.engineConfig!, states: { ...behaviorForm.engineConfig!.states, [status]: { ...item, negativeExamples: e.target.value.split('\n').filter(Boolean) } } } })} className="w-full rounded-xl border border-slate-200 p-2.5" /></label>
+                      </div>
+                    </details>;
+                  })}
+                  <div className="rounded-2xl border border-indigo-200 bg-indigo-50/50 p-4 space-y-3">
+                    <h4 className="font-bold text-indigo-900">شبیه‌ساز موتور استعلام</h4>
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <input value={quotationSimulator.question} onChange={(e) => setQuotationSimulator({ ...quotationSimulator, question: e.target.value })} placeholder="سؤال فعلی" className="rounded-xl border border-slate-200 p-2.5" />
+                      <input value={quotationSimulator.fieldName} onChange={(e) => setQuotationSimulator({ ...quotationSimulator, fieldName: e.target.value })} placeholder="fieldName" className="rounded-xl border border-slate-200 p-2.5" />
+                      <select value={quotationSimulator.type} onChange={(e) => setQuotationSimulator({ ...quotationSimulator, type: e.target.value })} className="rounded-xl border border-slate-200 p-2.5"><option value="text">متن</option><option value="number">عدد</option><option value="select">انتخابی</option><option value="boolean">بله/خیر</option></select>
+                      <textarea rows={2} value={quotationSimulator.options} onChange={(e) => setQuotationSimulator({ ...quotationSimulator, options: e.target.value })} placeholder="گزینه‌ها؛ هر خط یک گزینه" className="rounded-xl border border-slate-200 p-2.5" />
+                      <textarea rows={2} value={quotationSimulator.message} onChange={(e) => setQuotationSimulator({ ...quotationSimulator, message: e.target.value })} placeholder="پیام کاربر" className="md:col-span-2 rounded-xl border border-slate-200 p-2.5" />
+                    </div>
+                    <button type="button" onClick={handleSimulateQuotationResponse} disabled={quotationSimulatorLoading} className="rounded-xl bg-indigo-600 px-4 py-2 font-bold text-white disabled:opacity-50">{quotationSimulatorLoading ? 'در حال تحلیل…' : 'اجرای شبیه‌ساز'}</button>
+                    {quotationSimulatorResult && <pre dir="ltr" className="overflow-auto rounded-xl bg-slate-950 p-3 text-[11px] text-emerald-300">{JSON.stringify(quotationSimulatorResult, null, 2)}</pre>}
+                  </div>
+                </div>
+              ) : behaviorForm.routingTemplates ? (
                 <div className="space-y-3 rounded-2xl border border-indigo-100 bg-indigo-50/40 p-3">
                   <p className="text-[11px] leading-relaxed text-indigo-700">
                     متغیرهای مجاز: <code>{'{{productName}}'}</code>، <code>{'{{purchaseUrl}}'}</code> و <code>{'{{currentPageUrl}}'}</code>
@@ -3623,7 +3707,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                   onChange={(e) => setBehaviorForm({ ...behaviorForm, sortOrder: Number(e.target.value) })}
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-amber-500"
                 />
-                <p className="text-xs text-slate-500 mt-1">هنگام درخواست راهنمایی، همین متن نمایش داده می‌شود. اگر خالی باشد، راهنمای عمومی از متن و نوع سؤال ساخته می‌شود؛ ترتیب سؤال‌ها تغییر نمی‌کند.</p>
+                <p className="text-xs text-slate-500 mt-1">عدد کمتر یعنی اجرای زودتر؛ اولویت اعمال‌شده در شبیه‌ساز و BrainLog ثبت می‌شود.</p>
               </div>
 
               <div>

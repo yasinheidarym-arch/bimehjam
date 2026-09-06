@@ -6,7 +6,11 @@ import {
   updateBehaviorRule,
   deleteBehaviorRule,
   reorderBehaviorRules,
+  getQuotationResponseEngineRule,
+  updateQuotationQuestionExamples,
 } from '../services/aiBehaviorService';
+import { advanceQuotationTurn } from '../services/quotationStateMachine';
+import { classifyQuotationTurnWithAi } from '../services/quotationClassifierService';
 import {
   seedProductMapData,
   resolveProductByUrl,
@@ -874,8 +878,13 @@ export async function getQuotationQuestions(req: Request, res: Response) {
       include: { product: { select: { name: true } } },
       orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
     });
+    const engineRule = await getQuotationResponseEngineRule();
+    const data = questions.map(question => ({
+      ...question,
+      validAnswerExamples: engineRule?.config.questionExamples[question.id] || [],
+    }));
 
-    return res.status(200).json({ success: true, count: questions.length, data: questions });
+    return res.status(200).json({ success: true, count: data.length, data });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
   }
@@ -883,7 +892,7 @@ export async function getQuotationQuestions(req: Request, res: Response) {
 
 export async function createQuotationQuestion(req: Request, res: Response) {
   try {
-    const { productId, title, aiQuestion, fieldName, type, options, required, order, validationRule, placeholder, helpText, minVal, maxVal, minLength, maxLength } = req.body;
+    const { productId, title, aiQuestion, fieldName, type, options, required, order, validationRule, placeholder, helpText, validAnswerExamples, minVal, maxVal, minLength, maxLength } = req.body;
 
     if (!productId || !title || !fieldName) {
       return res.status(400).json({ success: false, error: 'productId, title, and fieldName are required' });
@@ -908,6 +917,7 @@ export async function createQuotationQuestion(req: Request, res: Response) {
         maxLength: maxLength !== undefined && maxLength !== null && maxLength !== '' ? Number(maxLength) : null,
       },
     });
+    if (Array.isArray(validAnswerExamples)) await updateQuotationQuestionExamples(question.id, validAnswerExamples);
 
     return res.status(201).json({ success: true, data: question });
   } catch (error: any) {
@@ -919,6 +929,8 @@ export async function updateQuotationQuestion(req: Request, res: Response) {
   try {
     const { id } = req.params;
     const body = { ...req.body };
+    const validAnswerExamples = Array.isArray(body.validAnswerExamples) ? body.validAnswerExamples : undefined;
+    delete body.validAnswerExamples;
 
     if (body.options && typeof body.options !== 'string') {
       body.options = JSON.stringify(body.options);
@@ -933,6 +945,7 @@ export async function updateQuotationQuestion(req: Request, res: Response) {
       where: { id },
       data: body,
     });
+    if (validAnswerExamples) await updateQuotationQuestionExamples(id, validAnswerExamples);
 
     return res.status(200).json({ success: true, data: updated });
   } catch (error: any) {
@@ -944,10 +957,30 @@ export async function deleteQuotationQuestion(req: Request, res: Response) {
   try {
     const { id } = req.params;
     await prisma.quotationQuestion.delete({ where: { id } });
+    await updateQuotationQuestionExamples(id, []);
     return res.status(200).json({ success: true, message: 'سوال استعلام حذف شد' });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
   }
+}
+
+export async function simulateQuotationResponse(req: Request, res: Response) {
+  try {
+    const { question, questions, answers, message } = req.body || {};
+    if (!question || typeof message !== 'string') return res.status(400).json({ success: false, error: 'question and message are required' });
+    const allQuestions = Array.isArray(questions) && questions.length ? questions : [question];
+    const rule = await getQuotationResponseEngineRule();
+    const result = await advanceQuotationTurn({
+      sessionId: 'admin-simulator', questions: allQuestions, answers: answers && typeof answers === 'object' ? answers : {}, message,
+      engine: rule ? { active: rule.status === 'ACTIVE', title: rule.title, priority: rule.sortOrder, config: rule.config } : null,
+      model: classifyQuotationTurnWithAi,
+    });
+    return res.status(200).json({ success: true, data: {
+      status: result.classification.status, confidence: result.classification.confidence, reason: result.classification.reason,
+      appliedRule: result.appliedRule, savedData: result.updates, responseText: result.responseText,
+      nextQuestion: result.state.currentQuestion,
+    } });
+  } catch (error: any) { return res.status(500).json({ success: false, error: error.message }); }
 }
 
 export async function reorderQuotationQuestions(req: Request, res: Response) {

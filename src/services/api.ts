@@ -346,6 +346,9 @@ export const knowledgeService = {
   deleteQuotationQuestion: async (id: string) => {
     return apiClient.delete(`/knowledge/questions/${id}`);
   },
+  simulateQuotationResponse: async (data: any) => {
+    return apiClient.post('/knowledge/quotation-response/simulate', data);
+  },
 };
 
 // System & AI Mode Settings Services

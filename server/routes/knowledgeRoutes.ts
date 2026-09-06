@@ -10,6 +10,7 @@ import {
   updateQuotationQuestion,
   deleteQuotationQuestion,
   reorderQuotationQuestions,
+  simulateQuotationResponse,
   getFaqs,
   createFaq,
   updateFaq,
@@ -92,6 +93,7 @@ router.post('/questions', createQuotationQuestion);
 router.put('/questions-reorder', reorderQuotationQuestions);
 router.put('/questions/:id', updateQuotationQuestion);
 router.delete('/questions/:id', deleteQuotationQuestion);
+router.post('/quotation-response/simulate', simulateQuotationResponse);
 
 // AI Response Templates
 router.get('/templates', getResponseTemplates);

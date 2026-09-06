@@ -25,15 +25,6 @@ const NUMBER_UNITS: Record<string, number> = {
   ده: 10, یازده: 11, دوازده: 12, سیزده: 13, چهارده: 14, پانزده: 15, شانزده: 16, هفده: 17, هجده: 18, نوزده: 19,
   بیست: 20, سی: 30, چهل: 40, پنجاه: 50, شصت: 60, هفتاد: 70, هشتاد: 80, نود: 90, صد: 100,
 };
-const SEMANTIC_ALIASES: Record<string, string[]> = {
-  مسکونی: ['خانه', 'خونه', 'منزل', 'سکونت'],
-  تجاری: ['مغازه', 'فروشگاه', 'کسب و کار', 'کسب‌وکار'],
-  اداری: ['دفتر', 'اداره', 'شرکت'],
-  صنعتی: ['کارخانه', 'کارگاه', 'تولیدی'],
-  بله: ['آره', 'اره', 'دارد', 'هست'],
-  خیر: ['نه', 'ندارد', 'نیست'],
-};
-
 export function normalizeQuotationOptionText(value: unknown): string {
   return String(value || '')
     .replace(/[۰-۹٠-٩]/g, (digit) => {
@@ -53,17 +44,24 @@ export function normalizeQuotationOptionText(value: unknown): string {
 }
 
 export function quotationQuestionOptions(question: QuotationTurnQuestion): CanonicalQuotationOption[] {
-  let values: string[] = [];
-  if (Array.isArray(question.options)) values = question.options.map(String);
+  let values: unknown[] = [];
+  if (Array.isArray(question.options)) values = question.options;
   else if (question.options) {
     try {
       const parsed = JSON.parse(question.options);
-      if (Array.isArray(parsed)) values = parsed.map(String);
+      if (Array.isArray(parsed)) values = parsed;
     } catch {
       values = String(question.options).split(',');
     }
   }
-  return values.map((value, index) => ({ id: `option-${index + 1}`, value: value.trim() })).filter((item) => item.value);
+  return values.flatMap((raw, index) => {
+    if (typeof raw === 'string') return [{ id: `option-${index + 1}`, value: raw.trim() }];
+    if (raw && typeof raw === 'object') {
+      const item = raw as Record<string, unknown>;
+      if (typeof item.value === 'string') return [{ id: typeof item.id === 'string' ? item.id : `option-${index + 1}`, value: item.value.trim() }];
+    }
+    return [];
+  }).filter((item) => item.value);
 }
 
 export function numbersIn(value: string, requireAnswerShape = false): number[] {
@@ -132,9 +130,7 @@ function deterministicSelection(
     if (normalizedAnswer === normalizedOption) return true;
     if (/نیست|نیستم|ندارد|ندارم|نباشد/.test(normalizedAnswer)) return false;
     if (hasWord(normalizedAnswer, normalizedOption)) return true;
-    return Object.entries(SEMANTIC_ALIASES).some(([canonical, aliases]) =>
-      normalizedOption.includes(canonical) && aliases.some((alias) => hasWord(normalizedAnswer, normalizeQuotationOptionText(alias))),
-    );
+    return false;
   });
   if (exact.length === 1) return matched(fieldName, exact[0], 0.99, 'DETERMINISTIC');
 
@@ -200,12 +196,4 @@ export async function resolveQuotationOptionSelection(input: {
     status: ambiguous ? 'AMBIGUOUS' : 'UNRELATED',
     source: 'FALLBACK',
   };
-}
-
-export function quotationOptionFollowup(
-  question: QuotationTurnQuestion,
-  selection: QuotationOptionSelection,
-): string {
-  if (selection.status === 'AMBIGUOUS') return `منظورتان برای «${question.title}» دقیقاً کدام بازه یا گزینه است؟`;
-  return `لطفاً یکی از گزینه‌های معتبر را انتخاب کنید: ${quotationQuestionOptions(question).map((item) => item.value).join('، ')}`;
 }

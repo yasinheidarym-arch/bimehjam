@@ -29,7 +29,13 @@ const base = { usage: 'مجتمع مسکونی', area: '500' };
 const assignment = (fieldName: string, evidence: string, value = evidence, confidence = .95) => ({ fieldName, evidence, value, confidence });
 
 test('full persisted conversation uses canonical questions in order and completes', async () => {
-  const turn = conversation();
+  const turn = conversation({}, async ({ message, currentQuestion }) => {
+    const values: Record<string, { value: string; option?: string }> = {
+      usage: { value: 'مجتمع مسکونی', option: 'option-1' }, area: { value: message }, age: { value: 'تا ۵ سال ساخت', option: 'option-1' }, elevators: { value: message }, guard: { value: 'بله' },
+    };
+    const selected = values[currentQuestion!.fieldName];
+    return { status: 'VALID_ANSWER', confidence: .95, reason: 'test', relatedFieldName: null, relatedExplanation: null, clarification: null, assignments: [{ ...assignment(currentQuestion!.fieldName, message, selected.value), selectedOptionId: selected.option || null, selectedOptionValue: selected.option ? selected.value : null }] };
+  });
   const first = await turn('خونه و محل سکونته');
   assert.equal(first.state.answers.usage, 'مجتمع مسکونی');
   assert.equal(first.nextQuestionText, questions[1].aiQuestion);
@@ -71,20 +77,20 @@ test('a model-detected question without punctuation cannot contribute a numeric 
   assert.deepEqual(result.updates, {});
   assert.equal(result.interruption, true);
 });
-test('valid answer followed by a question is saved, explanation precedes exact next question', async () => {
+test('valid answer followed by a question saves only the validated current field', async () => {
   const result = await conversation({ ...base, age: 'تا ۵ سال ساخت' })('۳ تا، بیمه چه پوشش‌هایی دارد؟');
   assert.equal(result.updates.elevators, '3');
-  assert.equal(result.interruption, true);
+  assert.equal(result.classification.status, 'VALID_ANSWER');
   assert.equal(result.nextQuestionText, questions[4].aiQuestion);
 });
 test('ambiguous and irrelevant replies clarify then offer help while preserving state', async () => {
   const turn = conversation(base, async () => ({ assignments: [] }));
   const first = await turn('فکر کنم قدیمیه');
   assert.equal(first.state.ambiguity, 'CLARIFY');
-  assert.doesNotMatch(first.clarification!, /تا ۵ سال ساخت/);
+  assert.match(first.clarification!, /تا ۵ سال ساخت/);
   const second = await turn('امروز هوا خوبه');
-  assert.equal(second.state.ambiguity, 'HELP');
-  assert.match(second.clarification!, /تا ۵ سال ساخت.*کارشناس/);
+  assert.equal(second.state.ambiguity, 'CLARIFY');
+  assert.match(second.clarification!, /تا ۵ سال ساخت/);
   assert.equal(second.state.currentQuestion?.fieldName, 'age');
   assert.deepEqual(second.state.answers, base);
   assert.equal((await turn('۲ سال')).state.ambiguity, 'NONE');
@@ -191,21 +197,19 @@ test('completion collects contact information then requires actual confirmation'
   assert.equal(advanceQuotationSubmission(decision.state, 'آره').action, 'SUBMIT');
 });
 
-test('area help without an article explains summation and preserves the exact pending question', async () => {
+test('area help without configured helpText uses generic field guidance and preserves the exact pending question', async () => {
   const message = 'چجوری حسابش کنم؟';
   const result = await conversation({ usage: 'مجتمع مسکونی' }, async () => { assert.fail('help must not invoke answer model'); })(message);
   assert.deepEqual(result.updates, {});
   assert.equal(result.state.currentQuestion?.fieldName, 'area');
   assert.equal(result.state.attempts.area, undefined);
   const reply = await explainQuotationInterruption({ message, question: questions[1], knowledge: '', select: async () => { assert.fail('no article/model needed'); } });
-  assert.match(reply, /همکف.*منفی/);
-  assert.match(reply, /۱۰۰.*۵۰.*۳۵۰/);
-  assert.match(reply, /مجموع تقریبی/);
+  assert.match(reply, /مقدار عددی.*حداقل/);
   assert.doesNotMatch(reply, /کارشناس|اطلاعات ندارم|متوقف/);
   assert.equal(result.nextQuestionText, questions[1].aiQuestion);
 });
-test('elevator and building age guidance depend on the question, never advance it', async () => {
-  for (const [question, expected] of [[questions[3], /دستگاه.*نه تعداد توقف/], [questions[2], /سال ساخت را از سال جاری کم کنید/]] as const) {
+test('generic question guidance is type/options-aware and never advances it', async () => {
+  for (const [question, expected] of [[questions[3], /مقدار عددی.*حداقل/], [questions[2], /گزینه‌ای.*تا ۵ سال ساخت/]] as const) {
     const result = await advanceQuotationTurn({ sessionId: 'help', questions: [question], answers: {}, message: 'چجوری حسابش کنم' });
     assert.deepEqual(result.updates, {});
     assert.equal(result.nextQuestionText, question.aiQuestion);
@@ -217,7 +221,7 @@ test('elevator and building age guidance depend on the question, never advance i
 test('admin helpText has priority and blank help uses a generic type-aware guide', () => {
   assert.equal(quotationQuestionHelp({ ...questions[1], helpText: '  مساحت درج‌شده در نقشه را جمع کنید.  ' }), 'راهنمای این سؤال: مساحت درج‌شده در نقشه را جمع کنید.');
   const generic = { title: 'تعداد ورودی‌ها', fieldName: 'entrances', required: true, order: 1, type: 'number', minVal: 1, helpText: '' };
-  assert.match(quotationQuestionHelp(generic), /موارد خواسته‌شده را بشمارید.*حداقل 1/);
+  assert.match(quotationQuestionHelp(generic), /مقدار عددی.*حداقل 1/);
   assert.doesNotMatch(quotationQuestionHelp(generic), /متراژ|زیرزمین|کارشناس/);
 });
 

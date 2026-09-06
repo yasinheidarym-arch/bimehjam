@@ -1,189 +1,185 @@
-import { analyzeQuotationMessage, answerPortion, quotationQuestionReply, sortQuotationQuestions, type QuotationTurnQuestion } from './quotationConversationFlow';
-import { isQuotationHelpRequest } from './quotationQuestionHelp';
+import { answerPortion, quotationQuestionReply, sortQuotationQuestions, type QuotationTurnQuestion } from './quotationConversationFlow';
+import { quotationQuestionHelp } from './quotationQuestionHelp';
 import { normalizeQuotationOptionText as normalize, numbersIn, isPlainQuotationNumber, quotationQuestionOptions, resolveQuotationOptionSelection } from './quotationOptionMatchingService';
-import { isAmbiguousQuotationMoney, quotationMoneyMismatchReply, resolveQuotationMoney } from './quotationMoney';
+import { isAmbiguousQuotationMoney, resolveQuotationMoney } from './quotationMoney';
+import { DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG, QUOTATION_RESPONSE_STATES, type QuotationResponseEngineConfig, type QuotationResponseState } from '../../shared/quotationResponseEngine';
 
-export type QuotationTurnState = {
-  version: 1;
-  sessionId: string;
-  currentQuestion: QuotationTurnQuestion | null;
-  answers: Record<string, string>;
-  attempts: Record<string, number>;
-  ambiguity: 'NONE' | 'CLARIFY' | 'HELP';
-  lastAnsweredField: string | null;
-};
-export type QuotationTurnModel = (context: {
-  message: string; currentQuestion: QuotationTurnQuestion | null;
-  questions: QuotationTurnQuestion[]; answers: Record<string, string>; correction: boolean;
-}) => Promise<unknown>;
-export type TurnDecision = {
-  fieldName: string | null; confidence: number; reason: string;
-  outcome: 'SAVED' | 'CORRECTED' | 'CLARIFY' | 'INTERRUPTION';
-};
+export type QuotationTurnState = { version: 1; sessionId: string; currentQuestion: QuotationTurnQuestion | null; answers: Record<string, string>; attempts: Record<string, number>; ambiguity: 'NONE' | 'CLARIFY' | 'HELP'; lastAnsweredField: string | null };
+export type QuotationClassifierAssignment = { fieldName: string; value: string; selectedOptionId?: string | null; selectedOptionValue?: string | null; evidence: string; confidence: number };
+export type QuotationClassification = { status: QuotationResponseState; confidence: number; reason: string; assignments: QuotationClassifierAssignment[]; relatedFieldName?: string | null; relatedExplanation?: string | null; clarification?: string | null };
+export type QuotationTurnModel = (context: { message: string; currentQuestion: QuotationTurnQuestion | null; questions: QuotationTurnQuestion[]; answers: Record<string, string>; correction: boolean; rule: QuotationResponseEngineConfig; validAnswerExamples: string[] }) => Promise<unknown>;
+export type TurnDecision = { status: QuotationResponseState; fieldName: string | null; confidence: number; reason: string; outcome: 'SAVED' | 'CORRECTED' | 'CLARIFY' | 'INTERRUPTION' };
 
-export function isQuotationCorrection(message: string): boolean {
-  return /اصلاح|اشتباه\s*(?:گفتم|شد|کردم)|منظورم|جواب\s*قبلی/.test(normalize(message));
-}
+export function isQuotationCorrection(message: string): boolean { return /اصلاح|اشتباه\s*(?:گفتم|شد|کردم)|منظورم|جواب\s*قبلی/.test(normalize(message)); }
+/** Safe fallback for non-questionnaire handoff flows; the questionnaire itself uses the structured classifier. */
+export function isQuotationInterruption(message: string): boolean { return /[؟?]|چطور|چگونه|راهنما|توضیح/.test(normalize(message)); }
 
 export function applicableQuotationQuestions<T extends QuotationTurnQuestion>(questions: T[], answers: Record<string, string>): T[] {
   const comparable = (value: unknown) => /^(بله|true)$/.test(String(value)) ? 'true' : /^(خیر|false)$/.test(String(value)) ? 'false' : String(value);
   return sortQuotationQuestions(questions).filter(q => {
     if (!q.condition || q.condition === '{}') return true;
-    try {
-      const condition = JSON.parse(q.condition);
-      return !condition.dependsOn || comparable(answers[condition.dependsOn]) === comparable(condition.value);
-    } catch { return false; }
+    try { const condition = JSON.parse(q.condition); return !condition.dependsOn || comparable(answers[condition.dependsOn]) === comparable(condition.value); }
+    catch { return false; }
   });
 }
 
-export function isQuotationInterruption(text: string): boolean {
-  return isQuotationHelpRequest(text) || /[؟?]|چرا|چطور|چگونه|چقدر|توضیح|راهنمایی|پوشش.*چی|چی.*پوشش/.test(text);
+function safeEvidence(message: string, evidence: unknown): string | null {
+  if (typeof evidence !== 'string') return null;
+  const value = normalize(evidence).trim();
+  return value && normalize(message).includes(value) ? value : null;
 }
-function answerLike(text: string): boolean {
-  return !/سلام|هوا|فوتبال|قیمت|هزینه|نمی\s*دانم|نمی\s*دونم|شاید|یا\s/.test(text);
-}
-
-function mentionsField(message: string, q: QuotationTurnQuestion): boolean {
-  if (message.includes(normalize(q.title)) || message.includes(normalize(q.fieldName))) return true;
-  const generic = new Set(['ساختمان', 'بیمه', 'مورد', 'شما', 'تعداد', 'نوع', 'کل', 'جمع', 'مجموع', 'چند', 'است', 'دارد', 'چیست', 'چقدر', 'با', 'از', 'در', 'و', 'یا']);
-  const tokens = normalize(q.title).split(/[\s؟?،,:]+/).filter(token => token.length >= 2 && !generic.has(token));
-  return tokens.some(token => (` ${message.replace(/[،؛:؟?]/g, ' ')} `).includes(` ${token} `));
+function explicitlyMentionsQuestion(message: string, question: QuotationTurnQuestion): boolean {
+  const text = normalize(message);
+  return [question.fieldName, question.title, question.aiQuestion || ''].filter(Boolean).some(label => text.includes(normalize(label)));
 }
 
-async function canonicalAnswer(q: QuotationTurnQuestion, evidence: string, proposed?: string): Promise<string | null> {
+async function canonicalAnswer(q: QuotationTurnQuestion, evidence: string, proposed?: string, optionId?: string | null): Promise<string | null> {
   const text = normalize(evidence).replace(/[.!،؛]+$/g, '').trim();
   const options = quotationQuestionOptions(q);
-  if (/^(آره|اره|بله|نه|خیر|باشه)$/.test(text) && q.type !== 'boolean' &&
-      !options.some(o => /^(بله|خیر|آره|نه|دارد|ندارد)$/.test(o.value))) return null;
-  if (!text || isQuotationInterruption(text) || !answerLike(text)) return null;
+  if (!text) return null;
+  if (/^(آره|اره|بله|نه|خیر|باشه)$/.test(text) && q.type !== 'boolean' && !options.some(o => /^(بله|خیر|آره|نه|دارد|ندارد)$/.test(normalize(o.value)))) return null;
   if (options.length) {
     const money = resolveQuotationMoney(q, text);
     if (money?.status === 'MATCHED') return money.matchedOption || null;
     if (money?.status === 'OUT_OF_OPTIONS') return null;
-    if (numbersIn(text, true).length && !isPlainQuotationNumber(text) && !options.some(o => normalize(o.value) === text)) return null;
-    if (q.type === 'checkbox') {
-      const chosen = options.filter(o => text.includes(normalize(o.value)));
-      if (chosen.length && !/نیست|ندار|نمی/.test(text)) return chosen.map(o => o.value).join('، ');
-      const proposedOptions = proposed?.split('،').map(v => v.trim()).filter(Boolean) || [];
-      return proposedOptions.length && proposedOptions.every(v => options.some(o => o.value === v)) ? [...new Set(proposedOptions)].join('، ') : null;
+    if (isAmbiguousQuotationMoney(q, text)) return null;
+    const numericEvidence = numbersIn(text, true);
+    if (numericEvidence.length) {
+      const numericSelection = await resolveQuotationOptionSelection({ question: q, message: text });
+      if (numericSelection.status !== 'MATCHED') return null;
+      if ((optionId && numericSelection.selectedOptionId !== optionId) || (proposed && numericSelection.selectedOptionValue !== proposed)) return null;
+      return numericSelection.selectedOptionValue;
     }
-    const selection = await resolveQuotationOptionSelection({ question: q, message: text });
-    if (selection.status === 'MATCHED') return selection.selectedOptionValue;
-    if (numbersIn(text, true).length) return null;
-    // A model's semantic choice is still constrained to the current real options.
-    return proposed && options.some(o => o.value === proposed) ? proposed : null;
+    if (optionId) { const selected = options.find(option => option.id === optionId); if (selected && (!proposed || selected.value === proposed)) return selected.value; }
+    const direct = options.find(option => normalize(option.value) === text || option.value === proposed);
+    if (direct) return direct.value;
+    if (q.type === 'checkbox' && proposed) {
+      const values = proposed.split('،').map(value => value.trim()).filter(Boolean);
+      if (values.length && values.every(value => options.some(option => option.value === value))) return [...new Set(values)].join('، ');
+    }
+    const deterministic = await resolveQuotationOptionSelection({ question: q, message: text });
+    return deterministic.status === 'MATCHED' ? deterministic.selectedOptionValue : null;
   }
   if (q.type === 'number') {
-    const numbers = numbersIn(text, true);
-    if (numbers.length !== 1) return null;
-    if (!isPlainQuotationNumber(text)) return null;
-    const value = numbers[0];
+    const values = numbersIn(text, true);
+    if (values.length !== 1 || !isPlainQuotationNumber(text)) return null;
+    const value = values[0];
     return (q.minVal == null || value >= q.minVal) && (q.maxVal == null || value <= q.maxVal) ? String(value) : null;
   }
-  const analysis = analyzeQuotationMessage(q, text);
-  // Unstructured text needs an evidence-backed semantic relevance decision.
+  if (q.type === 'date') {
+    const candidate = normalize(proposed || text).replace(/-/g, '/');
+    const match = candidate.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+    if (!match) return null;
+    const month = Number(match[2]); const day = Number(match[3]);
+    return month >= 1 && month <= 12 && day >= 1 && day <= 31 ? `${match[1]}/${match[2].padStart(2, '0')}/${match[3].padStart(2, '0')}` : null;
+  }
   if ((!q.type || q.type === 'text' || q.type === 'textarea') && proposed === undefined) return null;
-  return analysis.validAnswer ? analysis.answerValue : null;
+  const value = proposed?.trim() || text;
+  if (!value || (q.minLength != null && value.length < q.minLength) || (q.maxLength != null && value.length > q.maxLength)) return null;
+  return value;
 }
 
-export async function advanceQuotationTurn(input: {
-  sessionId: string; questions: QuotationTurnQuestion[]; answers: Record<string, string>;
-  previous?: QuotationTurnState | null; message: string; model?: QuotationTurnModel;
-}) {
+function parseClassification(raw: unknown, correction = false): QuotationClassification | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  if (typeof value.status !== 'string' || !QUOTATION_RESPONSE_STATES.includes(value.status as QuotationResponseState)) {
+    if (Array.isArray(value.assignments)) value.status = value.asksQuestion === true ? 'QUESTION_ABOUT_FIELD' : correction ? 'CORRECTION' : value.assignments.length ? 'VALID_ANSWER' : 'AMBIGUOUS';
+    else return null;
+  }
+  const confidence = typeof value.confidence === 'number' && Number.isFinite(value.confidence) ? value.confidence : 0;
+  if (confidence < 0 || confidence > 1) return null;
+  const assignments = Array.isArray(value.assignments) ? value.assignments.flatMap(item => {
+    if (!item || typeof item !== 'object') return [];
+    const candidate = item as Record<string, unknown>;
+    if (typeof candidate.fieldName !== 'string' || typeof candidate.value !== 'string' || typeof candidate.evidence !== 'string' || typeof candidate.confidence !== 'number') return [];
+    return [{ fieldName: candidate.fieldName, value: candidate.value, evidence: candidate.evidence, confidence: candidate.confidence, selectedOptionId: typeof candidate.selectedOptionId === 'string' ? candidate.selectedOptionId : null, selectedOptionValue: typeof candidate.selectedOptionValue === 'string' ? candidate.selectedOptionValue : null }];
+  }) : [];
+  return { status: value.status as QuotationResponseState, confidence, reason: typeof value.reason === 'string' ? value.reason : 'Classifier returned no reason', assignments, relatedFieldName: typeof value.relatedFieldName === 'string' ? value.relatedFieldName : null, relatedExplanation: typeof value.relatedExplanation === 'string' ? value.relatedExplanation : null, clarification: typeof value.clarification === 'string' ? value.clarification : null };
+}
+
+async function safeFallbackClassification(current: QuotationTurnQuestion | null, message: string, correction: boolean): Promise<QuotationClassification> {
+  if (!current) return { status: 'UNRELATED', confidence: 1, reason: 'No pending question', assignments: [] };
+  const asksQuestion = /[؟?]/.test(message);
+  const source = answerPortion(message, asksQuestion) || message;
+  const exact = await canonicalAnswer(current, source);
+  if (exact !== null) return { status: correction ? 'CORRECTION' : 'VALID_ANSWER', confidence: 1, reason: asksQuestion ? 'Validated answer precedes a secondary question' : 'Deterministic field validation', assignments: [{ fieldName: current.fieldName, value: exact, evidence: source, confidence: 1 }] };
+  if (/[؟?]|چطور|چگونه|راهنما|توضیح/.test(message)) return { status: 'QUESTION_ABOUT_FIELD', confidence: .8, reason: 'Safe help-request fallback', assignments: [] };
+  return { status: 'AMBIGUOUS', confidence: 0, reason: 'Safe fallback could not validate an answer', assignments: [] };
+}
+
+function fillTemplate(template: string, values: Record<string, string>): string { return template.replace(/{{([a-zA-Z]+)}}/g, (_match, key: string) => values[key] || '').replace(/\n{3,}/g, '\n\n').trim(); }
+function genericClarification(question: QuotationTurnQuestion, status: QuotationResponseState, attempts: number, message: string): string {
+  const options = quotationQuestionOptions(question).map(option => option.value);
+  const money = resolveQuotationMoney(question, message);
+  if (money?.status === 'OUT_OF_OPTIONS') return `مبلغ ${money.formattedAmount} دریافت شد، اما با گزینه‌های واقعی این سؤال برابر نیست. گزینه‌های معتبر نزدیک: ${money.nearbyOptions.join('، ')}`;
+  if (isAmbiguousQuotationMoney(question, message)) return 'مبلغ را دقیق‌تر همراه واحد بفرستید؛ مثلاً مبلغ را کامل به میلیون یا میلیارد تومان بنویسید.';
+  if (status === 'RELATED_BUT_WRONG_CATEGORY') return `این پاسخ برای فیلد دیگری قابل استفاده است. برای این مرحله پاسخ «${question.title}» لازم است${options.length ? `؛ گزینه‌های معتبر: ${options.join('، ')}` : ''}.`;
+  if (attempts > 1 && options.length) return `برای «${question.title}» یکی از این گزینه‌ها را بفرستید: ${options.join('، ')}`;
+  return `لطفاً پاسخ «${question.title}» را کمی روشن‌تر بفرستید${options.length ? `؛ گزینه‌ها: ${options.join('، ')}` : ''}.`;
+}
+
+export async function advanceQuotationTurn(input: { sessionId: string; questions: QuotationTurnQuestion[]; answers: Record<string, string>; previous?: QuotationTurnState | null; message: string; model?: QuotationTurnModel; engine?: { active: boolean; title: string; priority: number; config: QuotationResponseEngineConfig } | null }) {
   const answers = { ...input.answers };
-  const current = applicableQuotationQuestions(input.questions, answers).find(q => q.required && !answers[q.fieldName]) || null;
+  const current = applicableQuotationQuestions(input.questions, answers).find(question => question.required && !answers[question.fieldName]) || null;
   const previous = input.previous?.sessionId === input.sessionId ? input.previous : null;
   const attempts = { ...(previous?.attempts || {}) };
-  const message = normalize(input.message);
-  const correction = isQuotationCorrection(message);
-  let interruption = isQuotationInterruption(message);
-  const decisions: TurnDecision[] = [];
-  const updates: Record<string, string> = {};
-  let source = answerPortion(message, interruption);
-  const offContextYesNo = /^(آره|اره|بله|نه|خیر|باشه)$/.test(message) && current?.type !== 'boolean' &&
-    !quotationQuestionOptions(current || { title: '', fieldName: '', required: true, order: 0 }).some(o => /^(بله|خیر|آره|نه|دارد|ندارد)$/.test(o.value));
-  const moneyDecision = current ? resolveQuotationMoney(current, source || message) : null;
-  const ambiguousMoney = current ? isAmbiguousQuotationMoney(current, source || message) : false;
-
-  const save = (q: QuotationTurnQuestion, value: string, confidence: number) => {
-    updates[q.fieldName] = value;
-    decisions.push({ fieldName: q.fieldName, confidence, reason: answers[q.fieldName] ? 'Explicit correction with validated evidence' : 'Validated against real field type/options', outcome: answers[q.fieldName] ? 'CORRECTED' : 'SAVED' });
-    answers[q.fieldName] = value;
-    attempts[q.fieldName] = 0;
-  };
-  if (current && !correction && !offContextYesNo) {
-    const value = await canonicalAnswer(current, source);
-    // Multiple labelled values must be interpreted together, not assigned to the pending field by position.
-    const otherLabel = input.questions.some(q => q.fieldName !== current.fieldName && mentionsField(source, q));
-    if (value !== null && !/[؛;\n:]/.test(source) && !otherLabel) save(current, value, 1);
+  const correction = isQuotationCorrection(input.message);
+  const config = input.engine?.config || DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG;
+  let classification: QuotationClassification | null = null;
+  if (input.engine?.active !== false && input.model) {
+    try { classification = parseClassification(await input.model({ message: normalize(input.message), currentQuestion: current, questions: sortQuotationQuestions(input.questions), answers, correction, rule: config, validAnswerExamples: current?.id ? config.questionExamples[current.id] || [] : [] }), correction); }
+    catch { classification = null; }
   }
-
-  if (!Object.keys(updates).length && moneyDecision?.status !== 'OUT_OF_OPTIONS' && !ambiguousMoney && !offContextYesNo && !(isQuotationHelpRequest(message) && !source) && input.model) {
-    let raw: unknown;
-    try { raw = await input.model({ message, currentQuestion: current, questions: input.questions, answers, correction }); } catch { raw = null; }
-    const result = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-    interruption ||= result.asksQuestion === true;
-    if (interruption) source = answerPortion(message, true);
-    const candidates = Array.isArray(result.assignments) ? result.assignments : [];
-    const seen = new Set<string>();
-    for (const item of candidates.slice(0, input.questions.length)) {
-      if (!item || typeof item !== 'object') continue;
-      const candidate = item as Record<string, unknown>;
-      if (candidates.filter(c => c && typeof c === 'object' && c.fieldName === candidate.fieldName).length > 1) continue;
-      if (typeof candidate.fieldName !== 'string' || seen.has(candidate.fieldName)) continue;
-      seen.add(candidate.fieldName);
-      const q = input.questions.find(q => q.fieldName === candidate.fieldName);
-      const evidence = typeof candidate.evidence === 'string' ? normalize(candidate.evidence) : '';
-      const confidence = candidate.confidence;
-      if (!q || !evidence || !message.includes(evidence) || typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0.85 || confidence > 1) {
-        decisions.push({ fieldName: q?.fieldName || null, confidence: typeof confidence === 'number' && Number.isFinite(confidence) ? confidence : 0, outcome: 'CLARIFY', reason: 'Unknown field, missing evidence or insufficient confidence' });
-        continue;
-      }
-      if (answers[q.fieldName] && !correction) continue;
-      if (q.fieldName !== current?.fieldName) {
-        const labelled = mentionsField(message, q);
-        const previousCorrection = correction && q.fieldName === previous?.lastAnsweredField && /قبلی|اشتباه گفتم/.test(message);
-        if (!labelled && !previousCorrection) continue;
-      }
-      if (!applicableQuotationQuestions(input.questions, answers).some(active => active.fieldName === q.fieldName)) continue;
-      if (interruption && !source.includes(evidence)) continue;
-      const value = await canonicalAnswer(q, evidence, typeof candidate.value === 'string' ? candidate.value : undefined);
-      if (value !== null) save(q, value, confidence);
-      else decisions.push({ fieldName: q.fieldName, confidence, outcome: 'CLARIFY', reason: 'Evidence does not satisfy current field constraints' });
+  if (!classification) classification = await safeFallbackClassification(current, normalize(input.message), correction);
+  if (current && !correction && classification.status !== 'VALID_ANSWER') {
+    const normalizedMessage = normalize(input.message);
+    const deterministicValue = await canonicalAnswer(current, normalizedMessage);
+    const money = resolveQuotationMoney(current, normalizedMessage);
+    const exactOption = quotationQuestionOptions(current).some(option => normalize(option.value) === normalizedMessage);
+    const safeShape = current.type === 'number' || money?.status === 'MATCHED' || exactOption || isPlainQuotationNumber(normalizedMessage);
+    if (deterministicValue !== null && safeShape) classification = {
+      status: 'VALID_ANSWER', confidence: 1, reason: 'Backend exact validator overrode a non-saving classification',
+      assignments: [{ fieldName: current.fieldName, value: deterministicValue, evidence: normalizedMessage, confidence: 1 }],
+    };
+  }
+  const updates: Record<string, string> = {};
+  const decisions: TurnDecision[] = [];
+  const saveCandidate = async (candidate: QuotationClassifierAssignment, correctionMode: boolean) => {
+    const question = input.questions.find(item => item.fieldName === candidate.fieldName);
+    const evidence = safeEvidence(input.message, candidate.evidence);
+    if (!question || !evidence || candidate.confidence < .75) return false;
+    const canSave = question.fieldName === current?.fieldName ||
+      (correctionMode && Object.prototype.hasOwnProperty.call(answers, question.fieldName)) ||
+      (!correctionMode && !Object.prototype.hasOwnProperty.call(answers, question.fieldName) && explicitlyMentionsQuestion(input.message, question));
+    if (!canSave) return false;
+    const value = await canonicalAnswer(question, evidence, candidate.selectedOptionValue || candidate.value, candidate.selectedOptionId);
+    if (value === null) return false;
+    updates[question.fieldName] = value; answers[question.fieldName] = value; attempts[question.fieldName] = 0;
+    decisions.push({ status: correctionMode ? 'CORRECTION' : 'VALID_ANSWER', fieldName: question.fieldName, confidence: candidate.confidence, reason: classification?.reason || 'Validated classifier assignment', outcome: correctionMode ? 'CORRECTED' : 'SAVED' });
+    return true;
+  };
+  if (classification.status === 'VALID_ANSWER' || classification.status === 'CORRECTION') {
+    const duplicateFields = new Set(classification.assignments.filter((candidate, index, list) => list.findIndex(item => item.fieldName === candidate.fieldName) !== index).map(candidate => candidate.fieldName));
+    for (const candidate of classification.assignments) if (!duplicateFields.has(candidate.fieldName)) await saveCandidate(candidate, classification.status === 'CORRECTION');
+    if (!Object.keys(updates).length) {
+      const money = current ? resolveQuotationMoney(current, input.message) : null;
+      classification = { ...classification, status: 'AMBIGUOUS', reason: money?.status === 'OUT_OF_OPTIONS'
+        ? `Normalized monetary amount ${money.amountToman} has no exact real option`
+        : `${classification.reason}; backend rejected non-canonical assignment` };
     }
   }
-  const next = applicableQuotationQuestions(input.questions, answers).find(q => q.required && !answers[q.fieldName]) || null;
-  let clarification: string | null = null;
-  let ambiguity: QuotationTurnState['ambiguity'] = 'NONE';
-  if (!Object.keys(updates).length && !interruption && current) {
-    attempts[current.fieldName] = Math.min(100, (attempts[current.fieldName] || 0) + 1);
-    const count = attempts[current.fieldName];
-    ambiguity = count > 1 ? 'HELP' : 'CLARIFY';
-    const options = quotationQuestionOptions(current).map(o => o.value);
-    clarification = moneyDecision?.status === 'OUT_OF_OPTIONS'
-      ? quotationMoneyMismatchReply(moneyDecision)
-      : ambiguousMoney
-        ? 'مبلغ را دقیق‌تر همراه واحد بفرستید؛ مثلاً «۵۰۰ میلیون تومان» یا «یک و نیم میلیارد تومان».'
-      : count === 1
-        ? `برای «${current.title}» ${current.type === 'number' ? 'چه عددی را ثبت کنم؟' : 'منظورتان دقیقاً چیست؟'}`
-        : `${options.length ? `گزینه‌های همین سؤال: ${options.join('، ')}. ` : ''}پاسخ‌های قبلی محفوظ است؛ می‌توانید برای همین مورد توضیح بیشتر یا راهنمایی کارشناس بخواهید، یا پاسخ را دوباره بفرستید.`;
-    decisions.push({
-      fieldName: current.fieldName,
-      confidence: moneyDecision?.status === 'OUT_OF_OPTIONS' ? 1 : 0,
-      reason: moneyDecision?.status === 'OUT_OF_OPTIONS'
-        ? `Normalized monetary amount ${moneyDecision.amountToman} has no exact real option`
-        : ambiguousMoney ? 'Monetary answer contains a unit but cannot be normalized unambiguously'
-        : offContextYesNo ? 'Yes/no outside a boolean question' : 'No unambiguous valid answer for current field',
-      outcome: 'CLARIFY',
-    });
-  }
-  if (correction && !Object.keys(updates).length && !interruption) {
-    ambiguity = 'CLARIFY';
-    clarification = 'کدام پاسخ قبلی را اصلاح کنم؟ لطفاً نام همان مورد و پاسخ درست را بفرستید؛ پاسخ‌های قبلی محفوظ است.';
-    decisions.push({ fieldName: null, confidence: 0, outcome: 'CLARIFY', reason: 'Correction target/value not sufficiently clear; no previous answer overwritten' });
-  }
-  if (interruption) decisions.push({ fieldName: current?.fieldName || null, confidence: 1, outcome: 'INTERRUPTION', reason: 'Customer question must not advance the questionnaire without a validated answer' });
-  const state: QuotationTurnState = { version: 1, sessionId: input.sessionId, currentQuestion: next, answers, attempts, ambiguity,
-    lastAnsweredField: Object.keys(updates).at(-1) || previous?.lastAnsweredField || null };
-  return { state, currentQuestionBefore: current, updates, decisions, interruption, clarification, nextQuestionText: next ? quotationQuestionReply(next) : null };
+  const next = applicableQuotationQuestions(input.questions, answers).find(question => question.required && !answers[question.fieldName]) || null;
+  if (!Object.keys(updates).length && current && classification.status !== 'QUESTION_ABOUT_FIELD') attempts[current.fieldName] = Math.min(100, (attempts[current.fieldName] || 0) + 1);
+  const attemptCount = current ? attempts[current.fieldName] || 0 : 0;
+  const helpText = current ? quotationQuestionHelp(current) : '';
+  const clarification = current ? genericClarification(current, classification.status, attemptCount, input.message) : '';
+  const relatedQuestion = classification.relatedFieldName ? input.questions.find(question => question.fieldName === classification.relatedFieldName) : null;
+  const relatedExplanation = current ? (relatedQuestion ? `این پاسخ به «${relatedQuestion.title}» مربوط است، نه «${current.title}».` : genericClarification(current, 'RELATED_BUT_WRONG_CATEGORY', attemptCount, input.message)) : '';
+  const template = config.states[classification.status]?.template || '{{clarification}}';
+  const responseText = fillTemplate(template, { currentQuestion: current ? quotationQuestionReply(current) : '', nextQuestion: next ? quotationQuestionReply(next) : '', helpText, clarification, relatedExplanation, fieldName: current?.fieldName || '', options: current ? quotationQuestionOptions(current).map(option => option.value).join('، ') : '' });
+  if (!decisions.length) decisions.push({ status: classification.status, fieldName: current?.fieldName || null, confidence: classification.confidence, reason: classification.reason, outcome: ['QUESTION_ABOUT_FIELD', 'RELATED_BUT_WRONG_CATEGORY', 'UNRELATED'].includes(classification.status) ? 'INTERRUPTION' : 'CLARIFY' });
+  const interruption = ['QUESTION_ABOUT_FIELD', 'RELATED_BUT_WRONG_CATEGORY', 'UNRELATED'].includes(classification.status);
+  const ambiguity: QuotationTurnState['ambiguity'] = classification.status === 'QUESTION_ABOUT_FIELD' ? 'HELP' : ['AMBIGUOUS', 'RELATED_BUT_WRONG_CATEGORY', 'UNRELATED'].includes(classification.status) ? 'CLARIFY' : 'NONE';
+  const state: QuotationTurnState = { version: 1, sessionId: input.sessionId, currentQuestion: next, answers, attempts, ambiguity, lastAnsweredField: Object.keys(updates).at(-1) || previous?.lastAnsweredField || null };
+  return { state, currentQuestionBefore: current, updates, decisions, classification, responseText, appliedRule: input.engine ? { title: input.engine.title, priority: input.engine.priority, active: input.engine.active } : null, interruption, clarification: Object.keys(updates).length ? null : responseText, nextQuestionText: next ? quotationQuestionReply(next) : null };
 }
