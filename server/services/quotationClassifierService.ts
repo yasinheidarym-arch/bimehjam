@@ -40,6 +40,7 @@ export async function selectQuotationGuidanceWithAi(input: {
   knowledge: string;
   source: 'HELP_TEXT' | 'PRODUCT_KNOWLEDGE';
   sourceText: string;
+  tone: string;
 }) {
   const config = await getAiConfig();
   const apiKey = config.openaiApiKey || process.env.OPENAI_API_KEY || '';
@@ -58,7 +59,7 @@ export async function selectQuotationGuidanceWithAi(input: {
       },
     } },
     messages: [
-      { role: 'system', content: 'برای سؤال راهنمای کاربر یک helpResponse کوتاه، طبیعی و محاوره‌ای بساز. sourceText تنها مرجع حقیقت است: مفهومش را کامل حفظ کن ولی آن را عیناً کپی نکن. عبارت «راهنمای این سؤال» و متن کامل currentQuestion را تکرار نکن. پاسخ را با درخواست کوتاه و متناسب برای فرستادن جواب تمام کن. هیچ پوشش، مبلغ، شرط بیمه‌ای یا اطلاعاتی بیرون از sourceText نساز. passages فقط شاهدهای عیناً موجود در sourceText هستند و حداکثر دو مورد؛ اگر sourceText شاهدی ندارد خالی بگذار.' },
+      { role: 'system', content: 'برای سؤال راهنمای کاربر یک helpResponse کوتاه و طبیعی بساز و دقیقاً از tone قابل‌ویرایش ورودی پیروی کن. sourceText تنها مرجع حقیقت است: مفهومش را کامل حفظ کن ولی آن را عیناً کپی نکن. کاربر را با فعل جمع و محترمانه خطاب کن. از «کافیه»، «حالا»، «بفرست»، «همشونو»، «فقط این کار رو بکن» و «بگو ببینم» استفاده نکن. عبارت «راهنمای این سؤال» و متن کامل currentQuestion را تکرار نکن. پایان پاسخ طبیعی و محترمانه باشد؛ مانند «بفرمایید» یا «اعلام کنید»، نه دستور خشک. هیچ پوشش، مبلغ، شرط بیمه‌ای یا اطلاعاتی بیرون از sourceText نساز. passages فقط شاهدهای عیناً موجود در sourceText هستند و حداکثر دو مورد؛ اگر sourceText شاهدی ندارد خالی بگذار.' },
       { role: 'user', content: JSON.stringify(input) },
     ],
   });

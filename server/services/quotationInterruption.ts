@@ -9,6 +9,7 @@ type GuidanceGenerator = (context: {
   knowledge: string;
   source: 'HELP_TEXT' | 'PRODUCT_KNOWLEDGE';
   sourceText: string;
+  tone: string;
 }) => Promise<unknown>;
 
 function groundedCandidate(raw: unknown, sourceText: string, question: QuotationTurnQuestion): string | null {
@@ -21,10 +22,11 @@ function groundedCandidate(raw: unknown, sourceText: string, question: Quotation
   const grounded = text.replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).some(term => sourceTerms.has(term));
   if (!grounded) return null;
   const unsupportedClaim = /کد\s*یکتا|ثبت\s*شد|ارسال\s*شد|کمتر\s*از\s*\d+\s*دقیقه|قیمت\s*قطعی/.test(text);
+  const forbiddenTone = /(?:کافیه|حالا|بفرست(?:ید)?|همشونو|فقط\s+این\s+کار\s+رو\s+بکن|بگو\s+ببینم)/.test(text);
   const guardedTerms = ['پوشش', 'خسارت', 'قیمت', 'حق بیمه', 'تومان', 'ریال', 'استثنا', 'تعهد'];
   const addsInsuranceFact = guardedTerms.some(term => text.includes(term) && !sourceText.includes(term));
-  if (unsupportedClaim || addsInsuranceFact) return null;
-  return /(?:بفرست|بگ(?:و|ید)|اعلام\s*کن|وارد\s*کن|انتخاب\s*کن)/.test(text)
+  if (unsupportedClaim || addsInsuranceFact || forbiddenTone) return null;
+  return /(?:بفرمایید|اعلام\s*کنید|در\s*نظر\s*بگیرید)/.test(text)
     ? text
     : `${text.replace(/[.。]+$/u, '')}. ${quotationHelpResponseRequest(question)}`;
 }
@@ -33,11 +35,13 @@ export async function resolveQuotationGuidance(input: {
   message: string; knowledge: string;
   question: QuotationTurnQuestion;
   select: GuidanceGenerator;
+  tone?: string;
 }): Promise<{ text: string; source: QuotationGuidanceSource }> {
+  const tone = input.tone || 'کارشناس حرفه‌ای، محترمانه، صمیمی و غیررسمیِ کنترل‌شده؛ خطاب جمع و بدون عبارت دستوری یا بچگانه';
   if (input.question.helpText?.trim()) {
     const sourceText = input.question.helpText.trim();
     try {
-      const generated = await input.select({ ...input, source: 'HELP_TEXT', sourceText });
+      const generated = await input.select({ ...input, source: 'HELP_TEXT', sourceText, tone });
       const candidate = groundedCandidate(generated, sourceText, input.question);
       if (candidate) return { text: candidate, source: 'HELP_TEXT' };
     } catch {
@@ -48,7 +52,7 @@ export async function resolveQuotationGuidance(input: {
 
   if (input.knowledge.trim()) {
     try {
-      const raw = await input.select({ message: input.message, question: input.question, knowledge: input.knowledge, source: 'PRODUCT_KNOWLEDGE', sourceText: input.knowledge });
+      const raw = await input.select({ message: input.message, question: input.question, knowledge: input.knowledge, source: 'PRODUCT_KNOWLEDGE', sourceText: input.knowledge, tone });
       const candidate = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
       const response = groundedCandidate(candidate, input.knowledge, input.question);
       if (response) return { text: response, source: 'PRODUCT_KNOWLEDGE' };
@@ -60,7 +64,7 @@ export async function resolveQuotationGuidance(input: {
         input.knowledge.includes(passage) &&
         !/[؟?]|کد\s*یکتا|ثبت\s*شد|ارسال\s*شد|کمتر\s*از\s*\d+\s*دقیقه/.test(passage)
       );
-      if (valid.length) return { text: [...new Set(valid)].slice(0, 2).join('\n'), source: 'PRODUCT_KNOWLEDGE' };
+      if (valid.length) return { text: naturalizeQuotationHelp(input.question, [...new Set(valid)].slice(0, 2).join('\n')), source: 'PRODUCT_KNOWLEDGE' };
     } catch {
       // A model/provider failure must not interrupt or advance the questionnaire.
     }

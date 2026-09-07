@@ -281,14 +281,15 @@ test('QUESTION_ABOUT_FIELD uses a grounded natural helpResponse without copying 
     fieldName: 'area', type: 'number', required: true, order: 1,
     helpText: 'متراژ تمام طبقات شامل همکف و زیرزمین را با هم جمع کنید.',
   };
-  const natural = 'متراژ همهٔ طبقات رو جمع کنید؛ همکف و زیرزمین هم حساب میشن. عدد تقریبی رو بفرستید.';
+  const natural = 'متراژ تمام طبقات، شامل همکف و طبقات منفی، با هم جمع می‌شود. اگر متراژ کل را در اختیار دارید بفرمایید؛ مقدار تقریبی هم قابل قبول است.';
   const result = await advanceQuotationTurn({
     sessionId: 'natural-help', questions: [question], answers: {}, message: 'چجوری حسابش کنم؟',
     model: async () => ({ status: 'QUESTION_ABOUT_FIELD', confidence: .99, reason: 'help', assignments: [] }),
-    guidanceSelector: async ({ source, sourceText, question: groundedQuestion }) => {
+    guidanceSelector: async ({ source, sourceText, question: groundedQuestion, tone }) => {
       assert.equal(source, 'HELP_TEXT');
       assert.equal(sourceText, question.helpText);
       assert.equal(groundedQuestion.id, question.id);
+      assert.match(tone, /کارشناس حرفه‌ای.*محترمانه.*صمیمی/);
       return { helpResponse: natural, passages: [] };
     },
   });
@@ -296,10 +297,31 @@ test('QUESTION_ABOUT_FIELD uses a grounded natural helpResponse without copying 
   assert.notEqual(result.responseText, question.helpText);
   assert.doesNotMatch(result.responseText, /راهنمای این سؤال/);
   assert.doesNotMatch(result.responseText, new RegExp(question.aiQuestion!));
-  assert.match(result.responseText, /همکف.*زیرزمین/);
+  assert.match(result.responseText, /همکف.*(?:زیرزمین|طبقات منفی)/);
   assert.equal(result.state.currentQuestion?.id, question.id);
   assert.equal(result.guidance?.helpTextUsed, question.helpText);
   assert.equal(result.guidance?.helpResponse, natural);
+});
+
+test('all QUESTION_ABOUT_FIELD types reject childish or dry imperative tone', async () => {
+  const fieldTypes: QuotationTurnQuestion[] = [
+    { id: 'n', title: 'تعداد', aiQuestion: 'تعداد چقدر است؟', fieldName: 'n', type: 'number', required: true, order: 1, helpText: 'تعداد موجود را وارد کنید.' },
+    { id: 's', title: 'نوع', aiQuestion: 'نوع را انتخاب کنید؟', fieldName: 's', type: 'select', options: ['الف', 'ب'], required: true, order: 1, helpText: 'گزینه متناسب را انتخاب کنید.' },
+    { id: 'b', title: 'وضعیت', aiQuestion: 'این مورد برقرار است؟', fieldName: 'b', type: 'boolean', required: true, order: 1, helpText: 'برقرار بودن یا نبودن مورد را مشخص کنید.' },
+    { id: 't', title: 'توضیحات', aiQuestion: 'چه توضیحی دارید؟', fieldName: 't', type: 'text', required: true, order: 1, helpText: 'اطلاعات مرتبط را کوتاه توضیح دهید.' },
+  ];
+  const forbidden = /کافیه|حالا|بفرست|همشونو|فقط این کار رو بکن|بگو ببینم/;
+  for (const question of fieldTypes) {
+    const result = await advanceQuotationTurn({
+      sessionId: `tone-${question.id}`, questions: [question], answers: {}, message: 'چجوری جواب بدم؟',
+      model: async () => ({ status: 'QUESTION_ABOUT_FIELD', confidence: .99, reason: 'help', assignments: [] }),
+      guidanceSelector: async () => ({ helpResponse: 'کافیه همین رو بفرست؛ حالا بگو ببینم.', passages: [] }),
+    });
+    assert.doesNotMatch(result.responseText, forbidden, question.type);
+    assert.match(result.responseText, /بفرمایید|اعلام کنید|در نظر بگیرید/, question.type);
+    assert.doesNotMatch(result.responseText, new RegExp(question.aiQuestion!));
+    assert.equal(result.state.currentQuestion?.id, question.id);
+  }
 });
 
 test('building-manager count and no-coverage answers advance without validator loops', async () => {

@@ -127,7 +127,7 @@ function genericClarification(question: QuotationTurnQuestion, status: Quotation
   return `لطفاً پاسخ «${question.title}» را کمی روشن‌تر بفرستید${options.length ? `؛ گزینه‌ها: ${options.join('، ')}` : ''}.`;
 }
 
-export async function advanceQuotationTurn(input: { sessionId: string; questions: QuotationTurnQuestion[]; answers: Record<string, string>; previous?: QuotationTurnState | null; message: string; model?: QuotationTurnModel; productKnowledge?: string; guidanceSelector?: (context: { message: string; question: QuotationTurnQuestion; knowledge: string; source: 'HELP_TEXT' | 'PRODUCT_KNOWLEDGE'; sourceText: string }) => Promise<unknown>; engine?: { active: boolean; title: string; priority: number; config: QuotationResponseEngineConfig } | null }) {
+export async function advanceQuotationTurn(input: { sessionId: string; questions: QuotationTurnQuestion[]; answers: Record<string, string>; previous?: QuotationTurnState | null; message: string; model?: QuotationTurnModel; productKnowledge?: string; guidanceSelector?: (context: { message: string; question: QuotationTurnQuestion; knowledge: string; source: 'HELP_TEXT' | 'PRODUCT_KNOWLEDGE'; sourceText: string; tone: string }) => Promise<unknown>; engine?: { active: boolean; title: string; priority: number; config: QuotationResponseEngineConfig } | null }) {
   const answers = { ...input.answers };
   const current = applicableQuotationQuestions(input.questions, answers).find(question => question.required && !answers[question.fieldName]) || null;
   const previous = input.previous?.sessionId === input.sessionId ? input.previous : null;
@@ -187,6 +187,7 @@ export async function advanceQuotationTurn(input: { sessionId: string; questions
       message: input.message,
       question: current,
       knowledge: input.productKnowledge || '',
+      tone: config.states.QUESTION_ABOUT_FIELD.tone,
       select: input.guidanceSelector || (async () => ({ passages: [] })),
     });
     helpResponse = guidance.text;

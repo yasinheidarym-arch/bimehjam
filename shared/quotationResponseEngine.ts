@@ -37,7 +37,7 @@ export const DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG: QuotationResponseEngineCo
   version: 1,
   states: {
     VALID_ANSWER: state('{{nextQuestion}}', 'کوتاه، طبیعی و بدون بازنویسی سؤال'),
-    QUESTION_ABOUT_FIELD: state('{{helpResponse}}', 'کوتاه، طبیعی، محترمانه و grounded در راهنمای همان سؤال'),
+    QUESTION_ABOUT_FIELD: state('{{helpResponse}}', 'کارشناس حرفه‌ای، محترمانه، صمیمی و غیررسمیِ کنترل‌شده؛ خطاب همیشه جمع باشد و از عبارت‌های دستوری یا بچگانه استفاده نشود. پاسخ بدون تکرار کامل سؤال، طبیعی و محترمانه پایان یابد.'),
     RELATED_BUT_WRONG_CATEGORY: state('{{relatedExplanation}}\n{{currentQuestion}}', 'محترمانه و دقیق'),
     AMBIGUOUS: state('{{clarification}}', 'کوتاه و مشخص'),
     UNRELATED: state('{{clarification}}', 'محترمانه و بدون بن‌بست'),
