@@ -351,6 +351,23 @@ export async function getQuotationCompletionPrompt(): Promise<string> {
     : DEFAULT_QUOTATION_COMPLETION_PROMPT;
 }
 
+export async function getQuotationFinalizationRuleContext() {
+  await ensureSeedRules();
+  const rules = await prisma.aiRule.findMany({
+    where: { category: { in: [FULL_NAME_HANDOFF_RULE_CATEGORY, QUOTATION_COMPLETION_RULE_CATEGORY] } },
+    orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    select: { title: true, category: true, status: true, sortOrder: true, enforcementLevel: true, directive: true },
+  });
+  return rules.map(rule => ({
+    title: rule.title,
+    category: rule.category,
+    active: rule.status === 'ACTIVE',
+    priority: rule.sortOrder,
+    enforcementLevel: rule.enforcementLevel,
+    directive: rule.directive,
+  }));
+}
+
 export async function getQuotationResponseEngineRule() {
   await ensureSeedRules();
   const rule = await prisma.aiRule.findFirst({ where: { category: QUOTATION_RESPONSE_ENGINE_CATEGORY } });

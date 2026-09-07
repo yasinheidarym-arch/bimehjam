@@ -123,6 +123,11 @@ function deterministicSelection(
     const option = options.find(item => item.value === money.matchedOption);
     if (option) return matched(fieldName, option, 1, 'DETERMINISTIC');
   }
+  const declinesCoverage = /(?:هیچ(?:ی|کدام)?|فاقد\s+پوشش|بدون\s+پوشش|نمی\s*(?:خواهم|خوام|خواهیم)|نیاز\s+(?:ندارم|نداریم)|لازم\s+(?:ندارم|نداریم))/u.test(normalizedAnswer);
+  if (declinesCoverage) {
+    const noneOptions = options.filter(option => /^(?:فاقد\s+پوشش|هیچ(?:‌|\s|-)?کدام)$/u.test(normalizeQuotationOptionText(option.value)));
+    if (noneOptions.length === 1) return matched(fieldName, noneOptions[0], 1, 'DETERMINISTIC');
+  }
   const hasWord = (text: string, word: string) => (` ${text} `).includes(` ${word} `);
   const exact = options.filter((option) => {
     const normalizedOption = normalizeQuotationOptionText(option.value);

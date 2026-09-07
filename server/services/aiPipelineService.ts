@@ -14,7 +14,7 @@ import {
   HumanHandoffReason,
   resolveHumanHandoffNameRule,
 } from './humanHandoffNameFlow';
-import { getQuotationCompletionPrompt, isFullNameHandoffRuleActive } from './aiBehaviorService';
+import { getQuotationCompletionPrompt, getQuotationFinalizationRuleContext, isFullNameHandoffRuleActive } from './aiBehaviorService';
 import { AiMode, shouldExecuteAi } from '../../shared/aiSchedule';
 import {
   offeredPurchaseLinkProductIds,
@@ -96,6 +96,15 @@ function humanHandoffResult(input: {
     handoffCompleted: input.handoffCompleted ?? Boolean(input.task),
   };
 }
+
+type QuotationFinalizationAudit = {
+  productId: string;
+  productName: string;
+  sessionId: string;
+  phase: string;
+  before: { status: string; step: string } | null;
+  after: { status: string; step: string };
+};
 
 // Helper to log steps to DB
 export async function createAiLog(data: {
@@ -556,6 +565,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
   const messagesReversed = [...conversation.messages].reverse();
 
   let brainResult;
+  let quotationFinalizationAudit: QuotationFinalizationAudit | null = null;
   try {
 
     // Specialized insurance responses are allowed only for an active policy
@@ -594,6 +604,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
       : null;
     const fullNameHandoffRuleActive = await isFullNameHandoffRuleActive();
     const quotationCompletionPrompt = await getQuotationCompletionPrompt();
+    const quotationFinalizationRules = await getQuotationFinalizationRuleContext();
 
     const terminalSubmission = existingCollectedData.quotationSubmission
       && ['SUBMITTED', 'FAILED'].includes(existingCollectedData.quotationSubmission.status)
@@ -613,7 +624,14 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         handoffCompleted: successful,
         deferHumanHandoff: !successful,
       });
+      quotationFinalizationAudit = {
+        productId: terminalSubmission.productId, productName: terminalSubmission.productName,
+        sessionId: terminalSubmission.sessionId, phase: 'TERMINAL_IDEMPOTENT_REPLAY',
+        before: { status: terminalSubmission.status, step: terminalSubmission.step },
+        after: { status: terminalSubmission.status, step: terminalSubmission.step },
+      };
     } else if (pendingQuotationSubmission && !isQuotationCorrection(userMessageContent)) {
+      const finalizationBefore = { status: pendingQuotationSubmission.status, step: pendingQuotationSubmission.step };
       const decision = advanceQuotationSubmission(pendingQuotationSubmission, userMessageContent);
       const profile = decision.state.profile;
       await prisma.customer.update({
@@ -688,6 +706,16 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
           deferHumanHandoff: true,
         });
       }
+      quotationFinalizationAudit = {
+        productId: decision.state.productId, productName: decision.state.productName,
+        sessionId: decision.state.sessionId,
+        phase: decision.action === 'ROUTE' ? 'FINAL_SUBMISSION' : 'PROFILE_OR_DELIVERY_CHOICE',
+        before: finalizationBefore,
+        after: {
+          status: brainResult.collectedData?.quotationSubmission?.status || decision.state.status,
+          step: brainResult.collectedData?.quotationSubmission?.step || decision.state.step,
+        },
+      };
     } else if (pendingHandoff) {
       const decision = resolveHumanHandoffNameRule({
         ruleActive: fullNameHandoffRuleActive,
@@ -813,6 +841,11 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
           ...brainResult.collectedData,
           quotationSubmission: submission.state,
         };
+        quotationFinalizationAudit = {
+          productId: submission.state.productId, productName: submission.state.productName,
+          sessionId: submission.state.sessionId, phase: 'START_FINALIZATION', before: null,
+          after: { status: submission.state.status, step: submission.state.step },
+        };
       }
 
       if (terminalSubmission) brainResult.task = undefined;
@@ -821,6 +854,49 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
     if (brainResult.customerFullName) {
       await prisma.customer.update({ where: { id: customer.id }, data: { name: brainResult.customerFullName } });
       customer.name = brainResult.customerFullName;
+    }
+
+    if (quotationFinalizationAudit) {
+      const audit = quotationFinalizationAudit;
+      const product = await prisma.insuranceProduct.findUnique({
+        where: { id: audit.productId },
+        select: { id: true, name: true, category: true, categoryRef: { select: { id: true, name: true } } },
+      });
+      const rulePayload = quotationFinalizationRules.map(rule => ({
+        title: rule.title, priority: rule.priority, active: rule.active,
+        enforcementLevel: rule.enforcementLevel, category: rule.category,
+      }));
+      if (product) {
+        brainResult.extractedKnowledge.matchedProduct = product;
+        brainResult.appliedRules = quotationFinalizationRules.filter(rule => rule.active).map(rule => ({
+          title: rule.title, directive: rule.directive, enforcementLevel: rule.enforcementLevel,
+        }));
+        brainResult.loadedKnowledgeSummary = JSON.stringify({
+          summary: `[مرحله قطعی استعلام]: ${audit.phase} | [محصول]: ${product.name}`,
+          detectedProduct: { id: product.id, name: product.name },
+          matchedCategory: product.categoryRef,
+          quotationSession: { id: audit.sessionId },
+          finalization: { phase: audit.phase, before: audit.before, after: audit.after, rules: rulePayload },
+        });
+        brainResult.workflowContext = {
+          currentPageUrl: null, currentPageProduct: null,
+          detectedProduct: { id: product.id, name: product.name }, purchaseUrl: null,
+          purchaseRequested: true, orderedQuestions: [], registrationStatus: audit.after.status,
+          matchedCategory: product.categoryRef, currentPageProductSuggestionDecision: 'NONE',
+        };
+      }
+      await prisma.brainLog.create({
+        data: {
+          conversationId, customerId, messageId,
+          intent: brainResult.intent, stage: brainResult.stage,
+          missingInfo: audit.after.step === 'DELIVERY_CHOICE' ? 'انتخاب مسیر تماس یا اعلام قیمت در چت' : audit.after.step,
+          loadedKnowledge: brainResult.loadedKnowledgeSummary,
+          generatedReply: brainResult.replyText,
+          validationResult: brainResult.validationResult,
+          validationReason: `Deterministic quotation finalization: ${audit.phase}`,
+          promptTokens: 0, completionTokens: 0, retryCount: 0,
+        },
+      }).catch(error => console.warn('Non-blocking quotation finalization BrainLog warning:', error));
     }
 
     // Create operator task from AI decision

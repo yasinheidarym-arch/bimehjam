@@ -4,7 +4,7 @@ import {
   normalizeQuotationOptionText,
   resolveQuotationOptionSelection,
 } from '../server/services/quotationOptionMatchingService.ts';
-import { parseQuotationMoney, quotationMoneyMismatchReply, resolveQuotationMoney } from '../server/services/quotationMoney.ts';
+import { isQuotationMoneyQuestion, parseQuotationMoney, quotationMoneyMismatchReply, resolveQuotationMoney } from '../server/services/quotationMoney.ts';
 
 const ageQuestion = {
   title: 'سن ساختمان', aiQuestion: 'ساختمان مورد بیمه چند سال ساخته؟', fieldName: 'buildingAgeBand',
@@ -110,4 +110,28 @@ test('clear money outside real options is confirmed and gets nearby valid choice
   assert.match(reply, /۸۰۰٬۰۰۰٬۰۰۰ تومان.*جزو گزینه/);
   assert.match(reply, /۵۰۰ میلیون تومان/);
   assert.doesNotMatch(reply, /منظورتان چیست/);
+});
+
+test('financial commitment count is not a money question and one maps to one commitment', async () => {
+  const question = {
+    title: 'تعداد تعهد مالی', aiQuestion: 'چند تعهد مالی می‌خواهید؟', fieldName: 'tedade_mali',
+    type: 'select', required: true, order: 1,
+    options: ['یک تعهد', 'دو تعهد', 'سه تعهد'],
+  };
+  assert.equal(isQuotationMoneyQuestion(question), false);
+  const result = await resolveQuotationOptionSelection({ question, message: 'یک' });
+  assert.equal(result.status, 'MATCHED');
+  assert.equal(result.selectedOptionValue, 'یک تعهد');
+});
+
+test('declining optional coverage maps only to the real canonical no-coverage option', async () => {
+  const question = {
+    title: 'پوشش‌های تکمیلی', fieldName: 'extra', type: 'select', required: true, order: 1,
+    options: ['فاقد پوشش', 'غرامت و نقص عضو', 'حذف فرانشیز'],
+  };
+  for (const message of ['پوشش تکمیلی نمی‌خواهم', 'نیاز ندارم', 'هیچی', 'بدون پوشش']) {
+    const result = await resolveQuotationOptionSelection({ question, message });
+    assert.equal(result.status, 'MATCHED', message);
+    assert.equal(result.selectedOptionValue, 'فاقد پوشش', message);
+  }
 });

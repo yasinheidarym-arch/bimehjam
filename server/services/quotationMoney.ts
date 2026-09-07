@@ -60,9 +60,16 @@ function optionValues(question: QuotationTurnQuestion): string[] {
 
 export function isQuotationMoneyQuestion(question: QuotationTurnQuestion): boolean {
   const values = optionValues(question);
-  const parsedOptions = values.filter(value => parseQuotationMoney(value) != null);
-  return /تومان|تومن|مبلغ|سرمایه|ارزش|تعهد.*مالی|سقف.*پوشش/.test(normalize(`${question.title} ${question.aiQuestion || ''}`)) ||
-    (values.length > 0 && parsedOptions.length === values.length);
+  const explicitType = normalize(question.type || '');
+  if (['money', 'currency', 'amount'].includes(explicitType)) return true;
+
+  // A select question is monetary only when every real option is a monetary
+  // amount. Words such as «مالی» describe the insurance subject and must not
+  // turn count questions (for example «تعداد تعهد مالی») into money fields.
+  return values.length > 0 && values.every(value =>
+    /میلیارد|میلیون|هزار|تومان|تومن/.test(normalize(value)) &&
+    parseQuotationMoney(value) != null
+  );
 }
 
 export function isAmbiguousQuotationMoney(question: QuotationTurnQuestion, message: string): boolean {

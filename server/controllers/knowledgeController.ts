@@ -896,9 +896,6 @@ async function renumberProductQuestions(
 export async function getQuotationQuestions(req: Request, res: Response) {
   try {
     const { productId } = req.query;
-    if (productId) {
-      await prisma.$transaction(async (tx) => renumberProductQuestions(tx, String(productId)));
-    }
     const questions = await prisma.quotationQuestion.findMany({
       where: productId ? { productId: String(productId) } : undefined,
       include: { product: { select: { name: true } } },
@@ -1019,6 +1016,7 @@ export async function simulateQuotationResponse(req: Request, res: Response) {
       status: result.classification.status, confidence: result.classification.confidence, reason: result.classification.reason,
       appliedRule: result.appliedRule, savedData: result.updates, responseText: result.responseText,
       nextQuestion: result.state.currentQuestion,
+      guidance: result.guidance,
     } });
   } catch (error: any) { return res.status(500).json({ success: false, error: error.message }); }
 }

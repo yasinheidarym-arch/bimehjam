@@ -2,6 +2,23 @@ import { Request, Response } from 'express';
 import prisma from '../db/client';
 import { createTimelineEvent } from '../services/timelineService';
 import { sendGoftinoMessage } from '../services/aiPipelineService';
+import { buildConversationQuotationPresentation } from '../services/conversationQuotationPresentation';
+
+async function loadQuestionDefinitions(productIds: Array<string | null | undefined>) {
+  const ids = [...new Set(productIds.filter((id): id is string => Boolean(id)))];
+  if (!ids.length) return new Map<string, Array<{ fieldName: string; title: string; order: number }>>();
+  const questions = await prisma.quotationQuestion.findMany({
+    where: { productId: { in: ids } },
+    orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    select: { productId: true, fieldName: true, title: true, order: true },
+  });
+  const result = new Map<string, Array<{ fieldName: string; title: string; order: number }>>();
+  for (const question of questions) {
+    if (!question.productId) continue;
+    result.set(question.productId, [...(result.get(question.productId) || []), question]);
+  }
+  return result;
+}
 
 // Standard conversation statuses as per architecture specification
 export const VALID_CONVERSATION_STATUSES = [
@@ -92,6 +109,7 @@ export async function getConversations(req: Request, res: Response) {
       }),
     ]);
 
+    const questionDefinitions = await loadQuestionDefinitions(rawConversations.map(c => c.currentProductId));
     // Format JSON fields safely
     const conversations = rawConversations.map((c) => {
       let parsedCollectedData = {};
@@ -107,9 +125,15 @@ export async function getConversations(req: Request, res: Response) {
         parsedRemainingQuestions = [];
       }
 
+      const quotationPresentation = buildConversationQuotationPresentation(
+        parsedCollectedData,
+        questionDefinitions.get(c.currentProductId || '') || [],
+      );
       return {
         ...c,
         collectedData: parsedCollectedData,
+        quotationCollectedFields: quotationPresentation.fields,
+        quotationTechnicalData: quotationPresentation.technical,
         remainingQuestions: parsedRemainingQuestions,
       };
     });
@@ -185,9 +209,16 @@ export async function getConversationById(req: Request, res: Response) {
       parsedRemainingQuestions = [];
     }
 
+    const questionDefinitions = await loadQuestionDefinitions([c.currentProductId]);
+    const quotationPresentation = buildConversationQuotationPresentation(
+      parsedCollectedData,
+      questionDefinitions.get(c.currentProductId || '') || [],
+    );
     const formattedConversation = {
       ...c,
       collectedData: parsedCollectedData,
+      quotationCollectedFields: quotationPresentation.fields,
+      quotationTechnicalData: quotationPresentation.technical,
       remainingQuestions: parsedRemainingQuestions,
     };
 

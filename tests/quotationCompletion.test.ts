@@ -10,6 +10,7 @@ import {
 } from '../server/services/quotationCompletionService';
 import { resolveQuotationOptionSelection } from '../server/services/quotationOptionMatchingService';
 import { numberedQuestionOrder, uniqueQuestionOrder } from '../shared/quotationQuestionOrder';
+import { buildConversationQuotationPresentation } from '../server/services/conversationQuotationPresentation';
 
 const input: QuotationCompletionInput = {
   conversationId: 'conversation-1',
@@ -141,6 +142,28 @@ test('panel reorder, insertion and movement always produce unique consecutive or
     numberedQuestionOrder(uniqueQuestionOrder(['q1', 'q2', 'q3'], { preferredIds: ['q3', 'q1', 'q3', 'q2'] })),
     [{ id: 'q3', order: 1 }, { id: 'q1', order: 2 }, { id: 'q2', order: 3 }],
   );
+});
+
+test('conversation panel exposes Persian question labels and separates structured technical metadata', () => {
+  const presentation = buildConversationQuotationPresentation({
+    majmuemetraj: '2500', tabaghat: '11', tedad_vahed: '22',
+    purchaseLinkState: { status: 'DONE' },
+    quotationTurnState: { currentQuestion: null },
+    quotationSubmission: { status: 'SUBMITTED' },
+    quotationAnswerValidation: null,
+    quotationTechnical: { validation: { status: 'SAVED', fieldName: 'tedad_vahed', fieldLabel: 'تعداد واحدها', canonicalValue: '22', reason: 'valid' } },
+  }, [
+    { fieldName: 'majmuemetraj', title: 'متراژ کل ساختمان', order: 1 },
+    { fieldName: 'tabaghat', title: 'تعداد طبقات', order: 2 },
+    { fieldName: 'tedad_vahed', title: 'تعداد واحدها', order: 3 },
+  ]);
+  assert.deepEqual(presentation.fields.map(field => field.label), ['متراژ کل ساختمان', 'تعداد طبقات', 'تعداد واحدها']);
+  assert.equal(JSON.stringify(presentation.fields).includes('majmuemetraj'), true); // transport identity is retained but never rendered
+  assert.equal(presentation.fields.some(field => field.value === '[object Object]'), false);
+  assert.equal('quotationAnswerValidation' in presentation.technical, false);
+  assert.deepEqual((presentation.technical.quotationTechnical as any).validation, {
+    status: 'SAVED', fieldName: 'tedad_vahed', fieldLabel: 'تعداد واحدها', canonicalValue: '22', reason: 'valid',
+  });
 });
 
 

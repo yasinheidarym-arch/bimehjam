@@ -190,7 +190,9 @@ export async function processAiConversation({ conversationId, messageId }: AiPro
     const products = await prisma.insuranceProduct.findMany({
       where: { status: 'ACTIVE' },
       include: {
-        quotationQuestions: { orderBy: { order: 'asc' } },
+        quotationQuestions: {
+          orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        },
         knowledgeItems: true,
       },
     });

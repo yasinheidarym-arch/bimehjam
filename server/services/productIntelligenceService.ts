@@ -386,7 +386,7 @@ export async function resolveProductByUrl(urlOrPath: string, options: { seedIfEm
       product: {
         include: {
           quotationQuestions: {
-            orderBy: { order: 'asc' },
+            orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
           },
           knowledgeItems: true,
         },
@@ -399,7 +399,9 @@ export async function resolveProductByUrl(urlOrPath: string, options: { seedIfEm
       include: {
         product: {
           include: {
-            quotationQuestions: { orderBy: { order: 'asc' } },
+            quotationQuestions: {
+              orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+            },
             knowledgeItems: true,
           },
         },
@@ -415,7 +417,7 @@ export async function resolveProductByUrl(urlOrPath: string, options: { seedIfEm
         product: {
           include: {
             quotationQuestions: {
-              orderBy: { order: 'asc' },
+              orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
             },
             knowledgeItems: true,
           },
@@ -439,7 +441,9 @@ export async function resolveProductByUrl(urlOrPath: string, options: { seedIfEm
     const productsWithPurchaseUrl = await prisma.insuranceProduct.findMany({
       where: { status: 'ACTIVE', purchaseUrl: { not: null } },
       include: {
-        quotationQuestions: { orderBy: { order: 'asc' } },
+        quotationQuestions: {
+          orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        },
         knowledgeItems: true,
       },
     });

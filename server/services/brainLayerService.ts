@@ -326,7 +326,7 @@ export async function processBrainLayer(params: {
   let purchaseLinkOffer: BrainResult['purchaseLinkOffer'];
   let quotationInterruptionQuestion: { text: string } | null = null;
   let quotationInvalidReply: string | null = null;
-  let quotationAnswerValidationState: Record<string, unknown> | null | undefined = undefined;
+  let quotationValidation: Record<string, unknown> | undefined;
   let quotationAnswerValidationReason: string | null = null;
   let quotationOptionSelection: QuotationOptionSelection | null = null;
   let quotationTurn: Awaited<ReturnType<typeof advanceQuotationTurn>> | null = null;
@@ -478,9 +478,19 @@ export async function processBrainLayer(params: {
       if (Object.keys(quotationTurn.updates).length) {
         evaluation = await processSessionAnswers(session.id, quotationTurn.updates, 'customer');
       }
-      quotationAnswerValidationState = null;
       quotationInvalidReply = quotationTurn.clarification;
       quotationAnswerValidationReason = quotationTurn.decisions.map(d => `${d.fieldName || 'question'}: ${d.reason}`).join(' | ');
+      const primaryDecision = quotationTurn.decisions[0];
+      const fieldName = primaryDecision?.fieldName || quotationTurn.currentQuestionBefore?.fieldName || null;
+      quotationValidation = primaryDecision ? {
+        status: primaryDecision.outcome,
+        classification: primaryDecision.status,
+        fieldName,
+        fieldLabel: quotationTurn.currentQuestionBefore?.title || null,
+        canonicalValue: fieldName ? quotationTurn.updates[fieldName] || null : null,
+        confidence: primaryDecision.confidence,
+        reason: primaryDecision.reason,
+      } : undefined;
       if (quotationTurn.interruption) quotationInterruptionQuestion = { text: '' };
     } else {
       quotationTurn = {
@@ -1102,6 +1112,7 @@ Call Customer
     matchedCategory: workflowContext.matchedCategory,
     currentPageProductSuggestionDecision: pageProductSuggestionDecision,
     quotationOptionSelection,
+    quotationValidation,
     quotationTurn: quotationTurn ? { currentQuestionBefore: quotationTurn.currentQuestionBefore, state: quotationTurn.state, classification: quotationTurn.classification, guidance: quotationTurn.guidance, appliedRule: quotationTurn.appliedRule, decisions: quotationTurn.decisions, savedFields: Object.keys(quotationTurn.updates) } : null,
   });
 
@@ -1148,8 +1159,9 @@ Call Customer
 
   console.log("========== BRAINLOG DEBUG: CONTINUING TO RETURN ==========");
 
+  const { quotationAnswerValidation: _legacyQuotationValidation, ...existingCollectedDataWithoutLegacyValidation } = existingCollectedData;
   const mergedCollectedData = {
-    ...existingCollectedData,
+    ...existingCollectedDataWithoutLegacyValidation,
     ...(extractedKnowledge.quotationWorkflow?.answeredFields || {}),
     ...(!quotationState ? newlyExtractedData : {}),
     ...(quotationTurn ? { quotationTurnState: quotationTurn.state } : {}),
@@ -1161,8 +1173,8 @@ Call Customer
     ...(pageProductSuggestionState
       ? { currentPageProductSuggestion: pageProductSuggestionState }
       : {}),
-    ...(quotationAnswerValidationState !== undefined
-      ? { quotationAnswerValidation: quotationAnswerValidationState }
+    ...(quotationValidation
+      ? { quotationTechnical: { ...(existingCollectedData.quotationTechnical || {}), validation: quotationValidation } }
       : {}),
     ...(quotationOptionSelection
       ? { quotationOptionSelection }

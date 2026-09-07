@@ -101,7 +101,11 @@ export async function getSession(req: Request, res: Response) {
       include: {
         product: true,
         workflow: {
-          include: { questions: { orderBy: { order: 'asc' } } },
+          include: {
+            questions: {
+              orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+            },
+          },
         },
         answers: {
           include: { question: true },

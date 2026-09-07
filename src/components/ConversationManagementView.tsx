@@ -69,6 +69,8 @@ export interface ConversationItem {
   leadScore: number;
   leadStatus: string;
   collectedData: Record<string, any>;
+  quotationCollectedFields: Array<{ label: string; value: string; order: number }>;
+  quotationTechnicalData: Record<string, unknown>;
   remainingQuestions: string[];
   aiSummary?: string;
   messages: MessageData[];
@@ -488,6 +490,8 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
       leadScore: c.customer?.leadScore || 50,
       leadStatus: c.customer?.leadStatus || 'Cold',
       collectedData: parsedCollectedData,
+      quotationCollectedFields: Array.isArray(c.quotationCollectedFields) ? c.quotationCollectedFields : [],
+      quotationTechnicalData: c.quotationTechnicalData && typeof c.quotationTechnicalData === 'object' ? c.quotationTechnicalData : {},
       remainingQuestions: parsedRemainingQuestions,
       aiSummary: c.aiSummary || '',
       messages: mappedMessages,
@@ -717,8 +721,9 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
     return matchesFilter && matchesSearch;
   });
 
-  const activeCollectedData = activeConversation?.collectedData || {};
-  const collectedKeys = Object.keys(activeCollectedData);
+  const collectedFields = activeConversation?.quotationCollectedFields || [];
+  const technicalQuotationData = activeConversation?.quotationTechnicalData || {};
+  const technicalKeys = Object.keys(technicalQuotationData);
   const remainingQuestionsList: string[] = activeConversation?.remainingQuestions || [];
   const activeTimeline = activeConversation?.timelineEvents || [];
 
@@ -1145,16 +1150,16 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
                 <div className="flex items-center justify-between">
                   <span className="font-black text-slate-900 text-xs flex items-center gap-1.5">
                     <ListChecks className="w-4 h-4 text-indigo-600" />
-                    <span>فیلدهای دریافت‌شده ({collectedKeys.length})</span>
+                    <span>فیلدهای دریافت‌شده ({collectedFields.length})</span>
                   </span>
-                  {collectedKeys.length > 0 && (
+                  {collectedFields.length > 0 && (
                     <span className="text-[10px] text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md font-bold border border-emerald-100">
                       تکمیل‌شده توسط AI
                     </span>
                   )}
                 </div>
 
-                {collectedKeys.length === 0 ? (
+                {collectedFields.length === 0 ? (
                   <div className="bg-amber-50/60 border border-amber-200 p-3 rounded-xl text-center space-y-1">
                     <AlertCircle className="w-4 h-4 text-amber-600 mx-auto" />
                     <p className="text-xs text-amber-900 font-bold">هنوز فیلدی استخراج نشده است</p>
@@ -1162,20 +1167,19 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 gap-2">
-                    {collectedKeys.map((key) => {
-                      const val = String(activeCollectedData[key]);
-                      const isCopied = copiedKey === key;
+                    {collectedFields.map((field, index) => {
+                      const isCopied = copiedKey === `${index}`;
                       return (
                         <div
-                          key={key}
+                          key={`${field.label}-${index}`}
                           className="bg-white border border-slate-200 hover:border-indigo-300 p-2.5 rounded-xl shadow-2xs flex items-center justify-between transition-all"
                         >
                           <div className="space-y-0.5">
-                            <span className="text-[10px] text-slate-500 font-bold block">{key}:</span>
-                            <span className="text-xs font-bold text-slate-900">{val}</span>
+                            <span className="text-[10px] text-slate-500 font-bold block">{field.label}:</span>
+                            <span className="text-xs font-bold text-slate-900">{field.value}</span>
                           </div>
                           <button
-                            onClick={() => copyToClipboard(`${key}: ${val}`, key)}
+                            onClick={() => copyToClipboard(`${field.label}: ${field.value}`, `${index}`)}
                             className="p-1.5 rounded-lg text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
                             title="کپی در حافظه"
                           >
@@ -1187,6 +1191,15 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
                   </div>
                 )}
               </div>
+
+              {technicalKeys.length > 0 && (
+                <details className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <summary className="cursor-pointer text-[11px] font-bold text-slate-700">جزئیات فنی workflow</summary>
+                  <pre dir="ltr" className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-900 p-3 text-[10px] text-slate-100">
+                    {JSON.stringify(technicalQuotationData, null, 2)}
+                  </pre>
+                </details>
+              )}
 
               {/* Remaining Required Questions */}
               {remainingQuestionsList.length > 0 && (

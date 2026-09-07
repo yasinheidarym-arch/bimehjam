@@ -249,6 +249,43 @@ test('building-manager helpText is used and the same exact question survives rel
   assert.equal(reloaded.nextQuestionText, amenities.aiQuestion);
 });
 
+test('unique helpText concept is mandatory and its source/question identity are auditable', async () => {
+  const question: QuotationTurnQuestion = {
+    id: 'unique-help', title: 'متراژ کل ساختمان', aiQuestion: 'متراژ کل چقدر است؟',
+    fieldName: 'area', type: 'number', required: true, order: 1,
+    helpText: 'عبارت منحصربه‌فرد: همکف و زیرزمین را نیز در مجموع طبقات حساب کنید.',
+  };
+  const result = await advanceQuotationTurn({
+    sessionId: 'help-audit', questions: [question], answers: {}, message: 'چجوری حسابش کنم؟',
+    productKnowledge: 'دانش دیگری که نباید جایگزین راهنمای سؤال شود.',
+    model: async ({ grounding }) => {
+      assert.equal(grounding.questionId, 'unique-help');
+      assert.equal(grounding.questionText, 'متراژ کل چقدر است؟');
+      assert.match(grounding.helpText || '', /عبارت منحصربه‌فرد/);
+      return { status: 'QUESTION_ABOUT_FIELD', confidence: .99, reason: 'help', assignments: [] };
+    },
+  });
+  assert.equal(result.guidance?.source, 'HELP_TEXT');
+  assert.equal(result.guidance?.questionId, 'unique-help');
+  assert.equal(result.guidance?.questionText, 'متراژ کل چقدر است؟');
+  assert.match(result.responseText, /عبارت منحصربه‌فرد.*همکف.*زیرزمین/s);
+  assert.equal(result.state.currentQuestion?.fieldName, 'area');
+});
+
+test('building-manager count and no-coverage answers advance without validator loops', async () => {
+  const form: QuotationTurnQuestion[] = [
+    { id: 'count', title: 'تعداد تعهد مالی', aiQuestion: 'چند تعهد مالی می‌خواهید؟', fieldName: 'tedade_mali', type: 'select', required: true, order: 1, options: ['یک تعهد', 'دو تعهد'] },
+    { id: 'extra', title: 'پوشش‌های تکمیلی', aiQuestion: 'چه پوشش تکمیلی می‌خواهید؟', fieldName: 'extra', type: 'select', required: true, order: 2, options: ['فاقد پوشش', 'حذف فرانشیز'] },
+    { id: 'next', title: 'مرحله بعد', aiQuestion: 'سؤال بعدی', fieldName: 'next', type: 'number', required: true, order: 3 },
+  ];
+  const count = await advanceQuotationTurn({ sessionId: 'root-fix', questions: form, answers: {}, message: 'یک' });
+  assert.deepEqual(count.updates, { tedade_mali: 'یک تعهد' });
+  assert.equal(count.nextQuestionText, form[1].aiQuestion);
+  const none = await advanceQuotationTurn({ sessionId: 'root-fix', questions: form, answers: count.state.answers, previous: count.state, message: 'پوشش تکمیلی نمی‌خواهم' });
+  assert.deepEqual(none.updates, { extra: 'فاقد پوشش' });
+  assert.equal(none.nextQuestionText, 'سؤال بعدی');
+});
+
 test('database order, createdAt and id deterministically rebuild queue after reload', async () => {
   const panelQuestions: QuotationTurnQuestion[] = [
     { id: 'z', createdAt: '2026-01-03T00:00:00Z', order: 2, title: 'سؤال دوم ب', aiQuestion: 'متن دوم ب', fieldName: 'secondB', type: 'number', required: true },

@@ -1,7 +1,7 @@
 import type { QuotationTurnQuestion } from './quotationConversationFlow';
 import { isQuotationHelpRequest, quotationQuestionHelp } from './quotationQuestionHelp';
 
-export type QuotationGuidanceSource = 'QUESTION_HELP_TEXT' | 'PRODUCT_KNOWLEDGE' | 'FIELD_SCHEMA' | 'EXPERT_REVIEW';
+export type QuotationGuidanceSource = 'HELP_TEXT' | 'PRODUCT_KNOWLEDGE' | 'FIELD_SCHEMA' | 'EXPERT_REVIEW';
 
 export async function resolveQuotationGuidance(input: {
   message: string; knowledge: string;
@@ -9,7 +9,7 @@ export async function resolveQuotationGuidance(input: {
   select: (context: { message: string; question: QuotationTurnQuestion; knowledge: string }) => Promise<unknown>;
 }): Promise<{ text: string; source: QuotationGuidanceSource }> {
   if (input.question.helpText?.trim()) {
-    return { text: quotationQuestionHelp(input.question), source: 'QUESTION_HELP_TEXT' };
+    return { text: quotationQuestionHelp(input.question), source: 'HELP_TEXT' };
   }
 
   if (input.knowledge.trim()) {
