@@ -1,5 +1,6 @@
 import prisma from '../db/client';
 import { categoryKnowledgeScope, composeScopedKnowledge } from './categoryKnowledgeScope';
+import { productDetectionTerms } from './productDetectionAliases';
 
 export function stripUnverifiedOperationalClaims(value: string): string {
   return String(value || '')
@@ -646,15 +647,17 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
   if (products.length > 0) {
     const scoredProducts = products.map((product) => {
       const productName = normalizeForMatch(product.name);
-
       const productWords = tokenize(productName);
+      const detectionTerms = productDetectionTerms(product.name, product.description).map(normalizeForMatch);
 
       let score = 0;
+      const latestDirectMatch = detectionTerms.some(term => term && normalizedLatestMessage.includes(term));
+      const contextDirectMatch = detectionTerms.some(term => term && normalizedConversationContext.includes(term));
 
       // Exact product name match is strongest.
-      if (normalizedLatestMessage.includes(productName)) {
+      if (latestDirectMatch) {
         score += 60;
-      } else if (normalizedConversationContext.includes(productName)) {
+      } else if (contextDirectMatch) {
         score += 20;
       }
 
@@ -681,7 +684,7 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
         score += 5;
       }
 
-      return { product, score };
+      return { product, score, directMatch: latestDirectMatch || contextDirectMatch };
     });
 
     console.log("========== PRODUCT MATCH DEBUG ==========");
@@ -710,7 +713,7 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
     // Category alone is not enough to load product knowledge or quotation workflow.
     if (best && params.customerContext?.productId && best.product.id === params.customerContext.productId) {
       matchedProductRaw = best.product;
-    } else if (best && matchedSubCategoryRaw) {
+    } else if (best && (matchedSubCategoryRaw || best.directMatch)) {
       matchedProductRaw = best.product;
     } else if (best && !matchedSubCategoryRaw) {
       console.log("PRODUCT MATCH BLOCKED: category detected but subcategory is missing");
