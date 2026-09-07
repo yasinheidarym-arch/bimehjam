@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { advanceQuotationTurn, type QuotationTurnState } from './quotationStateMachine';
-import { classifyQuotationTurnWithAi } from './quotationClassifierService';
+import { classifyQuotationTurnWithAi, selectQuotationGuidanceWithAi } from './quotationClassifierService';
 import prisma from '../db/client';
 import { getAiConfig } from './settingService';
 import {
@@ -438,6 +438,15 @@ export async function processBrainLayer(params: {
     (intent === 'Insurance Quotation' || conversation.currentProductId === extractedKnowledge.matchedProduct.id)
   ) {
     const product = extractedKnowledge.matchedProduct;
+    const quotationGuidanceKnowledge = [
+      ...extractedKnowledge.relevantArticles.map(article => `${article.title}\n${article.content}`),
+      product.aiKnowledgeArticle || '',
+      product.description || '',
+      product.coverage || '',
+      product.purchaseConditions || '',
+      product.exclusions || '',
+      product.benefits || '',
+    ].filter(value => value.trim()).join('\n\n');
     const session = await getOrCreateQuotationSession({
       conversationId: conversation.id,
       customerId: customer.id,
@@ -463,6 +472,8 @@ export async function processBrainLayer(params: {
           config: quotationResponseEngineRule.config,
         } : null,
         model: classifyQuotationTurnWithAi,
+        productKnowledge: quotationGuidanceKnowledge,
+        guidanceSelector: selectQuotationGuidanceWithAi,
       });
       if (Object.keys(quotationTurn.updates).length) {
         evaluation = await processSessionAnswers(session.id, quotationTurn.updates, 'customer');
@@ -477,6 +488,7 @@ export async function processBrainLayer(params: {
         state: { version: 1, sessionId: session.id, currentQuestion: pendingQuestion, answers: evaluation.collectedData, attempts: {}, ambiguity: 'NONE', lastAnsweredField: null },
         updates: {}, decisions: [], interruption: false, clarification: null,
         classification: null, responseText: pendingQuestion ? quotationQuestionReply(pendingQuestion) : null, appliedRule: null,
+        guidance: null,
         nextQuestionText: pendingQuestion ? quotationQuestionReply(pendingQuestion) : null,
       };
     }
@@ -1090,7 +1102,7 @@ Call Customer
     matchedCategory: workflowContext.matchedCategory,
     currentPageProductSuggestionDecision: pageProductSuggestionDecision,
     quotationOptionSelection,
-    quotationTurn: quotationTurn ? { currentQuestionBefore: quotationTurn.currentQuestionBefore, state: quotationTurn.state, classification: quotationTurn.classification, appliedRule: quotationTurn.appliedRule, decisions: quotationTurn.decisions, savedFields: Object.keys(quotationTurn.updates) } : null,
+    quotationTurn: quotationTurn ? { currentQuestionBefore: quotationTurn.currentQuestionBefore, state: quotationTurn.state, classification: quotationTurn.classification, guidance: quotationTurn.guidance, appliedRule: quotationTurn.appliedRule, decisions: quotationTurn.decisions, savedFields: Object.keys(quotationTurn.updates) } : null,
   });
 
   // Record BrainLog in Database

@@ -274,6 +274,43 @@ test('insurance coverage questions still use knowledge, not operational helpText
   assert.equal(reply, passage);
 });
 
+test('masked production 4096 transcript messages preserve grounded questionnaire state', async () => {
+  const facade: QuotationTurnQuestion = {
+    id: 'facade', title: 'نوع نمای ساختمان', aiQuestion: 'نوع جنس متریال نمای ساختمان چیه؟',
+    fieldName: 'jenseh_nama', type: 'select', required: true, order: 4,
+    options: ['سنگ', 'سیمانی / آجری', 'شیشه', 'کامپوزیت'], helpText: '',
+  };
+  const productPassage = 'نمای ساختمان در صورت عدم نگهداری مناسب می‌تواند باعث حادثه شود.';
+  const help = await advanceQuotationTurn({
+    sessionId: 'masked-production-help', questions: [facade], answers: {}, message: 'بیشتر بهم توضیح بده',
+    productKnowledge: productPassage,
+    model: async ({ grounding }) => {
+      assert.equal(grounding.helpText, null);
+      assert.equal(grounding.productKnowledge, productPassage);
+      return { status: 'QUESTION_ABOUT_FIELD', confidence: .95, reason: 'راهنمای همان فیلد', relatedFieldName: 'jenseh_nama', assignments: [] };
+    },
+    guidanceSelector: async ({ knowledge }) => ({ passages: [knowledge] }),
+  });
+  assert.deepEqual(help.updates, {});
+  assert.equal(help.state.currentQuestion?.fieldName, 'jenseh_nama');
+  assert.equal(help.guidance?.source, 'PRODUCT_KNOWLEDGE');
+  assert.match(help.responseText, new RegExp(productPassage));
+  assert.match(help.responseText, /نوع جنس متریال نمای ساختمان چیه/);
+
+  const age = await advanceQuotationTurn({ sessionId: 'masked-production-age', questions: [questions[2]], answers: {}, message: '2 سال' });
+  assert.equal(age.updates.age, 'تا ۵ سال ساخت');
+
+  const medical: QuotationTurnQuestion = {
+    id: 'medical', title: 'هزینه پزشکی هر نفر', aiQuestion: 'چقدر پوشش هزینه پزشکی می‌خواهید؟',
+    fieldName: 'pezeshki', type: 'select', required: true, order: 9,
+    options: ['50 میلیون تومان', '100 میلیون تومان', '200 میلیون تومان', '280 میلیون تومان'],
+  };
+  const outOfOptions = await advanceQuotationTurn({ sessionId: 'masked-production-money', questions: [medical], answers: {}, message: '28 میلیون تومان' });
+  assert.deepEqual(outOfOptions.updates, {});
+  assert.equal(outOfOptions.state.currentQuestion?.fieldName, 'pezeshki');
+  assert.match(outOfOptions.responseText, /۲۸٬۰۰۰٬۰۰۰ تومان/);
+});
+
 test('money options save exact canonical value and never save a clear out-of-list amount', async () => {
   const money = {
     id: 'capital', title: 'سرمایه درخواستی (تومان)', aiQuestion: 'چه مبلغی را انتخاب می‌کنید؟',

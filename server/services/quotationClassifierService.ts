@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { getAiConfig } from './settingService';
 import type { QuotationTurnModel } from './quotationStateMachine';
 import { quotationQuestionOptions } from './quotationOptionMatchingService';
+import type { QuotationTurnQuestion } from './quotationConversationFlow';
 
 export const classifyQuotationTurnWithAi: QuotationTurnModel = async (input) => {
   const config = await getAiConfig();
@@ -32,3 +33,29 @@ export const classifyQuotationTurnWithAi: QuotationTurnModel = async (input) => 
   });
   return JSON.parse(response.choices[0]?.message?.content || '{}');
 };
+
+export async function selectQuotationGuidanceWithAi(input: {
+  message: string;
+  question: QuotationTurnQuestion;
+  knowledge: string;
+}) {
+  const config = await getAiConfig();
+  const apiKey = config.openaiApiKey || process.env.OPENAI_API_KEY || '';
+  if (!apiKey) return { passages: [] };
+  const response = await new OpenAI({ apiKey }).chat.completions.create({
+    model: config.openaiModel || 'gpt-5',
+    response_format: { type: 'json_schema', json_schema: {
+      name: 'quotation_grounded_guidance', strict: true,
+      schema: {
+        type: 'object', additionalProperties: false,
+        properties: { passages: { type: 'array', maxItems: 2, items: { type: 'string' } } },
+        required: ['passages'],
+      },
+    } },
+    messages: [
+      { role: 'system', content: 'فقط قطعه‌های کوتاه و عیناً موجود در knowledge را انتخاب کن که مستقیماً به پرسش کاربر درباره فیلد فعلی پاسخ می‌دهند. متن را بازنویسی نکن، هیچ پوشش، مبلغ یا شرط بیمه‌ای نساز و اگر شاهد مستقیم وجود ندارد passages را خالی برگردان.' },
+      { role: 'user', content: JSON.stringify(input) },
+    ],
+  });
+  return JSON.parse(response.choices[0]?.message?.content || '{"passages":[]}');
+}

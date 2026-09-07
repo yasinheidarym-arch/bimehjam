@@ -3,11 +3,12 @@ import { quotationQuestionHelp } from './quotationQuestionHelp';
 import { normalizeQuotationOptionText as normalize, numbersIn, isPlainQuotationNumber, quotationQuestionOptions, resolveQuotationOptionSelection } from './quotationOptionMatchingService';
 import { isAmbiguousQuotationMoney, resolveQuotationMoney } from './quotationMoney';
 import { DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG, QUOTATION_RESPONSE_STATES, type QuotationResponseEngineConfig, type QuotationResponseState } from '../../shared/quotationResponseEngine';
+import { resolveQuotationGuidance, type QuotationGuidanceSource } from './quotationInterruption';
 
 export type QuotationTurnState = { version: 1; sessionId: string; currentQuestion: QuotationTurnQuestion | null; answers: Record<string, string>; attempts: Record<string, number>; ambiguity: 'NONE' | 'CLARIFY' | 'HELP'; lastAnsweredField: string | null };
 export type QuotationClassifierAssignment = { fieldName: string; value: string; selectedOptionId?: string | null; selectedOptionValue?: string | null; evidence: string; confidence: number };
 export type QuotationClassification = { status: QuotationResponseState; confidence: number; reason: string; assignments: QuotationClassifierAssignment[]; relatedFieldName?: string | null; relatedExplanation?: string | null; clarification?: string | null };
-export type QuotationTurnModel = (context: { message: string; currentQuestion: QuotationTurnQuestion | null; questions: QuotationTurnQuestion[]; answers: Record<string, string>; correction: boolean; rule: QuotationResponseEngineConfig; validAnswerExamples: string[] }) => Promise<unknown>;
+export type QuotationTurnModel = (context: { message: string; currentQuestion: QuotationTurnQuestion | null; questions: QuotationTurnQuestion[]; answers: Record<string, string>; correction: boolean; rule: QuotationResponseEngineConfig; validAnswerExamples: string[]; grounding: { helpText: string | null; productKnowledge: string } }) => Promise<unknown>;
 export type TurnDecision = { status: QuotationResponseState; fieldName: string | null; confidence: number; reason: string; outcome: 'SAVED' | 'CORRECTED' | 'CLARIFY' | 'INTERRUPTION' };
 
 export function isQuotationCorrection(message: string): boolean { return /اصلاح|اشتباه\s*(?:گفتم|شد|کردم)|منظورم|جواب\s*قبلی/.test(normalize(message)); }
@@ -126,7 +127,7 @@ function genericClarification(question: QuotationTurnQuestion, status: Quotation
   return `لطفاً پاسخ «${question.title}» را کمی روشن‌تر بفرستید${options.length ? `؛ گزینه‌ها: ${options.join('، ')}` : ''}.`;
 }
 
-export async function advanceQuotationTurn(input: { sessionId: string; questions: QuotationTurnQuestion[]; answers: Record<string, string>; previous?: QuotationTurnState | null; message: string; model?: QuotationTurnModel; engine?: { active: boolean; title: string; priority: number; config: QuotationResponseEngineConfig } | null }) {
+export async function advanceQuotationTurn(input: { sessionId: string; questions: QuotationTurnQuestion[]; answers: Record<string, string>; previous?: QuotationTurnState | null; message: string; model?: QuotationTurnModel; productKnowledge?: string; guidanceSelector?: (context: { message: string; question: QuotationTurnQuestion; knowledge: string }) => Promise<unknown>; engine?: { active: boolean; title: string; priority: number; config: QuotationResponseEngineConfig } | null }) {
   const answers = { ...input.answers };
   const current = applicableQuotationQuestions(input.questions, answers).find(question => question.required && !answers[question.fieldName]) || null;
   const previous = input.previous?.sessionId === input.sessionId ? input.previous : null;
@@ -135,7 +136,7 @@ export async function advanceQuotationTurn(input: { sessionId: string; questions
   const config = input.engine?.config || DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG;
   let classification: QuotationClassification | null = null;
   if (input.engine?.active !== false && input.model) {
-    try { classification = parseClassification(await input.model({ message: normalize(input.message), currentQuestion: current, questions: sortQuotationQuestions(input.questions), answers, correction, rule: config, validAnswerExamples: current?.id ? config.questionExamples[current.id] || [] : [] }), correction); }
+    try { classification = parseClassification(await input.model({ message: normalize(input.message), currentQuestion: current, questions: sortQuotationQuestions(input.questions), answers, correction, rule: config, validAnswerExamples: current?.id ? config.questionExamples[current.id] || [] : [], grounding: { helpText: current?.helpText?.trim() || null, productKnowledge: (input.productKnowledge || '').slice(0, 12000) } }), correction); }
     catch { classification = null; }
   }
   if (!classification) classification = await safeFallbackClassification(current, normalize(input.message), correction);
@@ -179,7 +180,18 @@ export async function advanceQuotationTurn(input: { sessionId: string; questions
   const next = applicableQuotationQuestions(input.questions, answers).find(question => question.required && !answers[question.fieldName]) || null;
   if (!Object.keys(updates).length && current && classification.status !== 'QUESTION_ABOUT_FIELD') attempts[current.fieldName] = Math.min(100, (attempts[current.fieldName] || 0) + 1);
   const attemptCount = current ? attempts[current.fieldName] || 0 : 0;
-  const helpText = current ? quotationQuestionHelp(current) : '';
+  let helpText = current ? quotationQuestionHelp(current) : '';
+  let guidanceSource: QuotationGuidanceSource | null = null;
+  if (current && classification.status === 'QUESTION_ABOUT_FIELD') {
+    const guidance = await resolveQuotationGuidance({
+      message: input.message,
+      question: current,
+      knowledge: input.productKnowledge || '',
+      select: input.guidanceSelector || (async () => ({ passages: [] })),
+    });
+    helpText = guidance.text;
+    guidanceSource = guidance.source;
+  }
   const clarification = current ? genericClarification(current, classification.status, attemptCount, input.message) : '';
   const relatedQuestion = classification.relatedFieldName ? input.questions.find(question => question.fieldName === classification.relatedFieldName) : null;
   const relatedExplanation = current ? (relatedQuestion ? `این پاسخ به «${relatedQuestion.title}» مربوط است، نه «${current.title}».` : genericClarification(current, 'RELATED_BUT_WRONG_CATEGORY', attemptCount, input.message)) : '';
@@ -189,5 +201,5 @@ export async function advanceQuotationTurn(input: { sessionId: string; questions
   const interruption = ['QUESTION_ABOUT_FIELD', 'RELATED_BUT_WRONG_CATEGORY', 'UNRELATED'].includes(classification.status);
   const ambiguity: QuotationTurnState['ambiguity'] = classification.status === 'QUESTION_ABOUT_FIELD' ? 'HELP' : ['AMBIGUOUS', 'RELATED_BUT_WRONG_CATEGORY', 'UNRELATED'].includes(classification.status) ? 'CLARIFY' : 'NONE';
   const state: QuotationTurnState = { version: 1, sessionId: input.sessionId, currentQuestion: next, answers, attempts, ambiguity, lastAnsweredField: Object.keys(updates).at(-1) || previous?.lastAnsweredField || null };
-  return { state, currentQuestionBefore: current, updates, decisions, classification, responseText, appliedRule: input.engine ? { title: input.engine.title, priority: input.engine.priority, active: input.engine.active } : null, interruption, clarification: Object.keys(updates).length ? null : responseText, nextQuestionText: next ? quotationQuestionReply(next) : null };
+  return { state, currentQuestionBefore: current, updates, decisions, classification, responseText, guidance: guidanceSource ? { source: guidanceSource, helpTextUsed: helpText, productKnowledgeProvided: Boolean(input.productKnowledge?.trim()) } : null, appliedRule: input.engine ? { title: input.engine.title, priority: input.engine.priority, active: input.engine.active } : null, interruption, clarification: Object.keys(updates).length ? null : responseText, nextQuestionText: next ? quotationQuestionReply(next) : null };
 }

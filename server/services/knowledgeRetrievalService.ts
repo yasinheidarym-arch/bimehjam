@@ -23,6 +23,7 @@ export interface ExtractedKnowledgePayload {
     category: string;
     purchaseUrl: string | null;
     aiKnowledgeArticle?: string;
+    aiRules?: string;
     description: string;
     coverage: string;
     purchaseConditions: string;
@@ -729,6 +730,11 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
       purchaseUrl: matchedProductRaw.purchaseUrl || null,
       aiKnowledgeArticle: matchedProductRaw.aiKnowledgeArticle || '',
       aiRules: matchedProductRaw.aiRules || '',
+      description: matchedProductRaw.description || '',
+      coverage: matchedProductRaw.coverage || '',
+      purchaseConditions: matchedProductRaw.purchaseConditions || '',
+      exclusions: matchedProductRaw.exclusions || '',
+      benefits: matchedProductRaw.benefits || '',
     };
 
     // Calculate quotation workflow & next question
