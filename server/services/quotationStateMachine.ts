@@ -33,7 +33,7 @@ function explicitlyMentionsQuestion(message: string, question: QuotationTurnQues
   return [question.fieldName, question.title, question.aiQuestion || ''].filter(Boolean).some(label => text.includes(normalize(label)));
 }
 
-async function canonicalAnswer(q: QuotationTurnQuestion, evidence: string, proposed?: string, optionId?: string | null): Promise<string | null> {
+async function canonicalAnswer(q: QuotationTurnQuestion, evidence: string, proposed?: string, optionId?: string | null, confidence = 1): Promise<string | null> {
   const text = normalize(evidence).replace(/[.!،؛]+$/g, '').trim();
   const options = quotationQuestionOptions(q);
   if (!text) return null;
@@ -41,24 +41,30 @@ async function canonicalAnswer(q: QuotationTurnQuestion, evidence: string, propo
   if (options.length) {
     const money = resolveQuotationMoney(q, text);
     if (money?.status === 'MATCHED') return money.matchedOption || null;
-    if (money?.status === 'OUT_OF_OPTIONS') return null;
-    if (isAmbiguousQuotationMoney(q, text)) return null;
-    const numericEvidence = numbersIn(text, true);
-    if (numericEvidence.length) {
-      const numericSelection = await resolveQuotationOptionSelection({ question: q, message: text });
-      if (numericSelection.status !== 'MATCHED') return null;
-      if ((optionId && numericSelection.selectedOptionId !== optionId) || (proposed && numericSelection.selectedOptionValue !== proposed)) return null;
-      return numericSelection.selectedOptionValue;
-    }
-    if (optionId) { const selected = options.find(option => option.id === optionId); if (selected && (!proposed || selected.value === proposed)) return selected.value; }
-    const direct = options.find(option => normalize(option.value) === text || option.value === proposed);
-    if (direct) return direct.value;
+    if (money?.status === 'OUT_OF_OPTIONS' || isAmbiguousQuotationMoney(q, text)) return null;
+
+    const proposedOption = optionId || proposed ? options.find(option =>
+      (!optionId || option.id === optionId) &&
+      (!proposed || option.value === proposed)
+    ) : undefined;
+    const hasNumericEvidence = numbersIn(text, true).length > 0;
+    const selection = await resolveQuotationOptionSelection({
+      question: q,
+      message: text,
+      modelSelector: proposedOption && !hasNumericEvidence ? async () => ({
+        fieldName: q.fieldName,
+        selectedOptionId: proposedOption.id,
+        selectedOptionValue: proposedOption.value,
+        confidence,
+      }) : undefined,
+    });
+    if (selection.status === 'MATCHED') return selection.selectedOptionValue;
+
     if (q.type === 'checkbox' && proposed) {
       const values = proposed.split('،').map(value => value.trim()).filter(Boolean);
       if (values.length && values.every(value => options.some(option => option.value === value))) return [...new Set(values)].join('، ');
     }
-    const deterministic = await resolveQuotationOptionSelection({ question: q, message: text });
-    return deterministic.status === 'MATCHED' ? deterministic.selectedOptionValue : null;
+    return null;
   }
   if (q.type === 'number') {
     const values = numbersIn(text, true);
@@ -71,7 +77,9 @@ async function canonicalAnswer(q: QuotationTurnQuestion, evidence: string, propo
     const match = candidate.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
     if (!match) return null;
     const month = Number(match[2]); const day = Number(match[3]);
-    return month >= 1 && month <= 12 && day >= 1 && day <= 31 ? `${match[1]}/${match[2].padStart(2, '0')}/${match[3].padStart(2, '0')}` : null;
+    return month >= 1 && month <= 12 && day >= 1 && day <= 31
+      ? [match[1], match[2].padStart(2, '0'), match[3].padStart(2, '0')].join('/')
+      : null;
   }
   if ((!q.type || q.type === 'text' || q.type === 'textarea') && proposed === undefined) return null;
   const value = proposed?.trim() || text;
@@ -152,7 +160,7 @@ export async function advanceQuotationTurn(input: { sessionId: string; questions
       (correctionMode && Object.prototype.hasOwnProperty.call(answers, question.fieldName)) ||
       (!correctionMode && !Object.prototype.hasOwnProperty.call(answers, question.fieldName) && explicitlyMentionsQuestion(input.message, question));
     if (!canSave) return false;
-    const value = await canonicalAnswer(question, evidence, candidate.selectedOptionValue || candidate.value, candidate.selectedOptionId);
+    const value = await canonicalAnswer(question, evidence, candidate.selectedOptionValue || candidate.value, candidate.selectedOptionId, candidate.confidence);
     if (value === null) return false;
     updates[question.fieldName] = value; answers[question.fieldName] = value; attempts[question.fieldName] = 0;
     decisions.push({ status: correctionMode ? 'CORRECTION' : 'VALID_ANSWER', fieldName: question.fieldName, confidence: candidate.confidence, reason: classification?.reason || 'Validated classifier assignment', outcome: correctionMode ? 'CORRECTED' : 'SAVED' });

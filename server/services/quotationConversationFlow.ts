@@ -184,7 +184,7 @@ export function quotationFormReply(): string {
 }
 
 export function quotationCompletedReply(): string {
-  return 'پاسخ سؤال‌های استعلام کامل شد. برای ثبت درخواست، اطلاعات تماس و تأیید نهایی شما لازم است.';
+  return 'پاسخ سؤال‌های استعلام کامل شد. برای ادامه، اطلاعات تماس لازم است.';
 }
 
 export function currentRequiredQuestion(

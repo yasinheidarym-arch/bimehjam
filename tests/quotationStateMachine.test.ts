@@ -181,8 +181,9 @@ test('all twenty questions complete without manufacturing or reordering question
   assert.equal(Object.keys(state!.answers).length, 20);
 });
 
-test('completion collects contact information then requires actual confirmation', () => {
-  let decision = startQuotationSubmission({ sessionId: 'session', productId: 'product', productName: 'مدیر ساختمان', answers: [], existingProfile: {} });
+test('completion collects contact information then asks for contact or chat delivery', () => {
+  const choicePrompt = 'تماس کارشناس یا اعلام قیمت در چت؟';
+  let decision = startQuotationSubmission({ sessionId: 'session', productId: 'product', productName: 'مدیر ساختمان', answers: [], existingProfile: {}, choicePrompt });
   assert.equal(decision.state.step, 'FULL_NAME');
   assert.equal(advanceQuotationSubmission(decision.state, 'آره').state.step, 'FULL_NAME');
   decision = advanceQuotationSubmission(decision.state, 'آرش رضایی');
@@ -191,10 +192,10 @@ test('completion collects contact information then requires actual confirmation'
   assert.equal(decision.state.step, 'CITY');
   assert.equal(advanceQuotationSubmission(decision.state, 'چقدر هزینه دارد؟').state.profile.city, undefined);
   decision = advanceQuotationSubmission(decision.state, 'تهران');
-  assert.equal(decision.state.step, 'CONFIRM');
-  assert.equal(decision.action, 'ASK');
-  assert.equal(advanceQuotationSubmission(decision.state, 'نه').action, 'ASK');
-  assert.equal(advanceQuotationSubmission(decision.state, 'آره').action, 'SUBMIT');
+  assert.equal(decision.state.step, 'DELIVERY_CHOICE');
+  assert.equal(decision.replyText, choicePrompt);
+  assert.equal(advanceQuotationSubmission(decision.state, 'بله').action, 'ASK');
+  assert.equal(advanceQuotationSubmission(decision.state, 'تماس بگیرید').action, 'ROUTE');
 });
 
 test('area help without configured helpText uses generic field guidance and preserves the exact pending question', async () => {

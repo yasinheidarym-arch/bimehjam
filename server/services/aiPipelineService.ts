@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { withConversationTurn } from './conversationTurnQueue';
-import { isQuotationCorrection, isQuotationInterruption } from './quotationStateMachine';
+import { isQuotationCorrection } from './quotationStateMachine';
 import prisma from '../db/client';
 import axios from 'axios';
 import { processBrainLayer } from './brainLayerService';
@@ -14,7 +14,7 @@ import {
   HumanHandoffReason,
   resolveHumanHandoffNameRule,
 } from './humanHandoffNameFlow';
-import { isFullNameHandoffRuleActive } from './aiBehaviorService';
+import { getQuotationCompletionPrompt, isFullNameHandoffRuleActive } from './aiBehaviorService';
 import { AiMode, shouldExecuteAi } from '../../shared/aiSchedule';
 import {
   offeredPurchaseLinkProductIds,
@@ -22,9 +22,16 @@ import {
 } from '../../shared/productPurchaseLink';
 import {
   advanceQuotationSubmission,
+  quotationDeliveryChoice,
   QuotationSubmissionState,
   startQuotationSubmission,
 } from './quotationSubmissionFlow';
+import {
+  finalizeQuotationCompletion,
+  QUOTATION_CALL_SUCCESS,
+  QUOTATION_CHAT_SUCCESS,
+  QUOTATION_COMPLETION_FAILURE,
+} from './quotationCompletionService';
 
 const DEFAULT_GOFTINO_HANDOFF_MESSAGE = 'برای بررسی دقیق درخواست شما، همکاران متخصص بیمه جم ادامهٔ گفتگو را پیگیری می‌کنند. 🌹';
 
@@ -586,8 +593,27 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
       ? existingCollectedData.humanHandoff as HumanHandoffNameState
       : null;
     const fullNameHandoffRuleActive = await isFullNameHandoffRuleActive();
+    const quotationCompletionPrompt = await getQuotationCompletionPrompt();
 
-    if (pendingQuotationSubmission && !isQuotationCorrection(userMessageContent) && !isQuotationInterruption(userMessageContent)) {
+    const terminalSubmission = existingCollectedData.quotationSubmission
+      && ['SUBMITTED', 'FAILED'].includes(existingCollectedData.quotationSubmission.status)
+      ? existingCollectedData.quotationSubmission as QuotationSubmissionState
+      : null;
+    const repeatedDeliveryChoice = terminalSubmission ? quotationDeliveryChoice(userMessageContent) : null;
+
+    if (terminalSubmission && repeatedDeliveryChoice) {
+      const successful = terminalSubmission.status === 'SUBMITTED';
+      brainResult = humanHandoffResult({
+        replyText: successful
+          ? (terminalSubmission.deliveryChoice === 'CALL' ? QUOTATION_CALL_SUCCESS : QUOTATION_CHAT_SUCCESS)
+          : QUOTATION_COMPLETION_FAILURE,
+        reason: 'QUOTATION_COMPLETED',
+        fullName: terminalSubmission.profile?.fullName,
+        collectedData: existingCollectedData,
+        handoffCompleted: successful,
+        deferHumanHandoff: !successful,
+      });
+    } else if (pendingQuotationSubmission && !isQuotationCorrection(userMessageContent)) {
       const decision = advanceQuotationSubmission(pendingQuotationSubmission, userMessageContent);
       const profile = decision.state.profile;
       await prisma.customer.update({
@@ -602,55 +628,56 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
       if (profile.mobile) customer.phone = profile.mobile;
       if (profile.city) customer.city = profile.city;
 
-      if (decision.action === 'SUBMIT') {
-        const taskTitle = `محاسبه قیمت ${decision.state.productName}`;
+      if (decision.action === 'ROUTE') {
+        const idempotencyKey = 'quotation-completion:' + conversationId + ':' + decision.state.sessionId;
         try {
-          const existingTask = await prisma.task.findFirst({
-            where: { conversationId, title: taskTitle, type: 'Prepare Quotation', source: 'AI' },
-            orderBy: { createdAt: 'desc' },
+          const product = await prisma.insuranceProduct.findUnique({
+            where: { id: decision.state.productId },
+            select: { category: true },
           });
-          const task = existingTask || await createSystemTask({
-              customerId,
-              conversationId,
-              title: taskTitle,
-              description: `درخواست تأییدشده مشتری برای ${decision.state.productName}\n${decision.state.answers.map((answer) => `${answer.question}: ${answer.value}`).join('\n')}`,
-              type: 'Prepare Quotation',
-              priority: 'HIGH',
-              assignedUserId: conversation.assignedUserId || undefined,
-            });
+          const outcome = await finalizeQuotationCompletion({
+            conversationId,
+            customerId,
+            sessionId: decision.state.sessionId,
+            productId: decision.state.productId,
+            productName: decision.state.productName,
+            productCategory: product?.category,
+            route: decision.route,
+            preferredAssignedUserId: conversation.assignedUserId,
+            profile,
+            answers: decision.state.answers,
+          });
+          const finalState: QuotationSubmissionState = {
+            ...decision.state,
+            pending: false,
+            status: outcome.ok ? 'SUBMITTED' : 'FAILED',
+            idempotencyKey,
+            taskId: outcome.taskId,
+            leadId: outcome.leadId,
+            smsStatus: outcome.smsStatus,
+          };
           brainResult = humanHandoffResult({
-            replyText: 'درخواست شما با موفقیت ثبت شد و برای بررسی در اختیار کارشناس قرار گرفت.',
+            replyText: outcome.ok ? outcome.replyText : QUOTATION_COMPLETION_FAILURE,
             reason: 'QUOTATION_COMPLETED',
             fullName: profile.fullName,
-            collectedData: {
-              ...existingCollectedData,
-              quotationSubmission: { ...decision.state, pending: false, status: 'SUBMITTED', taskId: task.id },
-            },
-            handoffCompleted: true,
+            collectedData: { ...existingCollectedData, quotationSubmission: finalState },
+            handoffCompleted: outcome.ok,
+            deferHumanHandoff: !outcome.ok,
           });
-        } catch (submissionError: any) {
-          console.error('QUOTATION SUBMISSION ERROR:', submissionError?.message || 'unknown error');
-          const persistedTask = await prisma.task.findFirst({
-            where: { conversationId, title: taskTitle, type: 'Prepare Quotation', source: 'AI' },
-            orderBy: { createdAt: 'desc' },
-          }).catch(() => null);
-          brainResult = humanHandoffResult(persistedTask ? {
-            replyText: 'درخواست شما با موفقیت ثبت شد و برای بررسی در اختیار کارشناس قرار گرفت.',
+        } catch {
+          const finalState: QuotationSubmissionState = {
+            ...decision.state,
+            pending: false,
+            status: 'FAILED',
+            idempotencyKey,
+            smsStatus: 'submission-failed',
+          };
+          brainResult = humanHandoffResult({
+            replyText: QUOTATION_COMPLETION_FAILURE,
             reason: 'QUOTATION_COMPLETED',
-            fullName: profile.fullName,
-            collectedData: {
-              ...existingCollectedData,
-              quotationSubmission: { ...decision.state, pending: false, status: 'SUBMITTED', taskId: persistedTask.id },
-            },
-            handoffCompleted: true,
-          } : {
-            replyText: 'ثبت درخواست در حال حاضر انجام نشد. اطلاعات شما حفظ شده است؛ لطفاً دوباره تأیید کنید.',
-            reason: 'QUOTATION_COMPLETED',
-            collectedData: {
-              ...existingCollectedData,
-              quotationSubmission: { ...decision.state, pending: true, status: 'NOT_SUBMITTED' },
-            },
+            collectedData: { ...existingCollectedData, quotationSubmission: finalState },
             deferHumanHandoff: true,
+            handoffCompleted: false,
           });
         }
       } else {
@@ -742,8 +769,6 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         select: { metadata: true },
       });
 
-      console.log("========== BRAIN CALL DEBUG: BEFORE processBrainLayer ==========");
-
       brainResult = await processBrainLayer({
         customer,
         conversation,
@@ -763,13 +788,13 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         })(),
       });
 
-      if (brainResult.quotationState?.isCompleted && brainResult.task?.create) {
+      if (brainResult.quotationState?.isCompleted && brainResult.task?.create && !terminalSubmission) {
         const answeredFields = brainResult.extractedKnowledge.quotationWorkflow?.answeredFields || {};
         const answers = (brainResult.extractedKnowledge.quotationWorkflow?.allQuestions || [])
           .filter((question) => answeredFields[question.fieldName] !== undefined && answeredFields[question.fieldName] !== '')
           .map((question) => ({
             order: question.order,
-            question: question.aiQuestion || question.title,
+            fieldLabel: question.title,
             fieldName: question.fieldName,
             value: String(answeredFields[question.fieldName]),
           }));
@@ -779,6 +804,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
           productName: brainResult.quotationState.productName,
           answers,
           existingProfile: { fullName: customer.name, mobile: customer.phone, city: customer.city },
+          choicePrompt: quotationCompletionPrompt,
         });
         brainResult.replyText = submission.replyText;
         brainResult.task = undefined;
@@ -789,19 +815,8 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         };
       }
 
+      if (terminalSubmission) brainResult.task = undefined;
     }
-
-    console.log("========== BRAIN CALL DEBUG: AFTER processBrainLayer ==========");
-    console.log(JSON.stringify({
-      hasBrainResult: !!brainResult,
-      replyText: brainResult?.replyText || "",
-      modelUsed: brainResult?.modelUsed || "",
-    }, null, 2));
-
-    console.log("========== POST-BRAIN DEBUG: NEXT LINE ==========");
-    console.log("brainResult.task:", JSON.stringify(brainResult?.task || null, null, 2));
-    console.log("brainResult.replyText:", brainResult?.replyText || "");
-    console.log("=================================================");
 
     if (brainResult.customerFullName) {
       await prisma.customer.update({ where: { id: customer.id }, data: { name: brainResult.customerFullName } });

@@ -26,6 +26,12 @@ import {
   serializeQuotationResponseEngineConfig,
   type QuotationResponseEngineConfig,
 } from '../../shared/quotationResponseEngine';
+import {
+  DEFAULT_QUOTATION_COMPLETION_PROMPT,
+  QUOTATION_COMPLETION_RULE_CATEGORY,
+  QUOTATION_COMPLETION_RULE_ID,
+  QUOTATION_COMPLETION_RULE_TITLE,
+} from '../../shared/quotationCompletionRule';
 
 export interface AiBehaviorRuleItem {
   id: string;
@@ -161,6 +167,20 @@ async function ensureSeedRules() {
       status: 'ACTIVE', category: QUOTATION_RESPONSE_ENGINE_CATEGORY, enforcementLevel: 'STRICT',
     }}).catch((error: { code?: string }) => { if (error.code !== 'P2002') throw error; });
   }
+
+  const completionRule = await prisma.aiRule.findFirst({
+    where: { OR: [{ id: QUOTATION_COMPLETION_RULE_ID }, { category: QUOTATION_COMPLETION_RULE_CATEGORY }] },
+  });
+  if (!completionRule) {
+    const aggregate = await prisma.aiRule.aggregate({ _max: { sortOrder: true } });
+    await prisma.aiRule.create({ data: {
+      id: QUOTATION_COMPLETION_RULE_ID,
+      title: QUOTATION_COMPLETION_RULE_TITLE,
+      directive: DEFAULT_QUOTATION_COMPLETION_PROMPT,
+      sortOrder: (aggregate._max.sortOrder || 0) + 1,
+      status: 'ACTIVE', category: QUOTATION_COMPLETION_RULE_CATEGORY, enforcementLevel: 'STRICT',
+    }}).catch((error: { code?: string }) => { if (error.code !== 'P2002') throw error; });
+  }
 }
 
 export async function ensureSystemAiBehaviorRules(): Promise<void> {
@@ -201,7 +221,7 @@ export async function getAllBehaviorRules(): Promise<AiBehaviorRuleItem[]> {
 export async function getFormattedAiBehaviorPrompt(): Promise<string> {
   await ensureSeedRules();
   const activeRules = await prisma.aiRule.findMany({
-    where: { status: 'ACTIVE', category: { notIn: [PURCHASE_LINK_RULE_CATEGORY, QUOTATION_RESPONSE_ENGINE_CATEGORY] } },
+    where: { status: 'ACTIVE', category: { notIn: [PURCHASE_LINK_RULE_CATEGORY, QUOTATION_RESPONSE_ENGINE_CATEGORY, QUOTATION_COMPLETION_RULE_CATEGORY] } },
     orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
   });
 
@@ -271,6 +291,10 @@ export async function updateBehaviorRule(
     }
     if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
     if (data.status !== undefined) updateData.status = data.status;
+  } else if (existing.category === QUOTATION_COMPLETION_RULE_CATEGORY) {
+    if (data.directive !== undefined) updateData.directive = data.directive.trim() || DEFAULT_QUOTATION_COMPLETION_PROMPT;
+    if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
+    if (data.status !== undefined) updateData.status = data.status;
   } else if (existing.category === QUOTATION_RESPONSE_ENGINE_CATEGORY) {
     if (data.directive !== undefined) {
       const config = parseQuotationResponseEngineConfig(data.directive);
@@ -319,6 +343,14 @@ export async function getQuotationRoutingRule() {
   };
 }
 
+export async function getQuotationCompletionPrompt(): Promise<string> {
+  await ensureSeedRules();
+  const rule = await prisma.aiRule.findFirst({ where: { category: QUOTATION_COMPLETION_RULE_CATEGORY } });
+  return rule?.status === 'ACTIVE' && rule.directive.trim()
+    ? rule.directive.trim()
+    : DEFAULT_QUOTATION_COMPLETION_PROMPT;
+}
+
 export async function getQuotationResponseEngineRule() {
   await ensureSeedRules();
   const rule = await prisma.aiRule.findFirst({ where: { category: QUOTATION_RESPONSE_ENGINE_CATEGORY } });
@@ -344,7 +376,7 @@ export async function updateQuotationQuestionExamples(questionId: string, exampl
  */
 export async function deleteBehaviorRule(id: string): Promise<boolean> {
   const existing = await prisma.aiRule.findUnique({ where: { id }, select: { category: true } });
-  if (existing?.category === FULL_NAME_HANDOFF_RULE_CATEGORY || existing?.category === PURCHASE_LINK_RULE_CATEGORY || existing?.category === QUOTATION_RESPONSE_ENGINE_CATEGORY) {
+  if (existing?.category === FULL_NAME_HANDOFF_RULE_CATEGORY || existing?.category === PURCHASE_LINK_RULE_CATEGORY || existing?.category === QUOTATION_RESPONSE_ENGINE_CATEGORY || existing?.category === QUOTATION_COMPLETION_RULE_CATEGORY) {
     throw new Error('این قانون سیستمی قابل حذف نیست؛ می‌توانید آن را غیرفعال کنید.');
   }
   await prisma.aiRule.delete({

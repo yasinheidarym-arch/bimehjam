@@ -38,6 +38,7 @@ export function normalizeQuotationOptionText(value: unknown): string {
     .replace(/ك/g, 'ک')
     .replace(/ۀ|ة/g, 'ه')
     .replace(/‌/g, ' ')
+    .replace(/(یک|یه|يه|دو|سه|چهار|پنج|شش|هفت|هشت|نه|ده)(سال|ساله|طبقه|دستگاه|واحد|ماه|روز|نفر|متر)/g, '$1 $2')
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
@@ -112,14 +113,12 @@ function optionContainsNumber(option: string, value: number): boolean {
 }
 
 function deterministicSelection(
-  fieldName: string,
+  question: QuotationTurnQuestion,
   normalizedAnswer: string,
   options: CanonicalQuotationOption[],
 ): QuotationOptionSelection | null {
-  const money = resolveQuotationMoney({
-    title: 'مبلغ (تومان)', fieldName, required: true, order: 0,
-    options: options.map(option => option.value),
-  }, normalizedAnswer);
+  const fieldName = question.fieldName;
+  const money = resolveQuotationMoney(question, normalizedAnswer);
   if (money?.status === 'MATCHED' && money.matchedOption) {
     const option = options.find(item => item.value === money.matchedOption);
     if (option) return matched(fieldName, option, 1, 'DETERMINISTIC');
@@ -130,6 +129,7 @@ function deterministicSelection(
     if (normalizedAnswer === normalizedOption) return true;
     if (/نیست|نیستم|ندارد|ندارم|نباشد/.test(normalizedAnswer)) return false;
     if (hasWord(normalizedAnswer, normalizedOption)) return true;
+    if (normalizedAnswer.length >= 3 && hasWord(normalizedOption, normalizedAnswer)) return true;
     return false;
   });
   if (exact.length === 1) return matched(fieldName, exact[0], 0.99, 'DETERMINISTIC');
@@ -165,7 +165,7 @@ export async function resolveQuotationOptionSelection(input: {
 }): Promise<QuotationOptionSelection> {
   const options = quotationQuestionOptions(input.question);
   const normalizedAnswer = normalizeQuotationOptionText(input.message);
-  const deterministic = deterministicSelection(input.question.fieldName, normalizedAnswer, options);
+  const deterministic = deterministicSelection(input.question, normalizedAnswer, options);
   if (deterministic) return deterministic;
 
   let raw: unknown = null;

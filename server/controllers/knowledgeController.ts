@@ -1,4 +1,6 @@
 import { Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
+import { uniqueQuestionOrder } from '../../shared/quotationQuestionOrder';
 import prisma from '../db/client';
 import {
   getAllBehaviorRules,
@@ -870,9 +872,33 @@ export async function deleteProduct(req: Request, res: Response) {
 // ---------------------------------------------------------
 // QUOTATION FORM ENGINE QUESTIONS
 // ---------------------------------------------------------
+async function renumberProductQuestions(
+  tx: Prisma.TransactionClient,
+  productId: string,
+  preferredIds?: string[],
+  movedQuestion?: { id: string; requestedOrder: number },
+) {
+  const questions = await tx.quotationQuestion.findMany({
+    where: { productId },
+    orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+    select: { id: true, order: true },
+  });
+  const ids = uniqueQuestionOrder(
+    questions.map(question => question.id),
+    { preferredIds, movedQuestion },
+  );
+  const currentOrders = new Map(questions.map(question => [question.id, question.order]));
+  await Promise.all(ids.flatMap((id, index) => currentOrders.get(id) === index + 1 ? [] : [
+    tx.quotationQuestion.update({ where: { id }, data: { order: index + 1 } }),
+  ]));
+}
+
 export async function getQuotationQuestions(req: Request, res: Response) {
   try {
     const { productId } = req.query;
+    if (productId) {
+      await prisma.$transaction(async (tx) => renumberProductQuestions(tx, String(productId)));
+    }
     const questions = await prisma.quotationQuestion.findMany({
       where: productId ? { productId: String(productId) } : undefined,
       include: { product: { select: { name: true } } },
@@ -893,32 +919,34 @@ export async function getQuotationQuestions(req: Request, res: Response) {
 export async function createQuotationQuestion(req: Request, res: Response) {
   try {
     const { productId, title, aiQuestion, fieldName, type, options, required, order, validationRule, placeholder, helpText, validAnswerExamples, minVal, maxVal, minLength, maxLength } = req.body;
-
     if (!productId || !title || !fieldName) {
       return res.status(400).json({ success: false, error: 'productId, title, and fieldName are required' });
     }
-
-    const question = await prisma.quotationQuestion.create({
-      data: {
-        productId,
-        title,
-        aiQuestion: aiQuestion || title,
-        fieldName,
-        type: type || 'text',
-        options: typeof options === 'string' ? options : JSON.stringify(options || []),
-        required: required !== undefined ? required : true,
-        order: order ? Number(order) : 1,
-        validationRule: validationRule || '',
-        placeholder: placeholder || '',
-        helpText: helpText || '',
-        minVal: minVal !== undefined && minVal !== null && minVal !== '' ? Number(minVal) : null,
-        maxVal: maxVal !== undefined && maxVal !== null && maxVal !== '' ? Number(maxVal) : null,
-        minLength: minLength !== undefined && minLength !== null && minLength !== '' ? Number(minLength) : null,
-        maxLength: maxLength !== undefined && maxLength !== null && maxLength !== '' ? Number(maxLength) : null,
-      },
+    const requestedOrder = Number.isFinite(Number(order)) ? Number(order) : 2_147_483_647;
+    const question = await prisma.$transaction(async (tx) => {
+      const created = await tx.quotationQuestion.create({
+        data: {
+          productId,
+          title,
+          aiQuestion: aiQuestion || title,
+          fieldName,
+          type: type || 'text',
+          options: typeof options === 'string' ? options : JSON.stringify(options || []),
+          required: required !== undefined ? required : true,
+          order: requestedOrder,
+          validationRule: validationRule || '',
+          placeholder: placeholder || '',
+          helpText: helpText || '',
+          minVal: minVal !== undefined && minVal !== null && minVal !== '' ? Number(minVal) : null,
+          maxVal: maxVal !== undefined && maxVal !== null && maxVal !== '' ? Number(maxVal) : null,
+          minLength: minLength !== undefined && minLength !== null && minLength !== '' ? Number(minLength) : null,
+          maxLength: maxLength !== undefined && maxLength !== null && maxLength !== '' ? Number(maxLength) : null,
+        },
+      });
+      await renumberProductQuestions(tx, productId, undefined, { id: created.id, requestedOrder });
+      return tx.quotationQuestion.findUniqueOrThrow({ where: { id: created.id } });
     });
     if (Array.isArray(validAnswerExamples)) await updateQuotationQuestionExamples(question.id, validAnswerExamples);
-
     return res.status(201).json({ success: true, data: question });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
@@ -931,23 +959,31 @@ export async function updateQuotationQuestion(req: Request, res: Response) {
     const body = { ...req.body };
     const validAnswerExamples = Array.isArray(body.validAnswerExamples) ? body.validAnswerExamples : undefined;
     delete body.validAnswerExamples;
+    const requestedOrder = body.order !== undefined ? Number(body.order) : undefined;
+    delete body.order;
 
-    if (body.options && typeof body.options !== 'string') {
-      body.options = JSON.stringify(body.options);
-    }
-
+    if (body.options && typeof body.options !== 'string') body.options = JSON.stringify(body.options);
     if (body.minVal !== undefined) body.minVal = body.minVal !== null && body.minVal !== '' ? Number(body.minVal) : null;
     if (body.maxVal !== undefined) body.maxVal = body.maxVal !== null && body.maxVal !== '' ? Number(body.maxVal) : null;
     if (body.minLength !== undefined) body.minLength = body.minLength !== null && body.minLength !== '' ? Number(body.minLength) : null;
     if (body.maxLength !== undefined) body.maxLength = body.maxLength !== null && body.maxLength !== '' ? Number(body.maxLength) : null;
 
-    const updated = await prisma.quotationQuestion.update({
-      where: { id },
-      data: body,
+    const updatedQuestion = await prisma.$transaction(async (tx) => {
+      const existing = await tx.quotationQuestion.findUniqueOrThrow({ where: { id } });
+      const updated = await tx.quotationQuestion.update({ where: { id }, data: body });
+      if (existing.productId && existing.productId !== updated.productId) await renumberProductQuestions(tx, existing.productId);
+      if (updated.productId) {
+        await renumberProductQuestions(
+          tx,
+          updated.productId,
+          undefined,
+          requestedOrder !== undefined && Number.isFinite(requestedOrder) ? { id, requestedOrder } : undefined,
+        );
+      }
+      return tx.quotationQuestion.findUniqueOrThrow({ where: { id } });
     });
     if (validAnswerExamples) await updateQuotationQuestionExamples(id, validAnswerExamples);
-
-    return res.status(200).json({ success: true, data: updated });
+    return res.status(200).json({ success: true, data: updatedQuestion });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
   }
@@ -956,7 +992,11 @@ export async function updateQuotationQuestion(req: Request, res: Response) {
 export async function deleteQuotationQuestion(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    await prisma.quotationQuestion.delete({ where: { id } });
+    await prisma.$transaction(async (tx) => {
+      const existing = await tx.quotationQuestion.findUniqueOrThrow({ where: { id } });
+      await tx.quotationQuestion.delete({ where: { id } });
+      if (existing.productId) await renumberProductQuestions(tx, existing.productId);
+    });
     await updateQuotationQuestionExamples(id, []);
     return res.status(200).json({ success: true, message: 'سوال استعلام حذف شد' });
   } catch (error: any) {
@@ -986,18 +1026,22 @@ export async function simulateQuotationResponse(req: Request, res: Response) {
 export async function reorderQuotationQuestions(req: Request, res: Response) {
   try {
     const { questions } = req.body;
-    if (!Array.isArray(questions)) {
+    if (!Array.isArray(questions) || questions.some(item => !item || typeof item.id !== 'string')) {
       return res.status(400).json({ success: false, error: 'questions array is required' });
     }
-    await Promise.all(
-      questions.map((q: { id: string; order: number }) =>
-        prisma.quotationQuestion.update({
-          where: { id: q.id },
-          data: { order: q.order },
-        })
-      )
-    );
-    return res.status(200).json({ success: true, message: 'ترتیب سوالات به‌روزرسانی شد' });
+    const ids = [...new Set(questions.map((item: { id: string }) => item.id))];
+    const stored = await prisma.quotationQuestion.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, productId: true },
+    });
+    const productIds = [...new Set(stored.map(item => item.productId).filter((id): id is string => Boolean(id)))];
+    if (stored.length !== ids.length || productIds.length !== 1) {
+      return res.status(400).json({ success: false, error: 'تمام سؤال‌ها باید متعلق به یک محصول باشند.' });
+    }
+    await prisma.$transaction(async (tx) => {
+      await renumberProductQuestions(tx, productIds[0], ids);
+    });
+    return res.status(200).json({ success: true, message: 'ترتیب یکتای سؤال‌ها ذخیره شد' });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
   }
@@ -1622,6 +1666,3 @@ export async function reorderAiBehavior(req: Request, res: Response) {
     return res.status(500).json({ success: false, error: error.message });
   }
 }
-
-
-

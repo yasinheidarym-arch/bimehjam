@@ -104,32 +104,31 @@ test('choosing chat quotation asks configured questions in order and stores each
   assert.equal(quotationQuestionReply(currentRequiredQuestion(questions, answers)!), 'متراژ کل چقدر است؟');
 });
 
-test('completed answers collect missing profile and never claim registration before a real result', () => {
+test('completed answers collect profile and ask for delivery route without a confirmation phrase', () => {
+  const choicePrompt = 'تماس یا اعلام قیمت در چت؟';
   let decision = startQuotationSubmission({
     sessionId: 'session-1',
     productId,
     productName: 'بیمه مسئولیت مدیر ساختمان',
-    answers: [{ order: 1, question: 'نوع کاربری ساختمان', fieldName: 'usage', value: 'مجتمع مسکونی' }],
+    answers: [{ order: 1, fieldLabel: 'نوع کاربری ساختمان', fieldName: 'usage', value: 'مجتمع مسکونی' }],
     existingProfile: { fullName: null, mobile: null, city: null },
+    choicePrompt,
   });
   assert.match(decision.replyText, /نام و نام خانوادگی/);
-  assert.doesNotMatch(decision.replyText, /ثبت شد|ارجاع شد|کد یکتا|دقیقه/);
+  assert.doesNotMatch(decision.replyText, /ثبت شد|ارجاع شد|کد یکتا|دقیقه|خلاصه/);
 
   decision = advanceQuotationSubmission(decision.state, 'یاسین حیدری');
   assert.match(decision.replyText, /شماره موبایل/);
   decision = advanceQuotationSubmission(decision.state, '09123456789');
   assert.match(decision.replyText, /شهر/);
   decision = advanceQuotationSubmission(decision.state, 'تهران');
-  assert.equal(decision.state.status, 'AWAITING_CONFIRMATION');
-  assert.match(decision.replyText, /تأیید می‌کنم/);
-  assert.doesNotMatch(decision.replyText, /ثبت شد|ارجاع شد|کد یکتا|دقیقه/);
+  assert.equal(decision.state.status, 'AWAITING_DELIVERY_CHOICE');
+  assert.equal(decision.replyText, choicePrompt);
 
-  const notConfirmed = advanceQuotationSubmission(decision.state, 'اول خلاصه را دوباره بگو');
-  assert.equal(notConfirmed.action, 'ASK');
-  assert.equal(notConfirmed.state.status, 'AWAITING_CONFIRMATION');
-  assert.match(notConfirmed.replyText, /هنوز ثبت نشده/);
-
-  const confirmed = advanceQuotationSubmission(decision.state, 'تأیید می‌کنم');
-  assert.equal(confirmed.action, 'SUBMIT');
-  assert.equal(confirmed.replyText, '');
+  const call = advanceQuotationSubmission(decision.state, 'کارشناس با من تماس بگیرد');
+  assert.equal(call.action, 'ROUTE');
+  if (call.action === 'ROUTE') assert.equal(call.route, 'CALL');
+  const chat = advanceQuotationSubmission(decision.state, 'قیمت را همین‌جا در چت اعلام کنید');
+  assert.equal(chat.action, 'ROUTE');
+  if (chat.action === 'ROUTE') assert.equal(chat.route, 'CHAT');
 });

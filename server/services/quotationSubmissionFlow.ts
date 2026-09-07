@@ -1,18 +1,19 @@
 import { validStoredFullName } from './humanHandoffNameFlow';
 import { isQuotationInterruption } from './quotationStateMachine';
 
-export type QuotationSubmissionStep = 'FULL_NAME' | 'LAST_NAME' | 'MOBILE' | 'CITY' | 'CONFIRM';
-export type QuotationSubmissionStatus = 'COLLECTING_PROFILE' | 'AWAITING_CONFIRMATION' | 'SUBMITTED' | 'NOT_SUBMITTED';
+export type QuotationSubmissionStep = 'FULL_NAME' | 'LAST_NAME' | 'MOBILE' | 'CITY' | 'DELIVERY_CHOICE' | 'CONFIRM';
+export type QuotationSubmissionStatus = 'COLLECTING_PROFILE' | 'AWAITING_DELIVERY_CHOICE' | 'PROCESSING' | 'SUBMITTED' | 'FAILED' | 'AWAITING_CONFIRMATION' | 'NOT_SUBMITTED';
+export type QuotationDeliveryChoice = 'CALL' | 'CHAT';
 
 export type QuotationSubmissionAnswer = {
   order: number;
-  question: string;
+  fieldLabel: string;
   fieldName: string;
   value: string;
 };
 
 export type QuotationSubmissionState = {
-  pending: true;
+  pending: boolean;
   status: QuotationSubmissionStatus;
   step: QuotationSubmissionStep;
   sessionId: string;
@@ -21,17 +22,22 @@ export type QuotationSubmissionState = {
   answers: QuotationSubmissionAnswer[];
   profile: { fullName?: string; mobile?: string; city?: string };
   givenName?: string;
+  choicePrompt: string;
+  deliveryChoice?: QuotationDeliveryChoice;
+  idempotencyKey?: string;
+  taskId?: string;
+  leadId?: string;
+  smsStatus?: string;
 };
 
 export type QuotationSubmissionDecision =
   | { action: 'ASK'; replyText: string; state: QuotationSubmissionState }
-  | { action: 'SUBMIT'; replyText: string; state: QuotationSubmissionState };
+  | { action: 'ROUTE'; route: QuotationDeliveryChoice; replyText: string; state: QuotationSubmissionState };
 
 const FULL_NAME_PROMPT = 'برای ثبت درخواست، لطفاً نام و نام خانوادگی‌تان را بفرمایید.';
 const LAST_NAME_PROMPT = 'ممنونم؛ لطفاً نام خانوادگی‌تان را هم بفرمایید.';
 const MOBILE_PROMPT = 'لطفاً شماره موبایل‌تان را برای پیگیری درخواست بفرمایید.';
 const CITY_PROMPT = 'لطفاً شهر محل سکونت یا محل مورد بیمه را بفرمایید.';
-const CONFIRM_PROMPT = 'اگر اطلاعات درست است، لطفاً با «تأیید می‌کنم» ثبت درخواست را تأیید کنید.';
 
 function normalizeDigits(value: string): string {
   const fa = '۰۱۲۳۴۵۶۷۸۹';
@@ -64,7 +70,7 @@ function nextMissingStep(profile: QuotationSubmissionState['profile']): Quotatio
   if (!validStoredFullName(profile.fullName)) return 'FULL_NAME';
   if (!normalizeIranMobile(profile.mobile)) return 'MOBILE';
   if (!normalizeCity(profile.city)) return 'CITY';
-  return 'CONFIRM';
+  return 'DELIVERY_CHOICE';
 }
 
 function questionFor(step: QuotationSubmissionStep): string {
@@ -72,15 +78,7 @@ function questionFor(step: QuotationSubmissionStep): string {
   if (step === 'LAST_NAME') return LAST_NAME_PROMPT;
   if (step === 'MOBILE') return MOBILE_PROMPT;
   if (step === 'CITY') return CITY_PROMPT;
-  return CONFIRM_PROMPT;
-}
-
-export function quotationSubmissionSummary(state: QuotationSubmissionState): string {
-  const answers = [...state.answers]
-    .sort((a, b) => a.order - b.order)
-    .map((answer) => `${answer.order}. ${answer.question}: ${answer.value}`)
-    .join('\n');
-  return `خلاصهٔ درخواست «${state.productName}»:\n${answers || 'پاسخ‌های استعلام تکمیل شده است.'}\nنام: ${state.profile.fullName}\nموبایل: ${state.profile.mobile}\nشهر: ${state.profile.city}\n${CONFIRM_PROMPT}`;
+  return '';
 }
 
 export function startQuotationSubmission(input: {
@@ -89,6 +87,7 @@ export function startQuotationSubmission(input: {
   productName: string;
   answers: QuotationSubmissionAnswer[];
   existingProfile: { fullName?: string | null; mobile?: string | null; city?: string | null };
+  choicePrompt: string;
 }): QuotationSubmissionDecision {
   const profile = {
     ...(validStoredFullName(input.existingProfile.fullName) ? { fullName: validStoredFullName(input.existingProfile.fullName)! } : {}),
@@ -98,24 +97,45 @@ export function startQuotationSubmission(input: {
   const step = nextMissingStep(profile);
   const state: QuotationSubmissionState = {
     pending: true,
-    status: step === 'CONFIRM' ? 'AWAITING_CONFIRMATION' : 'COLLECTING_PROFILE',
+    status: step === 'DELIVERY_CHOICE' ? 'AWAITING_DELIVERY_CHOICE' : 'COLLECTING_PROFILE',
     step,
     sessionId: input.sessionId,
     productId: input.productId,
     productName: input.productName,
     answers: [...input.answers].sort((a, b) => a.order - b.order),
     profile,
+    choicePrompt: input.choicePrompt,
   };
-  return { action: 'ASK', replyText: step === 'CONFIRM' ? quotationSubmissionSummary(state) : questionFor(step), state };
+  return { action: 'ASK', replyText: step === 'DELIVERY_CHOICE' ? state.choicePrompt : questionFor(step), state };
+}
+
+export function quotationDeliveryChoice(message: string): QuotationDeliveryChoice | null {
+  const normalized = String(message || '').replace(/‌/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (/تماس|زنگ|تلفن|کارشناس.*(?:صحبت|تماس)/u.test(normalized)) return 'CALL';
+  if (/چت|همین\s*جا|اینجا|پیام|در\s*گفتگو|اعلام.*قیمت|قیمت.*اعلام/u.test(normalized)) return 'CHAT';
+  return null;
 }
 
 export function advanceQuotationSubmission(state: QuotationSubmissionState, message: string): QuotationSubmissionDecision {
-  const next = { ...state, profile: { ...state.profile } };
+  const next: QuotationSubmissionState = {
+    ...state,
+    profile: { ...state.profile },
+    step: state.step === 'CONFIRM' ? 'DELIVERY_CHOICE' : state.step,
+    status: state.step === 'CONFIRM' ? 'AWAITING_DELIVERY_CHOICE' : state.status,
+    choicePrompt: state.choicePrompt || 'اطلاعات لازم را دارم. ترجیح می‌دهید کارشناس با شما تماس بگیرد یا قیمت پس از بررسی همین‌جا در چت اعلام شود؟',
+  };
   const normalizedResponse = message.replace(/‌/g, ' ').trim();
-  if (isQuotationInterruption(message) || (state.step !== 'CONFIRM' && /^(آره|اره|بله|نه|خیر|باشه)$/.test(normalizedResponse))) {
-    return { action: 'ASK', replyText: `اطلاعات قبلی محفوظ است. ${questionFor(state.step)}`, state: next };
+  if (next.step === 'DELIVERY_CHOICE') {
+    const route = quotationDeliveryChoice(message);
+    if (!route) return { action: 'ASK', replyText: next.choicePrompt, state: next };
+    next.deliveryChoice = route;
+    next.status = 'PROCESSING';
+    return { action: 'ROUTE', route, replyText: '', state: next };
   }
-  if (state.step === 'FULL_NAME') {
+  if (isQuotationInterruption(message) || /^(آره|اره|بله|نه|خیر|باشه)$/.test(normalizedResponse)) {
+    return { action: 'ASK', replyText: `اطلاعات قبلی محفوظ است. ${questionFor(next.step)}`, state: next };
+  }
+  if (next.step === 'FULL_NAME') {
     const name = parseName(message);
     if (name.fullName) next.profile.fullName = name.fullName;
     else if (name.givenName) {
@@ -123,38 +143,27 @@ export function advanceQuotationSubmission(state: QuotationSubmissionState, mess
       next.step = 'LAST_NAME';
       return { action: 'ASK', replyText: LAST_NAME_PROMPT, state: next };
     } else return { action: 'ASK', replyText: FULL_NAME_PROMPT, state: next };
-  } else if (state.step === 'LAST_NAME') {
+  } else if (next.step === 'LAST_NAME') {
     const lastName = String(message || '').trim().replace(/\s+/g, ' ');
-    const fullName = validStoredFullName(`${state.givenName || ''} ${lastName}`);
+    const fullName = validStoredFullName(`${next.givenName || ''} ${lastName}`);
     if (!fullName) return { action: 'ASK', replyText: LAST_NAME_PROMPT, state: next };
     next.profile.fullName = fullName;
     delete next.givenName;
-  } else if (state.step === 'MOBILE') {
+  } else if (next.step === 'MOBILE') {
     const mobile = normalizeIranMobile(message);
     if (!mobile) return { action: 'ASK', replyText: MOBILE_PROMPT, state: next };
     next.profile.mobile = mobile;
-  } else if (state.step === 'CITY') {
+  } else if (next.step === 'CITY') {
     const city = normalizeCity(message);
     if (!city) return { action: 'ASK', replyText: CITY_PROMPT, state: next };
     next.profile.city = city;
-  } else {
-    const normalized = String(message || '').replace(/‌/g, ' ').trim();
-    if (/^(بله|آره|اره)$|^(تأیید|تایید)( می کنم| میکنم| است)?$|^(بله|آره|اره)،?\s*(تأیید|تایید|ثبت)/i.test(normalized)) {
-      next.status = 'AWAITING_CONFIRMATION';
-      return { action: 'SUBMIT', replyText: '', state: next };
-    }
-    return {
-      action: 'ASK',
-      replyText: `درخواست هنوز ثبت نشده است.\n${quotationSubmissionSummary(next)}`,
-      state: next,
-    };
   }
 
   next.step = nextMissingStep(next.profile);
-  next.status = next.step === 'CONFIRM' ? 'AWAITING_CONFIRMATION' : 'COLLECTING_PROFILE';
+  next.status = next.step === 'DELIVERY_CHOICE' ? 'AWAITING_DELIVERY_CHOICE' : 'COLLECTING_PROFILE';
   return {
     action: 'ASK',
-    replyText: next.step === 'CONFIRM' ? quotationSubmissionSummary(next) : questionFor(next.step),
+    replyText: next.step === 'DELIVERY_CHOICE' ? next.choicePrompt : questionFor(next.step),
     state: next,
   };
 }
