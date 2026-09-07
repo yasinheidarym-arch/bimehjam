@@ -220,7 +220,7 @@ test('generic question guidance is type/options-aware and never advances it', as
   }
 });
 test('admin helpText has priority and blank help uses a generic type-aware guide', () => {
-  assert.equal(quotationQuestionHelp({ ...questions[1], helpText: '  مساحت درج‌شده در نقشه را جمع کنید.  ' }), 'راهنمای این سؤال: مساحت درج‌شده در نقشه را جمع کنید.');
+  assert.equal(quotationQuestionHelp({ ...questions[1], helpText: '  مساحت درج‌شده در نقشه را جمع کنید.  ' }), 'مساحت درج‌شده در نقشه را جمع کنید.');
   const generic = { title: 'تعداد ورودی‌ها', fieldName: 'entrances', required: true, order: 1, type: 'number', minVal: 1, helpText: '' };
   assert.match(quotationQuestionHelp(generic), /مقدار عددی.*حداقل 1/);
   assert.doesNotMatch(quotationQuestionHelp(generic), /متراژ|زیرزمین|کارشناس/);
@@ -237,7 +237,9 @@ test('building-manager helpText is used and the same exact question survives rel
   assert.deepEqual(initial.updates, {});
   assert.equal(initial.currentQuestionBefore?.helpText, amenities.helpText);
   const reply = await explainQuotationInterruption({ message: 'چی شد پس', question: initial.currentQuestionBefore, knowledge: '', select: async () => null });
-  assert.match(reply, /راهنمای این سؤال:.*استخر.*باشگاه.*سونا.*جکوزی/);
+  assert.match(reply, /استخر.*باشگاه.*سونا.*جکوزی/);
+  assert.doesNotMatch(reply, /راهنمای این سؤال:/);
+  assert.doesNotMatch(reply, new RegExp(amenities.aiQuestion!));
   assert.equal(initial.nextQuestionText, amenities.aiQuestion);
 
   const reloaded = await advanceQuotationTurn({
@@ -270,6 +272,34 @@ test('unique helpText concept is mandatory and its source/question identity are 
   assert.equal(result.guidance?.questionText, 'متراژ کل چقدر است؟');
   assert.match(result.responseText, /عبارت منحصربه‌فرد.*همکف.*زیرزمین/s);
   assert.equal(result.state.currentQuestion?.fieldName, 'area');
+});
+
+test('QUESTION_ABOUT_FIELD uses a grounded natural helpResponse without copying helpText or repeating the question', async () => {
+  const question: QuotationTurnQuestion = {
+    id: 'natural-help', title: 'متراژ کل ساختمان',
+    aiQuestion: 'جمع کل متراژ مجموع طبقات ساختمان با احتساب طبقه همکف و منفی چقدر است؟',
+    fieldName: 'area', type: 'number', required: true, order: 1,
+    helpText: 'متراژ تمام طبقات شامل همکف و زیرزمین را با هم جمع کنید.',
+  };
+  const natural = 'متراژ همهٔ طبقات رو جمع کنید؛ همکف و زیرزمین هم حساب میشن. عدد تقریبی رو بفرستید.';
+  const result = await advanceQuotationTurn({
+    sessionId: 'natural-help', questions: [question], answers: {}, message: 'چجوری حسابش کنم؟',
+    model: async () => ({ status: 'QUESTION_ABOUT_FIELD', confidence: .99, reason: 'help', assignments: [] }),
+    guidanceSelector: async ({ source, sourceText, question: groundedQuestion }) => {
+      assert.equal(source, 'HELP_TEXT');
+      assert.equal(sourceText, question.helpText);
+      assert.equal(groundedQuestion.id, question.id);
+      return { helpResponse: natural, passages: [] };
+    },
+  });
+  assert.equal(result.responseText, natural);
+  assert.notEqual(result.responseText, question.helpText);
+  assert.doesNotMatch(result.responseText, /راهنمای این سؤال/);
+  assert.doesNotMatch(result.responseText, new RegExp(question.aiQuestion!));
+  assert.match(result.responseText, /همکف.*زیرزمین/);
+  assert.equal(result.state.currentQuestion?.id, question.id);
+  assert.equal(result.guidance?.helpTextUsed, question.helpText);
+  assert.equal(result.guidance?.helpResponse, natural);
 });
 
 test('building-manager count and no-coverage answers advance without validator loops', async () => {
@@ -332,7 +362,7 @@ test('masked production 4096 transcript messages preserve grounded questionnaire
   assert.equal(help.state.currentQuestion?.fieldName, 'jenseh_nama');
   assert.equal(help.guidance?.source, 'PRODUCT_KNOWLEDGE');
   assert.match(help.responseText, new RegExp(productPassage));
-  assert.match(help.responseText, /نوع جنس متریال نمای ساختمان چیه/);
+  assert.doesNotMatch(help.responseText, /نوع جنس متریال نمای ساختمان چیه/);
 
   const age = await advanceQuotationTurn({ sessionId: 'masked-production-age', questions: [questions[2]], answers: {}, message: '2 سال' });
   assert.equal(age.updates.age, 'تا ۵ سال ساخت');

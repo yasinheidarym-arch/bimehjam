@@ -38,24 +38,29 @@ export async function selectQuotationGuidanceWithAi(input: {
   message: string;
   question: QuotationTurnQuestion;
   knowledge: string;
+  source: 'HELP_TEXT' | 'PRODUCT_KNOWLEDGE';
+  sourceText: string;
 }) {
   const config = await getAiConfig();
   const apiKey = config.openaiApiKey || process.env.OPENAI_API_KEY || '';
-  if (!apiKey) return { passages: [] };
+  if (!apiKey) return { helpResponse: '', passages: [] };
   const response = await new OpenAI({ apiKey }).chat.completions.create({
     model: config.openaiModel || 'gpt-5',
     response_format: { type: 'json_schema', json_schema: {
       name: 'quotation_grounded_guidance', strict: true,
       schema: {
         type: 'object', additionalProperties: false,
-        properties: { passages: { type: 'array', maxItems: 2, items: { type: 'string' } } },
-        required: ['passages'],
+        properties: {
+          helpResponse: { type: 'string', maxLength: 600 },
+          passages: { type: 'array', maxItems: 2, items: { type: 'string' } },
+        },
+        required: ['helpResponse', 'passages'],
       },
     } },
     messages: [
-      { role: 'system', content: 'فقط قطعه‌های کوتاه و عیناً موجود در knowledge را انتخاب کن که مستقیماً به پرسش کاربر درباره فیلد فعلی پاسخ می‌دهند. متن را بازنویسی نکن، هیچ پوشش، مبلغ یا شرط بیمه‌ای نساز و اگر شاهد مستقیم وجود ندارد passages را خالی برگردان.' },
+      { role: 'system', content: 'برای سؤال راهنمای کاربر یک helpResponse کوتاه، طبیعی و محاوره‌ای بساز. sourceText تنها مرجع حقیقت است: مفهومش را کامل حفظ کن ولی آن را عیناً کپی نکن. عبارت «راهنمای این سؤال» و متن کامل currentQuestion را تکرار نکن. پاسخ را با درخواست کوتاه و متناسب برای فرستادن جواب تمام کن. هیچ پوشش، مبلغ، شرط بیمه‌ای یا اطلاعاتی بیرون از sourceText نساز. passages فقط شاهدهای عیناً موجود در sourceText هستند و حداکثر دو مورد؛ اگر sourceText شاهدی ندارد خالی بگذار.' },
       { role: 'user', content: JSON.stringify(input) },
     ],
   });
-  return JSON.parse(response.choices[0]?.message?.content || '{"passages":[]}');
+  return JSON.parse(response.choices[0]?.message?.content || '{"helpResponse":"","passages":[]}');
 }

@@ -1,21 +1,57 @@
 import type { QuotationTurnQuestion } from './quotationConversationFlow';
-import { isQuotationHelpRequest, quotationQuestionHelp } from './quotationQuestionHelp';
+import { isQuotationHelpRequest, naturalizeQuotationHelp, quotationHelpResponseRequest, quotationQuestionHelp } from './quotationQuestionHelp';
 
 export type QuotationGuidanceSource = 'HELP_TEXT' | 'PRODUCT_KNOWLEDGE' | 'FIELD_SCHEMA' | 'EXPERT_REVIEW';
+
+type GuidanceGenerator = (context: {
+  message: string;
+  question: QuotationTurnQuestion;
+  knowledge: string;
+  source: 'HELP_TEXT' | 'PRODUCT_KNOWLEDGE';
+  sourceText: string;
+}) => Promise<unknown>;
+
+function groundedCandidate(raw: unknown, sourceText: string, question: QuotationTurnQuestion): string | null {
+  const candidate = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).helpResponse : null;
+  if (typeof candidate !== 'string') return null;
+  const text = candidate.trim();
+  if (!text || text.length > 600 || /راهنمای\s+(?:این\s+)?س[ؤو]ال\s*:/u.test(text)) return null;
+  if (text.includes(question.aiQuestion || question.title) || text === sourceText.trim()) return null;
+  const sourceTerms = new Set(sourceText.replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).filter(term => term.length >= 3));
+  const grounded = text.replace(/[^\p{L}\p{N}\s]/gu, ' ').split(/\s+/).some(term => sourceTerms.has(term));
+  if (!grounded) return null;
+  const unsupportedClaim = /کد\s*یکتا|ثبت\s*شد|ارسال\s*شد|کمتر\s*از\s*\d+\s*دقیقه|قیمت\s*قطعی/.test(text);
+  const guardedTerms = ['پوشش', 'خسارت', 'قیمت', 'حق بیمه', 'تومان', 'ریال', 'استثنا', 'تعهد'];
+  const addsInsuranceFact = guardedTerms.some(term => text.includes(term) && !sourceText.includes(term));
+  if (unsupportedClaim || addsInsuranceFact) return null;
+  return /(?:بفرست|بگ(?:و|ید)|اعلام\s*کن|وارد\s*کن|انتخاب\s*کن)/.test(text)
+    ? text
+    : `${text.replace(/[.。]+$/u, '')}. ${quotationHelpResponseRequest(question)}`;
+}
 
 export async function resolveQuotationGuidance(input: {
   message: string; knowledge: string;
   question: QuotationTurnQuestion;
-  select: (context: { message: string; question: QuotationTurnQuestion; knowledge: string }) => Promise<unknown>;
+  select: GuidanceGenerator;
 }): Promise<{ text: string; source: QuotationGuidanceSource }> {
   if (input.question.helpText?.trim()) {
-    return { text: quotationQuestionHelp(input.question), source: 'HELP_TEXT' };
+    const sourceText = input.question.helpText.trim();
+    try {
+      const generated = await input.select({ ...input, source: 'HELP_TEXT', sourceText });
+      const candidate = groundedCandidate(generated, sourceText, input.question);
+      if (candidate) return { text: candidate, source: 'HELP_TEXT' };
+    } catch {
+      // Fall through to a safe conversational restatement.
+    }
+    return { text: naturalizeQuotationHelp(input.question, sourceText), source: 'HELP_TEXT' };
   }
 
   if (input.knowledge.trim()) {
     try {
-      const raw = await input.select({ message: input.message, question: input.question, knowledge: input.knowledge });
+      const raw = await input.select({ message: input.message, question: input.question, knowledge: input.knowledge, source: 'PRODUCT_KNOWLEDGE', sourceText: input.knowledge });
       const candidate = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+      const response = groundedCandidate(candidate, input.knowledge, input.question);
+      if (response) return { text: response, source: 'PRODUCT_KNOWLEDGE' };
       const passages = Array.isArray(candidate.passages) ? candidate.passages : [];
       const valid = passages.filter((passage): passage is string =>
         typeof passage === 'string' &&
@@ -42,7 +78,7 @@ export async function resolveQuotationGuidance(input: {
 export async function explainQuotationInterruption(input: {
   message: string; knowledge: string;
   question?: QuotationTurnQuestion | null;
-  select: (context: { message: string; question?: QuotationTurnQuestion | null; knowledge: string }) => Promise<unknown>;
+  select: (context: { message: string; question?: QuotationTurnQuestion | null; knowledge: string; source?: 'HELP_TEXT' | 'PRODUCT_KNOWLEDGE'; sourceText?: string }) => Promise<unknown>;
 }): Promise<string> {
   if (input.question && isQuotationHelpRequest(input.message)) {
     return (await resolveQuotationGuidance({

@@ -3615,7 +3615,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
 
               {behaviorForm.engineConfig ? (
                 <div className="space-y-4 rounded-2xl border border-amber-200 bg-amber-50/30 p-4">
-                  <p className="text-[11px] leading-relaxed text-amber-800">برای هر وضعیت متن پاسخ، لحن و مثال‌های مثبت/منفی را تنظیم کنید. متغیرهای مجاز: <code>{'{{currentQuestion}}'}</code>، <code>{'{{nextQuestion}}'}</code>، <code>{'{{helpText}}'}</code>، <code>{'{{clarification}}'}</code>، <code>{'{{relatedExplanation}}'}</code> و <code>{'{{options}}'}</code>.</p>
+                  <p className="text-[11px] leading-relaxed text-amber-800">برای هر وضعیت متن پاسخ، لحن و مثال‌های مثبت/منفی را تنظیم کنید. متغیرهای مجاز: <code>{'{{currentQuestion}}'}</code>، <code>{'{{nextQuestion}}'}</code>، <code>{'{{helpResponse}}'}</code>، <code>{'{{clarification}}'}</code>، <code>{'{{relatedExplanation}}'}</code> و <code>{'{{options}}'}</code>. در وضعیت QUESTION_ABOUT_FIELD فقط پاسخ طبیعی و grounded با <code>{'{{helpResponse}}'}</code> نمایش داده می‌شود.</p>
                   {QUOTATION_RESPONSE_STATES.map((status) => {
                     const item = behaviorForm.engineConfig!.states[status];
                     return <details key={status} className="rounded-xl border border-slate-200 bg-white p-3" open={status === 'VALID_ANSWER'}>

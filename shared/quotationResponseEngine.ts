@@ -37,7 +37,7 @@ export const DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG: QuotationResponseEngineCo
   version: 1,
   states: {
     VALID_ANSWER: state('{{nextQuestion}}', 'کوتاه، طبیعی و بدون بازنویسی سؤال'),
-    QUESTION_ABOUT_FIELD: state('{{helpText}}\n{{currentQuestion}}', 'آموزنده، کوتاه و روشن'),
+    QUESTION_ABOUT_FIELD: state('{{helpResponse}}', 'کوتاه، طبیعی، محترمانه و grounded در راهنمای همان سؤال'),
     RELATED_BUT_WRONG_CATEGORY: state('{{relatedExplanation}}\n{{currentQuestion}}', 'محترمانه و دقیق'),
     AMBIGUOUS: state('{{clarification}}', 'کوتاه و مشخص'),
     UNRELATED: state('{{clarification}}', 'محترمانه و بدون بن‌بست'),
@@ -61,7 +61,9 @@ export function parseQuotationResponseEngineConfig(value: string): QuotationResp
       const item = parsed.states[key];
       if (!item || typeof item.template !== 'string' || typeof item.tone !== 'string') return null;
       states[key] = {
-        template: item.template.trim(),
+        // Guidance is generated from grounded question context. Never expose raw
+        // helpText/currentQuestion through an administrator-authored template.
+        template: key === 'QUESTION_ABOUT_FIELD' ? '{{helpResponse}}' : item.template.trim(),
         tone: item.tone.trim(),
         positiveExamples: cleanLines(item.positiveExamples),
         negativeExamples: cleanLines(item.negativeExamples),
@@ -83,4 +85,3 @@ export function parseQuotationResponseEngineConfig(value: string): QuotationResp
 export function serializeQuotationResponseEngineConfig(config: QuotationResponseEngineConfig): string {
   return JSON.stringify(config, null, 2);
 }
-
