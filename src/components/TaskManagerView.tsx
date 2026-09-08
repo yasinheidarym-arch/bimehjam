@@ -234,8 +234,9 @@ export const TaskManagerView: React.FC = () => {
         type: typeFilter,
         source: sourceFilter,
       });
-      if (res.success) {
-        setTasks(res.data);
+      const payload = res as unknown as { success?: boolean; data?: unknown };
+      if (payload.success && Array.isArray(payload.data)) {
+        setTasks(payload.data);
       }
     } catch (err) {
       console.error('Failed to fetch tasks:', err);
@@ -248,8 +249,9 @@ export const TaskManagerView: React.FC = () => {
     setLoadingSuggestions(true);
     try {
       const res = await taskService.getSmartSuggestions();
-      if (res.success) {
-        setSuggestions(res.data);
+      const payload = res as unknown as { success?: boolean; data?: unknown };
+      if (payload.success && Array.isArray(payload.data)) {
+        setSuggestions(payload.data);
       }
     } catch (err) {
       console.error('Failed to fetch AI suggestions:', err);
@@ -261,8 +263,9 @@ export const TaskManagerView: React.FC = () => {
   const fetchCustomersList = async () => {
     try {
       const res = await customerService.getCustomers({ limit: 50 });
-      if (res.success) {
-        setCustomers(res.data);
+      const payload = res as unknown as { success?: boolean; data?: unknown };
+      if (payload.success && Array.isArray(payload.data)) {
+        setCustomers(payload.data);
       }
     } catch (err) {
       console.error('Failed to fetch customers:', err);

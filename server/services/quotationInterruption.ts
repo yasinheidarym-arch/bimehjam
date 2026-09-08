@@ -1,7 +1,8 @@
 import type { QuotationTurnQuestion } from './quotationConversationFlow';
 import { isQuotationHelpRequest, naturalizeQuotationHelp, quotationHelpResponseRequest, quotationQuestionHelp } from './quotationQuestionHelp';
+import { quotationQuestionOptions } from './quotationOptionMatchingService';
 
-export type QuotationGuidanceSource = 'HELP_TEXT' | 'PRODUCT_KNOWLEDGE' | 'FIELD_SCHEMA' | 'EXPERT_REVIEW';
+export type QuotationGuidanceSource = 'HELP_TEXT' | 'PRODUCT_KNOWLEDGE' | 'GENERAL_MODEL_KNOWLEDGE' | 'FIELD_SCHEMA' | 'HONEST_LIMITATION';
 
 type GuidanceGenerator = (context: {
   message: string;
@@ -10,6 +11,9 @@ type GuidanceGenerator = (context: {
   source: 'HELP_TEXT' | 'PRODUCT_KNOWLEDGE';
   sourceText: string;
   tone: string;
+  helpText?: string;
+  productKnowledge?: string;
+  allowedOptions?: string[];
 }) => Promise<unknown>;
 
 function groundedCandidate(raw: unknown, sourceText: string, question: QuotationTurnQuestion): string | null {
@@ -31,6 +35,26 @@ function groundedCandidate(raw: unknown, sourceText: string, question: Quotation
     : `${text.replace(/[.。]+$/u, '')}. ${quotationHelpResponseRequest(question)}`;
 }
 
+function selectedSource(raw: unknown): QuotationGuidanceSource | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const source = (raw as Record<string, unknown>).source;
+  return ['HELP_TEXT', 'PRODUCT_KNOWLEDGE', 'GENERAL_MODEL_KNOWLEDGE', 'HONEST_LIMITATION'].includes(String(source))
+    ? source as QuotationGuidanceSource : null;
+}
+
+function safeGeneralCandidate(raw: unknown, question: QuotationTurnQuestion): string | null {
+  const candidate = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).helpResponse : null;
+  if (typeof candidate !== 'string') return null;
+  const text = candidate.trim();
+  if (!text || text.length > 600 || text.includes(question.aiQuestion || question.title)) return null;
+  if (/تومان|ریال|درصد|کد\s*یکتا|ثبت\s*شد|ارسال\s*شد|کمتر\s*از\s*\d+\s*دقیقه/.test(text)) return null;
+  const normalizeDigits = (value: string) => value.replace(/[۰-۹]/g, digit => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
+  const responseNumbers = normalizeDigits(text).match(/\d+(?:[.,]\d+)?/g) || [];
+  const allowedNumbers = new Set(normalizeDigits(`${question.title} ${question.aiQuestion || ''}`).match(/\d+(?:[.,]\d+)?/g) || []);
+  if (responseNumbers.some(number => !allowedNumbers.has(number))) return null;
+  return text;
+}
+
 export async function resolveQuotationGuidance(input: {
   message: string; knowledge: string;
   question: QuotationTurnQuestion;
@@ -38,43 +62,48 @@ export async function resolveQuotationGuidance(input: {
   tone?: string;
 }): Promise<{ text: string; source: QuotationGuidanceSource }> {
   const tone = input.tone || 'کارشناس حرفه‌ای، محترمانه، صمیمی و غیررسمیِ کنترل‌شده؛ خطاب جمع و بدون عبارت دستوری یا بچگانه';
-  if (input.question.helpText?.trim()) {
-    const sourceText = input.question.helpText.trim();
-    try {
-      const generated = await input.select({ ...input, source: 'HELP_TEXT', sourceText, tone });
-      const candidate = groundedCandidate(generated, sourceText, input.question);
-      if (candidate) return { text: candidate, source: 'HELP_TEXT' };
-    } catch {
-      // Fall through to a safe conversational restatement.
+  const helpText = input.question.helpText?.trim() || '';
+  const productKnowledge = input.knowledge.trim();
+  try {
+    const raw = await input.select({
+      ...input,
+      source: helpText ? 'HELP_TEXT' : 'PRODUCT_KNOWLEDGE',
+      sourceText: helpText || productKnowledge,
+      helpText,
+      productKnowledge,
+      allowedOptions: quotationQuestionOptions(input.question).map(option => option.value),
+      tone,
+    });
+    const source = selectedSource(raw) || (helpText ? 'HELP_TEXT' : productKnowledge ? 'PRODUCT_KNOWLEDGE' : null);
+    if (source === 'HELP_TEXT' && helpText) {
+      const response = groundedCandidate(raw, helpText, input.question);
+      if (response) return { text: response, source };
     }
-    return { text: naturalizeQuotationHelp(input.question, sourceText), source: 'HELP_TEXT' };
+    if (source === 'PRODUCT_KNOWLEDGE' && productKnowledge) {
+      const response = groundedCandidate(raw, productKnowledge, input.question);
+      if (response) return { text: response, source };
+    }
+    if (source === 'GENERAL_MODEL_KNOWLEDGE') {
+      const response = safeGeneralCandidate(raw, input.question);
+      if (response) return { text: response, source };
+    }
+    if (source === 'HONEST_LIMITATION') {
+      const response = safeGeneralCandidate(raw, input.question);
+      if (response) return { text: response, source };
+    }
+  } catch {
+    // Provider failure uses only deterministic grounded fallbacks below.
   }
 
-  if (input.knowledge.trim()) {
-    try {
-      const raw = await input.select({ message: input.message, question: input.question, knowledge: input.knowledge, source: 'PRODUCT_KNOWLEDGE', sourceText: input.knowledge, tone });
-      const candidate = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
-      const response = groundedCandidate(candidate, input.knowledge, input.question);
-      if (response) return { text: response, source: 'PRODUCT_KNOWLEDGE' };
-      const passages = Array.isArray(candidate.passages) ? candidate.passages : [];
-      const valid = passages.filter((passage): passage is string =>
-        typeof passage === 'string' &&
-        passage.trim().length >= 8 &&
-        passage.length <= 1200 &&
-        input.knowledge.includes(passage) &&
-        !/[؟?]|کد\s*یکتا|ثبت\s*شد|ارسال\s*شد|کمتر\s*از\s*\d+\s*دقیقه/.test(passage)
-      );
-      if (valid.length) return { text: naturalizeQuotationHelp(input.question, [...new Set(valid)].slice(0, 2).join('\n')), source: 'PRODUCT_KNOWLEDGE' };
-    } catch {
-      // A model/provider failure must not interrupt or advance the questionnaire.
-    }
-  }
+  // When the model is unavailable, never guess. A stored helpText remains the
+  // safest field-specific fallback, followed by field schema guidance.
+  if (helpText) return { text: naturalizeQuotationHelp(input.question, helpText), source: 'HELP_TEXT' };
 
   const generic = quotationQuestionHelp(input.question);
   if (generic.trim()) return { text: generic, source: 'FIELD_SCHEMA' };
   return {
     text: `جزئیات تخصصی مربوط به «${input.question.title}» نیاز به بررسی کارشناس دارد.`,
-    source: 'EXPERT_REVIEW',
+    source: 'HONEST_LIMITATION',
   };
 }
 

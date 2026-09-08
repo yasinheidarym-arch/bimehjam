@@ -1,6 +1,6 @@
 import prisma from '../db/client';
-import { createSystemTaskWithOutcome } from './taskService';
-import { dispatchTaskCreatedSms, resolveFastNotifyAssignee } from './fastNotifySmsService';
+import { dispatchTaskCreatedSms, resolveOperationalAssignee } from './fastNotifySmsService';
+import { assertActiveTaskType } from './taskTypeCatalogService';
 import type { CreatedTaskForSms, SmsDispatchResult } from './fastNotifySmsCore';
 import type { QuotationDeliveryChoice, QuotationSubmissionAnswer } from './quotationSubmissionFlow';
 
@@ -26,12 +26,8 @@ export type QuotationCompletionInput = {
 };
 
 export type QuotationCompletionDependencies = {
-  resolveAssignee: (preferredUserId: string | null | undefined, taskType: string) => Promise<{ id: string; name: string } | null>;
-  findLead: (conversationId: string) => Promise<CompletionLead | null>;
-  createLead: (data: Record<string, unknown>) => Promise<CompletionLead>;
-  updateLead: (id: string, data: Record<string, unknown>) => Promise<CompletionLead>;
-  findTask: (conversationId: string, titles: string[]) => Promise<CompletionTask | null>;
-  createTask: (data: Record<string, unknown>) => Promise<{ task: CompletionTask; smsResult: SmsDispatchResult }>;
+  resolveAssignee: (preferredUserId: string | null | undefined) => Promise<{ id: string; name: string } | null>;
+  persistBusinessRecords: (input: QuotationCompletionInput, selected: { title: string; type: string }, assignee: { id: string; name: string } | null) => Promise<{ lead: CompletionLead; task: CompletionTask }>;
   dispatchSms: (task: CompletionTask) => Promise<SmsDispatchResult>;
   findDelivery: (eventKey: string) => Promise<Delivery>;
 };
@@ -67,58 +63,21 @@ function taskDefinition(route: QuotationDeliveryChoice, productName: string) {
     : { title: 'بررسی و آماده‌سازی قیمت - ' + productName, type: 'Prepare Quotation' };
 }
 
+function taskTitles(productName: string) {
+  return [taskDefinition('CALL', productName).title, taskDefinition('CHAT', productName).title];
+}
+
 export async function finalizeQuotationCompletionCore(
   input: QuotationCompletionInput,
   deps: QuotationCompletionDependencies,
 ) {
   const selected = taskDefinition(input.route, input.productName);
-  const allTitles = [
-    taskDefinition('CALL', input.productName).title,
-    taskDefinition('CHAT', input.productName).title,
-  ];
-  const assignee = await deps.resolveAssignee(input.preferredAssignedUserId, selected.type);
-  if (!assignee) return { ok: false as const, error: 'SMS_ASSIGNEE_UNAVAILABLE', smsStatus: 'unassigned' };
 
   try {
-    let lead = await deps.findLead(input.conversationId);
-    const leadData = {
-      customerId: input.customerId,
-      conversationId: input.conversationId,
-      insuranceType: insuranceType(input.productCategory, input.productName),
-      score: 95,
-      status: 'QUALIFIED',
-      intent: 'Insurance Quotation',
-      notes: quotationTaskDescription(input),
-    };
-    lead = lead ? await deps.updateLead(lead.id, leadData) : await deps.createLead(leadData);
-
-    let task = await deps.findTask(input.conversationId, allTitles);
-    let smsResult: SmsDispatchResult;
-    if (task) {
-      const delivery = await deps.findDelivery('task-created:' + task.id);
-      if (delivery?.status === 'SENT') smsResult = 'duplicate';
-      else if (delivery) smsResult = 'provider-failed';
-      else smsResult = await deps.dispatchSms(task);
-    } else {
-      const created = await deps.createTask({
-        customerId: input.customerId,
-        leadId: lead.id,
-        conversationId: input.conversationId,
-        assignedUser: assignee.name,
-        assignedUserId: assignee.id,
-        title: selected.title,
-        description: quotationTaskDescription(input),
-        type: selected.type,
-        priority: 'HIGH',
-      });
-      task = created.task;
-      smsResult = created.smsResult;
-    }
-
-    const smsSucceeded = smsResult === 'sent' || smsResult === 'duplicate';
-    if (!smsSucceeded) {
-      return { ok: false as const, error: 'SMS_QUEUE_FAILED', taskId: task.id, leadId: lead.id, smsStatus: smsResult };
-    }
+    const assignee = await deps.resolveAssignee(input.preferredAssignedUserId);
+    const { lead, task } = await deps.persistBusinessRecords(input, selected, assignee);
+    const delivery = await deps.findDelivery('task-created:' + task.id);
+    const smsResult: SmsDispatchResult = delivery ? 'duplicate' : await deps.dispatchSms(task);
     return {
       ok: true as const,
       taskId: task.id,
@@ -132,22 +91,54 @@ export async function finalizeQuotationCompletionCore(
 }
 
 const productionDependencies: QuotationCompletionDependencies = {
-  resolveAssignee: async (preferred, taskType) => resolveFastNotifyAssignee(preferred, taskType),
-  findLead: (conversationId) => prisma.lead.findFirst({ where: { conversationId }, select: { id: true } }),
-  createLead: (data) => prisma.lead.create({ data: data as never, select: { id: true } }),
-  updateLead: (id, data) => prisma.lead.update({ where: { id }, data: data as never, select: { id: true } }),
-  findTask: (conversationId, titles) => prisma.task.findFirst({
-    where: { conversationId, source: 'AI', title: { in: titles } },
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-    select: { id: true, title: true, priority: true, type: true, customerId: true, assignedUserId: true },
-  }),
-  createTask: async (data) => createSystemTaskWithOutcome(data as never),
+  resolveAssignee: resolveOperationalAssignee,
+  persistBusinessRecords: async (input, selected, assignee) => {
+    await assertActiveTaskType(selected.type);
+    return prisma.$transaction(async (tx) => {
+      const notes = quotationTaskDescription(input);
+      const leadData = {
+        customerId: input.customerId, conversationId: input.conversationId,
+        insuranceType: insuranceType(input.productCategory, input.productName),
+        score: 95, status: 'QUALIFIED', intent: 'Insurance Quotation', notes,
+      };
+      const existingLead = await tx.lead.findFirst({ where: { conversationId: input.conversationId }, select: { id: true } });
+      const lead = existingLead
+        ? await tx.lead.update({ where: { id: existingLead.id }, data: leadData, select: { id: true } })
+        : await tx.lead.create({ data: leadData, select: { id: true } });
+      const existingTask = await tx.task.findFirst({
+        where: { conversationId: input.conversationId, source: 'AI', title: { in: taskTitles(input.productName) } },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { id: true, title: true, priority: true, type: true, customerId: true, assignedUserId: true },
+      });
+      const task = existingTask || await tx.task.create({
+        data: {
+          customerId: input.customerId, leadId: lead.id, conversationId: input.conversationId,
+          assignedUser: assignee?.name || 'کارشناس فروش', assignedUserId: assignee?.id || null,
+          title: selected.title, description: notes, type: selected.type, priority: 'HIGH',
+          status: 'New', source: 'AI', dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+        select: { id: true, title: true, priority: true, type: true, customerId: true, assignedUserId: true },
+      });
+      return { lead, task };
+    });
+  },
   dispatchSms: async (task) => dispatchTaskCreatedSms(task as never),
   findDelivery: (eventKey) => prisma.fastNotifySmsDelivery.findUnique({ where: { eventKey }, select: { status: true } }),
 };
 
+const completionLocks = new Map<string, Promise<unknown>>();
+
+export async function runQuotationCompletionOnce<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const running = completionLocks.get(key);
+  if (running) return running as Promise<T>;
+  const promise = operation().finally(() => completionLocks.delete(key));
+  completionLocks.set(key, promise);
+  return promise;
+}
+
 export async function finalizeQuotationCompletion(input: QuotationCompletionInput) {
-  return finalizeQuotationCompletionCore(input, productionDependencies);
+  const key = `${input.conversationId}:${input.sessionId}`;
+  return runQuotationCompletionOnce(key, () => finalizeQuotationCompletionCore(input, productionDependencies));
 }
 
 

@@ -5,9 +5,11 @@ import {
   QUOTATION_CALL_SUCCESS,
   QUOTATION_CHAT_SUCCESS,
   quotationTaskDescription,
+  runQuotationCompletionOnce,
   type QuotationCompletionDependencies,
   type QuotationCompletionInput,
 } from '../server/services/quotationCompletionService';
+import { handleTerminalQuotationSubmission, type QuotationSubmissionState } from '../server/services/quotationSubmissionFlow';
 import { resolveQuotationOptionSelection } from '../server/services/quotationOptionMatchingService';
 import { numberedQuestionOrder, uniqueQuestionOrder } from '../shared/quotationQuestionOrder';
 import { buildConversationQuotationPresentation } from '../server/services/conversationQuotationPresentation';
@@ -29,7 +31,7 @@ const input: QuotationCompletionInput = {
   ],
 };
 
-function harness(options: { existingTask?: boolean; deliveryStatus?: string | null; smsResult?: any; failTask?: boolean } = {}) {
+function harness(options: { deliveryStatus?: string | null; smsResult?: import('../server/services/fastNotifySmsCore').SmsDispatchResult; failTask?: boolean; noAssignee?: boolean } = {}) {
   const calls = { leads: 0, tasks: 0, sms: 0 };
   let taskData: Record<string, unknown> | null = null;
   const task = {
@@ -37,16 +39,13 @@ function harness(options: { existingTask?: boolean; deliveryStatus?: string | nu
     type: 'Call Customer', priority: 'HIGH', customerId: 'customer-1', assignedUserId: 'operator-1',
   };
   const deps: QuotationCompletionDependencies = {
-    resolveAssignee: async () => ({ id: 'operator-1', name: 'اپراتور آزمایشی' }),
-    findLead: async () => null,
-    createLead: async () => { calls.leads++; return { id: 'lead-1' }; },
-    updateLead: async id => ({ id }),
-    findTask: async () => options.existingTask ? task : null,
-    createTask: async data => {
-      calls.tasks++;
-      taskData = data;
+    resolveAssignee: async () => options.noAssignee ? null : ({ id: 'operator-1', name: 'اپراتور آزمایشی' }),
+    persistBusinessRecords: async (_input, selected, assignee) => {
       if (options.failTask) throw new Error('task failed');
-      return { task, smsResult: options.smsResult || 'sent' };
+      calls.leads++;
+      calls.tasks++;
+      taskData = { ...selected, assignedUserId: assignee?.id || null };
+      return { lead: { id: 'lead-1' }, task: { ...task, ...selected, assignedUserId: assignee?.id || null } };
     },
     dispatchSms: async () => { calls.sms++; return options.smsResult || 'sent'; },
     findDelivery: async () => options.deliveryStatus ? { status: options.deliveryStatus } : null,
@@ -54,7 +53,7 @@ function harness(options: { existingTask?: boolean; deliveryStatus?: string | nu
   return { calls, deps, get taskData() { return taskData; } };
 }
 
-test('call route promises only after Lead, Task and SMS succeed', async () => {
+test('call route promises only after Lead and Task persist', async () => {
   const h = harness();
   const result = await finalizeQuotationCompletionCore(input, h.deps);
   assert.equal(result.ok, true);
@@ -76,26 +75,75 @@ test('task failure never returns a promise and does not loop into another creati
   const h = harness({ failTask: true });
   const result = await finalizeQuotationCompletionCore(input, h.deps);
   assert.equal(result.ok, false);
-  assert.equal(h.calls.tasks, 1);
+  assert.equal(h.calls.tasks, 0);
   assert.equal('replyText' in result, false);
 });
 
-test('SMS queue/provider failure creates no success promise', async () => {
+test('SMS queue/provider failure does not roll back Lead or Task', async () => {
   const h = harness({ smsResult: 'provider-failed' });
   const result = await finalizeQuotationCompletionCore(input, h.deps);
-  assert.equal(result.ok, false);
-  assert.equal(result.error, 'SMS_QUEUE_FAILED');
+  assert.equal(result.ok, true);
+  assert.equal(result.smsStatus, 'provider-failed');
   assert.equal(h.calls.tasks, 1);
-  assert.equal('replyText' in result, false);
+  assert.equal(result.replyText, QUOTATION_CALL_SUCCESS);
 });
-test('existing task and SENT outbox delivery are idempotent', async () => {
-  const h = harness({ existingTask: true, deliveryStatus: 'SENT' });
+test('existing outbox delivery suppresses duplicate SMS dispatch', async () => {
+  const h = harness({ deliveryStatus: 'SENT' });
   const first = await finalizeQuotationCompletionCore(input, h.deps);
   const repeated = await finalizeQuotationCompletionCore(input, h.deps);
   assert.equal(first.ok, true);
   assert.equal(repeated.ok, true);
-  assert.equal(h.calls.tasks, 0);
+  assert.equal(h.calls.tasks, 2);
   assert.equal(h.calls.sms, 0);
+});
+
+test('missing SMS recipient still preserves Lead and Task', async () => {
+  const h = harness({ noAssignee: true, smsResult: 'skipped-no-recipient' });
+  const result = await finalizeQuotationCompletionCore(input, h.deps);
+  assert.equal(result.ok, true);
+  assert.equal(result.smsStatus, 'skipped-no-recipient');
+  assert.equal(h.calls.leads, 1);
+  assert.equal(h.calls.tasks, 1);
+});
+
+const failedSubmission: QuotationSubmissionState = {
+  pending: false, status: 'FAILED', step: 'DELIVERY_CHOICE', sessionId: 'session-1',
+  productId: 'product-1', productName: 'محصول آزمایشی', answers: [], profile: {},
+  choicePrompt: 'تماس یا چت؟', deliveryChoice: 'CHAT', idempotencyKey: 'quotation-completion:conversation-1:session-1',
+  failureReason: 'TASK_OR_LEAD_FAILED',
+};
+
+test('FAILED explanation preserves the same submission and does not release a new session', () => {
+  const result = handleTerminalQuotationSubmission(failedSubmission, 'ASK_FAILURE_REASON');
+  assert.equal(result.action, 'REPLY');
+  assert.equal(result.state.sessionId, failedSubmission.sessionId);
+  assert.equal(result.state.idempotencyKey, failedSubmission.idempotencyKey);
+});
+
+test('FAILED retry uses the same session, route and idempotency key', () => {
+  const result = handleTerminalQuotationSubmission(failedSubmission, 'RETRY_SUBMISSION');
+  assert.equal(result.action, 'RETRY');
+  if (result.action !== 'RETRY') return;
+  assert.equal(result.route, 'CHAT');
+  assert.equal(result.state.sessionId, failedSubmission.sessionId);
+  assert.equal(result.state.idempotencyKey, failedSubmission.idempotencyKey);
+});
+
+test('a new quotation is released only for explicit semantic START_NEW_QUOTATION', () => {
+  assert.equal(handleTerminalQuotationSubmission(failedSubmission, 'OTHER').action, 'REPLY');
+  assert.equal(handleTerminalQuotationSubmission(failedSubmission, 'START_NEW_QUOTATION').action, 'RELEASE');
+});
+
+test('concurrent retries share one completion operation', async () => {
+  let operations = 0;
+  const operation = () => runQuotationCompletionOnce('conversation-1:session-1', async () => {
+    operations += 1;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    return 'done';
+  });
+  const results = await Promise.all([operation(), operation(), operation()]);
+  assert.deepEqual(results, ['done', 'done', 'done']);
+  assert.equal(operations, 1);
 });
 
 test('operator task description uses Persian labels and never raw field names or JSON', () => {

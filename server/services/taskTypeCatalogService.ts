@@ -41,12 +41,16 @@ function parseCatalog(value?: string | null): TaskTypeDefinition[] {
       const value = item as Record<string, unknown>;
       return typeof value.id === 'string' && typeof value.label === 'string' && typeof value.active === 'boolean' && typeof value.builtin === 'boolean';
     });
-    return valid.length ? valid.map((item) => ({
+    const normalized = valid.length ? valid.map((item) => ({
       ...item,
       smsTemplate: typeof (item as Record<string, unknown>).smsTemplate === 'string'
         ? validateTaskSmsTemplate((item as Record<string, unknown>).smsTemplate)
         : DEFAULT_TASK_SMS_TEMPLATE,
     })) as TaskTypeDefinition[] : INITIAL_TASK_TYPES;
+    // Keep reads side-effect free while making built-ins introduced after an
+    // older persisted catalog available to task creation immediately.
+    const knownIds = new Set(normalized.map((item) => item.id));
+    return [...normalized, ...INITIAL_TASK_TYPES.filter((item) => !knownIds.has(item.id))];
   } catch {
     return INITIAL_TASK_TYPES;
   }

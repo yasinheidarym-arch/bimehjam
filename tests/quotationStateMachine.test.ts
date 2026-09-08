@@ -96,7 +96,7 @@ test('ambiguous and irrelevant replies clarify then offer help while preserving 
   assert.equal((await turn('۲ سال')).state.ambiguity, 'NONE');
 });
 test('explicit correction updates only the named previous field, pending question remains', async () => {
-  const turn = conversation(base, async () => ({ assignments: [assignment('age', '۱۰ سال', '۶ تا ۱۵ سال ساخت')] }));
+  const turn = conversation(base, async () => ({ status: 'CORRECTION', confidence: .96, reason: 'semantic correction', assignments: [assignment('age', '۱۰ سال', '۶ تا ۱۵ سال ساخت')] }));
   await turn('2');
   const result = await turn('سن ساختمان را اصلاح کن، ۱۰ سال');
   assert.deepEqual(result.updates, { age: '۶ تا ۱۵ سال ساخت' });
@@ -139,7 +139,7 @@ test('conditional questions use same boolean semantics as session evaluation', (
   assert.equal(applicableQuotationQuestions([conditional], { guard: 'خیر' }).length, 0);
 });
 test('correction at completed questionnaire updates answer without starting a new questionnaire', async () => {
-  const result = await conversation({ ...base, age: 'تا ۵ سال ساخت', elevators: '2', guard: 'بله' }, async () => ({ assignments: [assignment('elevators', '3')] }))('تعداد آسانسور اصلاح شود: 3');
+  const result = await conversation({ ...base, age: 'تا ۵ سال ساخت', elevators: '2', guard: 'بله' }, async () => ({ status: 'CORRECTION', confidence: .96, reason: 'semantic correction', assignments: [assignment('elevators', '3')] }))('تعداد آسانسور اصلاح شود: 3');
   assert.equal(result.updates.elevators, '3');
   assert.equal(result.state.currentQuestion, null);
 });
@@ -290,7 +290,7 @@ test('QUESTION_ABOUT_FIELD uses a grounded natural helpResponse without copying 
       assert.equal(sourceText, question.helpText);
       assert.equal(groundedQuestion.id, question.id);
       assert.match(tone, /کارشناس حرفه‌ای.*محترمانه.*صمیمی/);
-      return { helpResponse: natural, passages: [] };
+      return { helpResponse: natural, passages: [], source: 'HELP_TEXT' };
     },
   });
   assert.equal(result.responseText, natural);
@@ -378,12 +378,13 @@ test('masked production 4096 transcript messages preserve grounded questionnaire
       assert.equal(grounding.productKnowledge, productPassage);
       return { status: 'QUESTION_ABOUT_FIELD', confidence: .95, reason: 'راهنمای همان فیلد', relatedFieldName: 'jenseh_nama', assignments: [] };
     },
-    guidanceSelector: async ({ knowledge }) => ({ passages: [knowledge] }),
+    guidanceSelector: async ({ knowledge }) => ({ helpResponse: 'نوع نما برای ارزیابی ریسک نگهداری و حادثه در نظر گرفته می‌شود.', passages: [knowledge], source: 'PRODUCT_KNOWLEDGE' }),
   });
   assert.deepEqual(help.updates, {});
   assert.equal(help.state.currentQuestion?.fieldName, 'jenseh_nama');
   assert.equal(help.guidance?.source, 'PRODUCT_KNOWLEDGE');
-  assert.match(help.responseText, new RegExp(productPassage));
+  assert.match(help.responseText, /نگهداری.*حادثه/);
+  assert.notEqual(help.responseText, productPassage);
   assert.doesNotMatch(help.responseText, /نوع جنس متریال نمای ساختمان چیه/);
 
   const age = await advanceQuotationTurn({ sessionId: 'masked-production-age', questions: [questions[2]], answers: {}, message: '2 سال' });

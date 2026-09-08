@@ -68,22 +68,33 @@ test('disabled service sends zero SMS requests', async () => {
   const harness = createHarness({ enabled: false });
   assert.equal(await dispatchTaskCreatedSmsCore(task, harness.dependencies), 'disabled');
   assert.equal(harness.requests.length, 0);
+  assert.equal(harness.deliveryUpdates.at(-1)?.status, 'SKIPPED_DISABLED');
 });
 
 test('disabled task type sends zero SMS requests', async () => {
   const harness = createHarness({ taskTypes: ['Follow Up Quote'] });
   assert.equal(await dispatchTaskCreatedSmsCore(task, harness.dependencies), 'task-type-disabled');
   assert.equal(harness.requests.length, 0);
+  assert.equal(harness.deliveryUpdates.at(-1)?.status, 'SKIPPED_TASK_TYPE');
 });
 
 test('unselected operator or operator without mobile sends zero SMS requests', async () => {
   const unselected = createHarness({ recipients: [] });
   assert.equal(await dispatchTaskCreatedSmsCore(task, unselected.dependencies), 'recipient-disabled');
   assert.equal(unselected.requests.length, 0);
+  assert.equal(unselected.deliveryUpdates.at(-1)?.status, 'SKIPPED_NO_RECIPIENT');
 
   const noMobile = createHarness({ mobile: null });
   assert.equal(await dispatchTaskCreatedSmsCore(task, noMobile.dependencies), 'invalid-recipient');
   assert.equal(noMobile.requests.length, 0);
+  assert.equal(noMobile.deliveryUpdates.at(-1)?.status, 'SKIPPED_NO_RECIPIENT');
+});
+
+test('missing assignee is recorded in outbox as SKIPPED_NO_RECIPIENT', async () => {
+  const harness = createHarness();
+  assert.equal(await dispatchTaskCreatedSmsCore({ ...task, assignedUserId: null }, harness.dependencies), 'skipped-no-recipient');
+  assert.equal(harness.requests.length, 0);
+  assert.equal(harness.deliveryUpdates.at(-1)?.status, 'SKIPPED_NO_RECIPIENT');
 });
 
 test('eligible price-call task sends exactly one correct FastNotify POST', async () => {

@@ -604,8 +604,9 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       });
       try {
         const res = await knowledgeService.getQuotationQuestions(product.id);
-        if (res.success && Array.isArray(res.data)) {
-          setProductQuestions(res.data);
+        const payload = res as unknown as { success?: boolean; data?: unknown };
+        if (payload.success && Array.isArray(payload.data)) {
+          setProductQuestions(payload.data);
         } else {
           setProductQuestions(product.quotationQuestions || []);
         }
@@ -816,8 +817,9 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       await knowledgeService.deleteQuotationQuestion(qId);
       if (editingItem?.id) {
         const res = await knowledgeService.getQuotationQuestions(editingItem.id);
-        if (res.success && Array.isArray(res.data)) {
-          setProductQuestions(res.data);
+        const payload = res as unknown as { success?: boolean; data?: unknown };
+        if (payload.success && Array.isArray(payload.data)) {
+          setProductQuestions(payload.data);
         }
       }
       loadTabContent();
@@ -3615,7 +3617,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
 
               {behaviorForm.engineConfig ? (
                 <div className="space-y-4 rounded-2xl border border-amber-200 bg-amber-50/30 p-4">
-                  <p className="text-[11px] leading-relaxed text-amber-800">برای هر وضعیت متن پاسخ، لحن و مثال‌های مثبت/منفی را تنظیم کنید. متغیرهای مجاز: <code>{'{{currentQuestion}}'}</code>، <code>{'{{nextQuestion}}'}</code>، <code>{'{{helpResponse}}'}</code>، <code>{'{{clarification}}'}</code>، <code>{'{{relatedExplanation}}'}</code> و <code>{'{{options}}'}</code>. در وضعیت QUESTION_ABOUT_FIELD فقط پاسخ طبیعی و grounded با <code>{'{{helpResponse}}'}</code> نمایش داده می‌شود.</p>
+                  <p className="text-[11px] leading-relaxed text-amber-800">برای هر وضعیت متن پاسخ، لحن و مثال‌های مثبت/منفی را تنظیم کنید. متغیرهای مجاز: <code>{'{{currentQuestion}}'}</code>، <code>{'{{nextQuestion}}'}</code>، <code>{'{{helpResponse}}'}</code>، <code>{'{{clarification}}'}</code>، <code>{'{{relatedExplanation}}'}</code> و <code>{'{{options}}'}</code>. در وضعیت QUESTION_ABOUT_CURRENT_FIELD فقط پاسخ طبیعی و grounded با <code>{'{{helpResponse}}'}</code> نمایش داده می‌شود.</p>
                   {QUOTATION_RESPONSE_STATES.map((status) => {
                     const item = behaviorForm.engineConfig!.states[status];
                     return <details key={status} className="rounded-xl border border-slate-200 bg-white p-3" open={status === 'VALID_ANSWER'}>

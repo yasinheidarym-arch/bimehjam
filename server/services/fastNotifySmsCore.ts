@@ -24,25 +24,33 @@ export type SmsDependencies = {
   messageContext: (task: CreatedTaskForSms) => Promise<TaskSmsMessageContext>;
   fetcher: typeof fetch; apiKey?: string; from?: string;
 };
-export type SmsDispatchResult = 'sent' | 'disabled' | 'task-type-disabled' | 'unassigned' | 'recipient-disabled' | 'invalid-recipient' | 'configuration-missing' | 'duplicate' | 'provider-failed';
+export type SmsDispatchResult = 'sent' | 'disabled' | 'task-type-disabled' | 'unassigned' | 'recipient-disabled' | 'invalid-recipient' | 'configuration-missing' | 'duplicate' | 'provider-failed' | 'skipped-no-recipient';
 
 export async function dispatchTaskCreatedSmsCore(task: CreatedTaskForSms, deps: SmsDependencies): Promise<SmsDispatchResult> {
+  let delivery: { id: string } | null = null;
   try {
-    const settings = new Map((await deps.settingFindMany()).map(item => [item.key, item.value]));
-    if (settings.get(FASTNOTIFY_SETTING_KEYS.enabled) !== 'true') return 'disabled';
-    if (!list(settings.get(FASTNOTIFY_SETTING_KEYS.taskTypes)).includes(task.type)) return 'task-type-disabled';
-    if (!task.assignedUserId) return 'unassigned';
-    if (!list(settings.get(FASTNOTIFY_SETTING_KEYS.recipientUserIds)).includes(task.assignedUserId)) return 'recipient-disabled';
-    const user = await deps.userFindUnique(task.assignedUserId);
-    const mobile = normalizeIranianMobile(user?.mobile);
-    if (!user || !['ADMIN', 'OPERATOR'].includes(user.role) || !mobile) return 'invalid-recipient';
-    let delivery: { id: string };
     try {
-      delivery = await deps.deliveryCreate({ eventKey: `task-created:${task.id}`, taskId: task.id, recipientUserId: user.id, status: 'PENDING' });
+      // The outbox record is created only after the business Task exists. It
+      // also records intentional skips, so Task creation is never coupled to
+      // provider availability or recipient configuration.
+      delivery = await deps.deliveryCreate({ eventKey: `task-created:${task.id}`, taskId: task.id, recipientUserId: task.assignedUserId || null, status: 'PENDING' });
     } catch (error) {
       if ((error as { code?: string })?.code === 'P2002') return 'duplicate';
       throw error;
     }
+    const skip = async (result: SmsDispatchResult, status: string, code: string) => {
+      if (!delivery) return 'provider-failed' as SmsDispatchResult;
+      await deps.deliveryUpdate(delivery.id, { status, attemptCount: 0, lastErrorCode: code });
+      return result;
+    };
+    const settings = new Map((await deps.settingFindMany()).map(item => [item.key, item.value]));
+    if (settings.get(FASTNOTIFY_SETTING_KEYS.enabled) !== 'true') return skip('disabled', 'SKIPPED_DISABLED', 'SERVICE_DISABLED');
+    if (!list(settings.get(FASTNOTIFY_SETTING_KEYS.taskTypes)).includes(task.type)) return skip('task-type-disabled', 'SKIPPED_TASK_TYPE', 'TASK_TYPE_DISABLED');
+    if (!task.assignedUserId) return skip('skipped-no-recipient', 'SKIPPED_NO_RECIPIENT', 'NO_ASSIGNEE');
+    if (!list(settings.get(FASTNOTIFY_SETTING_KEYS.recipientUserIds)).includes(task.assignedUserId)) return skip('recipient-disabled', 'SKIPPED_NO_RECIPIENT', 'RECIPIENT_NOT_SELECTED');
+    const user = await deps.userFindUnique(task.assignedUserId);
+    const mobile = normalizeIranianMobile(user?.mobile);
+    if (!user || !['ADMIN', 'OPERATOR'].includes(user.role) || !mobile) return skip('invalid-recipient', 'SKIPPED_NO_RECIPIENT', 'INVALID_RECIPIENT');
     if (!deps.apiKey || !deps.from || !/^\d{5,20}$/.test(deps.from)) {
       await deps.deliveryUpdate(delivery.id, { status: 'FAILED', attemptCount: 1, lastErrorCode: 'CONFIGURATION_MISSING' });
       return 'configuration-missing';
@@ -68,5 +76,10 @@ export async function dispatchTaskCreatedSmsCore(task: CreatedTaskForSms, deps: 
     }
     await deps.deliveryUpdate(delivery.id, { status: 'SENT', attemptCount: 1, providerRequestId: String(body.data.requestId), providerReferences: JSON.stringify(body.data.references), sentAt: new Date(), lastErrorCode: null });
     return 'sent';
-  } catch { return 'provider-failed'; }
+  } catch {
+    if (delivery) {
+      await deps.deliveryUpdate(delivery.id, { status: 'FAILED', attemptCount: 1, lastErrorCode: 'INTERNAL_ERROR' }).catch(() => undefined);
+    }
+    return 'provider-failed';
+  }
 }

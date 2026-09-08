@@ -62,3 +62,23 @@ export async function resolveFastNotifyAssignee(preferredUserId: string | null |
   const byId = new Map(users.map(user => [user.id, user]));
   return ordered.map(id => byId.get(id)).find(user => user && normalizeIranianMobile(user.mobile)) || null;
 }
+
+/** Assignment is a business decision and must not depend on SMS enablement or
+ * on whether a task type is selected for FastNotify. */
+export async function resolveOperationalAssignee(preferredUserId: string | null | undefined) {
+  const configured = new Map((await prisma.systemSetting.findMany({
+    where: { key: { in: [FASTNOTIFY_SETTING_KEYS.recipientUserIds] } },
+    select: { key: true, value: true },
+  })).map(item => [item.key, item.value]));
+  const selected = settingList(configured.get(FASTNOTIFY_SETTING_KEYS.recipientUserIds));
+  const ordered = preferredUserId
+    ? [preferredUserId, ...selected.filter(id => id !== preferredUserId)]
+    : selected;
+  if (!ordered.length) return null;
+  const users = await prisma.user.findMany({
+    where: { id: { in: ordered }, role: { in: ['ADMIN', 'OPERATOR'] } },
+    select: { id: true, name: true, role: true, mobile: true },
+  });
+  const byId = new Map(users.map(user => [user.id, user]));
+  return ordered.map(id => byId.get(id)).find(Boolean) || null;
+}

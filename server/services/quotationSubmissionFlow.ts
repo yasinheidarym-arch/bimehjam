@@ -28,11 +28,20 @@ export type QuotationSubmissionState = {
   taskId?: string;
   leadId?: string;
   smsStatus?: string;
+  failureReason?: string;
+  currentPageUrl?: string | null;
+  categoryId?: string | null;
+  categoryName?: string | null;
 };
 
 export type QuotationSubmissionDecision =
   | { action: 'ASK'; replyText: string; state: QuotationSubmissionState }
   | { action: 'ROUTE'; route: QuotationDeliveryChoice; replyText: string; state: QuotationSubmissionState };
+
+export type QuotationTerminalDecision =
+  | { action: 'RELEASE'; state: QuotationSubmissionState }
+  | { action: 'REPLY'; replyText: string; state: QuotationSubmissionState }
+  | { action: 'RETRY'; route: QuotationDeliveryChoice; state: QuotationSubmissionState };
 
 const FULL_NAME_PROMPT = 'برای ثبت درخواست، لطفاً نام و نام خانوادگی‌تان را بفرمایید.';
 const LAST_NAME_PROMPT = 'ممنونم؛ لطفاً نام خانوادگی‌تان را هم بفرمایید.';
@@ -88,6 +97,9 @@ export function startQuotationSubmission(input: {
   answers: QuotationSubmissionAnswer[];
   existingProfile: { fullName?: string | null; mobile?: string | null; city?: string | null };
   choicePrompt: string;
+  currentPageUrl?: string | null;
+  categoryId?: string | null;
+  categoryName?: string | null;
 }): QuotationSubmissionDecision {
   const profile = {
     ...(validStoredFullName(input.existingProfile.fullName) ? { fullName: validStoredFullName(input.existingProfile.fullName)! } : {}),
@@ -105,8 +117,32 @@ export function startQuotationSubmission(input: {
     answers: [...input.answers].sort((a, b) => a.order - b.order),
     profile,
     choicePrompt: input.choicePrompt,
+    currentPageUrl: input.currentPageUrl || null,
+    categoryId: input.categoryId || null,
+    categoryName: input.categoryName || null,
   };
   return { action: 'ASK', replyText: step === 'DELIVERY_CHOICE' ? state.choicePrompt : questionFor(step), state };
+}
+
+export function handleTerminalQuotationSubmission(
+  state: QuotationSubmissionState,
+  intent: 'RETRY_SUBMISSION' | 'ASK_FAILURE_REASON' | 'START_NEW_QUOTATION' | 'REPLAY_RESULT' | 'OTHER',
+): QuotationTerminalDecision {
+  if (intent === 'START_NEW_QUOTATION') return { action: 'RELEASE', state };
+  if (state.status === 'FAILED') {
+    if (intent === 'RETRY_SUBMISSION' && state.deliveryChoice) {
+      return { action: 'RETRY', route: state.deliveryChoice, state: { ...state, pending: true, status: 'PROCESSING' } };
+    }
+    return {
+      action: 'REPLY',
+      replyText: 'ثبت درخواست در مرحلهٔ قبل کامل نشد. اطلاعات استعلام محفوظ است؛ در صورت تمایل می‌توانید درخواست کنید ثبت دوباره انجام شود.',
+      state,
+    };
+  }
+  const replyText = state.deliveryChoice === 'CALL'
+    ? 'درخواست تماس با کارشناس قبلاً ثبت شده است.'
+    : 'درخواست بررسی و اعلام قیمت در چت قبلاً ثبت شده است.';
+  return { action: 'REPLY', replyText, state };
 }
 
 export function quotationDeliveryChoice(message: string): QuotationDeliveryChoice | null {

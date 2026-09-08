@@ -4,11 +4,16 @@ export const QUOTATION_RESPONSE_ENGINE_TITLE = 'موتور تفسیر پاسخ �
 
 export const QUOTATION_RESPONSE_STATES = [
   'VALID_ANSWER',
-  'QUESTION_ABOUT_FIELD',
+  'QUESTION_ABOUT_CURRENT_FIELD',
+  'ANSWER_AND_QUESTION',
   'RELATED_BUT_WRONG_CATEGORY',
   'AMBIGUOUS',
   'UNRELATED',
   'CORRECTION',
+  'MULTI_FIELD_ANSWER',
+  'REQUEST_HUMAN',
+  'CANCEL_OR_PAUSE',
+  'START_NEW_QUOTATION',
 ] as const;
 
 export type QuotationResponseState = typeof QUOTATION_RESPONSE_STATES[number];
@@ -37,11 +42,16 @@ export const DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG: QuotationResponseEngineCo
   version: 1,
   states: {
     VALID_ANSWER: state('{{nextQuestion}}', 'کوتاه، طبیعی و بدون بازنویسی سؤال'),
-    QUESTION_ABOUT_FIELD: state('{{helpResponse}}', 'کارشناس حرفه‌ای، محترمانه، صمیمی و غیررسمیِ کنترل‌شده؛ خطاب همیشه جمع باشد و از عبارت‌های دستوری یا بچگانه استفاده نشود. پاسخ بدون تکرار کامل سؤال، طبیعی و محترمانه پایان یابد.'),
+    QUESTION_ABOUT_CURRENT_FIELD: state('{{helpResponse}}', 'کارشناس حرفه‌ای، محترمانه، صمیمی و غیررسمیِ کنترل‌شده؛ خطاب همیشه جمع باشد و از عبارت‌های دستوری یا بچگانه استفاده نشود. پاسخ بدون تکرار کامل سؤال، طبیعی و محترمانه پایان یابد.'),
+    ANSWER_AND_QUESTION: state('{{helpResponse}}\n\n{{nextQuestion}}', 'ابتدا پاسخ کوتاه و مستند، سپس سؤال واقعی بعدی'),
     RELATED_BUT_WRONG_CATEGORY: state('{{relatedExplanation}}\n{{currentQuestion}}', 'محترمانه و دقیق'),
     AMBIGUOUS: state('{{clarification}}', 'کوتاه و مشخص'),
     UNRELATED: state('{{clarification}}', 'محترمانه و بدون بن‌بست'),
     CORRECTION: state('{{nextQuestion}}', 'کوتاه و تأییدکننده'),
+    MULTI_FIELD_ANSWER: state('{{nextQuestion}}', 'کوتاه و بدون تکرار پاسخ‌های ثبت‌شده'),
+    REQUEST_HUMAN: state('{{clarification}}', 'محترمانه و بدون از دست‌دادن پاسخ‌های قبلی'),
+    CANCEL_OR_PAUSE: state('{{clarification}}', 'محترمانه و با حفظ وضعیت استعلام'),
+    START_NEW_QUOTATION: state('{{clarification}}', 'کوتاه و روشن'),
   },
   questionExamples: {},
 };
@@ -58,12 +68,13 @@ export function parseQuotationResponseEngineConfig(value: string): QuotationResp
     if (!parsed || parsed.version !== 1 || !parsed.states || typeof parsed.states !== 'object') return null;
     const states = {} as Record<QuotationResponseState, QuotationResponseStateRule>;
     for (const key of QUOTATION_RESPONSE_STATES) {
-      const item = parsed.states[key];
+      const legacyStates = parsed.states as Record<string, QuotationResponseStateRule>;
+      const item = legacyStates[key] || (key === 'QUESTION_ABOUT_CURRENT_FIELD' ? legacyStates.QUESTION_ABOUT_FIELD : null) || DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG.states[key];
       if (!item || typeof item.template !== 'string' || typeof item.tone !== 'string') return null;
       states[key] = {
         // Guidance is generated from grounded question context. Never expose raw
         // helpText/currentQuestion through an administrator-authored template.
-        template: key === 'QUESTION_ABOUT_FIELD' ? '{{helpResponse}}' : item.template.trim(),
+        template: key === 'QUESTION_ABOUT_CURRENT_FIELD' ? '{{helpResponse}}' : item.template.trim(),
         tone: item.tone.trim(),
         positiveExamples: cleanLines(item.positiveExamples),
         negativeExamples: cleanLines(item.negativeExamples),

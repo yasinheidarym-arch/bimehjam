@@ -272,6 +272,11 @@ export async function processAiConversation({ conversationId, messageId }: AiPro
   });
 
   const needHuman = quotationCompleted || customerRequestedOperator;
+  const intent = quotationStarted || quotationCompleted
+    ? 'Insurance Quotation'
+    : customerRequestedOperator
+      ? 'Human Operator Request'
+      : 'General Inquiry';
 
   // If customer requested human contact and phone already exists,
   // do not ask quotation workflow questions again.

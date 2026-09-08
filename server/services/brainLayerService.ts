@@ -30,6 +30,7 @@ import {
   shouldWaitForProductPurchaseDecision,
 } from '../../shared/productPurchaseLink';
 import { resolveProductByUrl } from './productIntelligenceService';
+import { buildQuotationAudit } from './quotationAudit';
 import { getQuotationResponseEngineRule, getQuotationRoutingRule } from './aiBehaviorService';
 import {
   categoryProductClarificationReply,
@@ -218,8 +219,9 @@ export async function processBrainLayer(params: {
   restrictKnowledgeScope?: boolean;
   offeredPurchaseLinkProductIds?: string[];
   currentPageUrl?: string | null;
+  messageId?: string;
 }): Promise<BrainResult> {
-  const { customer, conversation, userMessageContent, messageHistory, allowedCategoryId, goftinoPolicyTitle, restrictKnowledgeScope, offeredPurchaseLinkProductIds = [], currentPageUrl: suppliedCurrentPageUrl } = params;
+  const { customer, conversation, userMessageContent, messageHistory, allowedCategoryId, goftinoPolicyTitle, restrictKnowledgeScope, offeredPurchaseLinkProductIds = [], currentPageUrl: suppliedCurrentPageUrl, messageId } = params;
 
   const historyText = messageHistory
     .map((m) => `${m.senderType === 'CUSTOMER' ? 'مشتری' : 'مشاور بیمه جم'}: ${m.content}`)
@@ -238,14 +240,6 @@ export async function processBrainLayer(params: {
   } else if (typeof conversation?.collectedData === 'object' && conversation?.collectedData !== null) {
     existingCollectedData = conversation.collectedData;
   }
-
-  console.log("========== CUSTOMER CONTEXT DEBUG ==========");
-  console.log({
-    name: customer.name,
-    interestedInsuranceTypes: customer.interestedInsuranceTypes,
-    metadata: customer.metadata
-  });
-  console.log("============================================");
 
   let customerMetadata: Record<string, unknown> = {};
   try {
@@ -287,16 +281,6 @@ export async function processBrainLayer(params: {
     },
     existingCollectedData,
   });
-
-  console.log("========== AI KNOWLEDGE DEBUG ==========");
-  console.log(JSON.stringify({
-    matchedProduct: extractedKnowledge.matchedProduct,
-    appliedRulesCount: extractedKnowledge.appliedRules?.length,
-    matchedProductId: extractedKnowledge.matchedProduct?.id,
-    promptFormattedKnowledge: extractedKnowledge.promptFormattedKnowledge?.slice(0, 1000),
-    quotationWorkflow: extractedKnowledge.quotationWorkflow
-  }, null, 2));
-  console.log("========== END AI KNOWLEDGE DEBUG ==========");
 
   // Step 2: Intent & Stage Detection
   const detectedIntent = detectIntent(userMessageContent, historyText);
@@ -474,6 +458,8 @@ export async function processBrainLayer(params: {
         model: classifyQuotationTurnWithAi,
         productKnowledge: quotationGuidanceKnowledge,
         guidanceSelector: selectQuotationGuidanceWithAi,
+        sessionStatus: session.status,
+        recentMessages: messageHistory.map(message => ({ senderType: message.senderType, content: message.content })),
       });
       if (Object.keys(quotationTurn.updates).length) {
         evaluation = await processSessionAnswers(session.id, quotationTurn.updates, 'customer');
@@ -500,6 +486,8 @@ export async function processBrainLayer(params: {
         classification: null, responseText: pendingQuestion ? quotationQuestionReply(pendingQuestion) : null, appliedRule: null,
         guidance: null,
         nextQuestionText: pendingQuestion ? quotationQuestionReply(pendingQuestion) : null,
+        answerValidation: { status: 'CLARIFY', reason: 'Quotation workflow initialized', canonicalValue: null, confidence: 1, fieldName: pendingQuestion?.fieldName || null },
+        decisionSource: 'BACKEND_WORKFLOW_INITIALIZATION',
       };
     }
 
@@ -976,11 +964,6 @@ Call Customer
 
     let completionText = '';
     try {
-      console.log("========== GPT REQUEST DEBUG ==========");
-      console.log("MODEL:", targetModel);
-      console.log("MESSAGES:", JSON.stringify(currentMessages, null, 2));
-      console.log("======================================");
-
       const response = await openai!.chat.completions.create({
         model: targetModel,
         messages: currentMessages,
@@ -993,9 +976,6 @@ Call Customer
       completionTokens += response.usage?.completion_tokens || 0;
       completionText = response.choices[0]?.message?.content || '{}';
 
-      console.log("========== GPT RAW RESPONSE ==========");
-      console.log(completionText);
-      console.log("======================================");
     } catch (err: any) {
       console.error('🔥 BRAIN LAYER PRIMARY ERROR:', {
         message: err.message,
@@ -1038,12 +1018,8 @@ Call Customer
     }
 
 
-    console.log("========== BRAIN POST-GPT DEBUG: BEFORE JSON PARSE ==========");
-
     try {
       const parsed = JSON.parse(completionText);
-
-      console.log("========== BRAIN POST-GPT DEBUG: JSON PARSE SUCCESS ==========");
 
       finalReplyText = parsed.replyText || '';
 
@@ -1061,14 +1037,8 @@ Call Customer
       finalReplyText = completionText;
     }
 
-    console.log("========== BRAIN POST-GPT DEBUG: BEFORE VALIDATION ==========");
-    console.log("FINAL REPLY:", finalReplyText);
-
     // Validate Response against Training Center Policies
     validation = validateResponse(finalReplyText, previousAiReplies, missingInfo);
-
-    console.log("========== BRAIN POST-GPT DEBUG: AFTER VALIDATION ==========");
-    console.log("VALIDATION:", JSON.stringify(validation));
 
     if (validation.valid) {
       if (retryCount > 0) {
@@ -1113,24 +1083,25 @@ Call Customer
     currentPageProductSuggestionDecision: pageProductSuggestionDecision,
     quotationOptionSelection,
     quotationValidation,
+    ...buildQuotationAudit({
+      messageId, conversationId: conversation.id,
+      quotationSessionId: quotationState?.sessionId || null,
+      submissionId: existingCollectedData.quotationSubmission?.idempotencyKey || null,
+      currentFieldName: quotationTurn?.currentQuestionBefore?.fieldName || null,
+      decisionSource: quotationTurn?.decisionSource || 'BRAIN_LAYER',
+      answerValidation: quotationTurn?.answerValidation || null,
+      responseValidation: { status: validationStatus, reason: validation.reason },
+    }),
     quotationTurn: quotationTurn ? { currentQuestionBefore: quotationTurn.currentQuestionBefore, state: quotationTurn.state, classification: quotationTurn.classification, guidance: quotationTurn.guidance, appliedRule: quotationTurn.appliedRule, decisions: quotationTurn.decisions, savedFields: Object.keys(quotationTurn.updates) } : null,
   });
 
   // Record BrainLog in Database
-  console.log("========== BRAINLOG DEBUG: BEFORE CREATE ==========");
-  console.log(JSON.stringify({
-    conversationId: conversation.id,
-    customerId: customer.id,
-    intent,
-    stage,
-    validationResult: validationStatus,
-  }, null, 2));
-
   try {
     await prisma.brainLog.create({
       data: {
       conversationId: conversation.id,
       customerId: customer.id,
+      messageId,
       intent,
       stage,
       missingInfo,
@@ -1145,19 +1116,9 @@ Call Customer
       },
     });
 
-    console.log("========== BRAINLOG DEBUG: CREATE SUCCESS ==========");
-  } catch (brainLogError: any) {
-    console.error("🔥 BRAINLOG CREATE ERROR:", {
-      message: brainLogError?.message,
-      code: brainLogError?.code,
-      meta: brainLogError?.meta,
-      stack: brainLogError?.stack,
-    });
-
+  } catch {
     // BrainLog failure must NOT stop the AI response pipeline.
   }
-
-  console.log("========== BRAINLOG DEBUG: CONTINUING TO RETURN ==========");
 
   const { quotationAnswerValidation: _legacyQuotationValidation, ...existingCollectedDataWithoutLegacyValidation } = existingCollectedData;
   const mergedCollectedData = {
