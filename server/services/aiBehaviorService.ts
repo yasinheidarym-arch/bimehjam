@@ -41,6 +41,14 @@ import {
   serializeQuotationCompletionRule,
 } from '../../shared/quotationCompletionRule';
 import { parseAiBehaviorRuleEnvelope, serializeAiBehaviorRuleEnvelope, type AiBehaviorRuleScope } from '../../shared/aiBehaviorRuntime';
+import {
+  PRODUCT_INTENT_ROUTING_RULE_CATEGORY,
+  PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE,
+  PRODUCT_INTENT_ROUTING_RULE_ID,
+  PRODUCT_INTENT_ROUTING_RULE_SORT_ORDER,
+  PRODUCT_INTENT_ROUTING_RULE_TITLE,
+  LEGACY_BUILDING_INTENT_RULE_TITLE,
+} from '../../shared/productIntentRouting';
 
 export interface AiBehaviorRuleItem {
   id: string;
@@ -136,6 +144,34 @@ async function ensureSeedRules() {
     }).catch(async (error: { code?: string }) => {
       if (error.code !== 'P2002') throw error;
     });
+  }
+
+  const productIntentRule = await prisma.aiRule.findFirst({
+    where: { OR: [
+      { id: PRODUCT_INTENT_ROUTING_RULE_ID },
+      { category: PRODUCT_INTENT_ROUTING_RULE_CATEGORY },
+      { title: PRODUCT_INTENT_ROUTING_RULE_TITLE },
+      { title: LEGACY_BUILDING_INTENT_RULE_TITLE },
+    ] },
+  });
+  if (!productIntentRule) {
+    await prisma.aiRule.create({ data: {
+      id: PRODUCT_INTENT_ROUTING_RULE_ID,
+      title: PRODUCT_INTENT_ROUTING_RULE_TITLE,
+      directive: PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE,
+      sortOrder: PRODUCT_INTENT_ROUTING_RULE_SORT_ORDER,
+      status: 'ACTIVE', category: PRODUCT_INTENT_ROUTING_RULE_CATEGORY, enforcementLevel: 'STRICT',
+    }}).catch((error: { code?: string }) => { if (error.code !== 'P2002') throw error; });
+  } else if (productIntentRule.category !== PRODUCT_INTENT_ROUTING_RULE_CATEGORY) {
+    // Promote the equivalent legacy admin rule instead of creating a duplicate.
+    // This happens once; subsequent manager edits remain untouched.
+    await prisma.aiRule.update({ where: { id: productIntentRule.id }, data: {
+      title: PRODUCT_INTENT_ROUTING_RULE_TITLE,
+      directive: PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE,
+      sortOrder: PRODUCT_INTENT_ROUTING_RULE_SORT_ORDER,
+      category: PRODUCT_INTENT_ROUTING_RULE_CATEGORY,
+      enforcementLevel: 'STRICT',
+    } });
   }
 
   const responseEngineRule = await prisma.aiRule.findFirst({
@@ -425,7 +461,7 @@ export async function updateQuotationQuestionExamples(questionId: string, exampl
  */
 export async function deleteBehaviorRule(id: string): Promise<boolean> {
   const existing = await prisma.aiRule.findUnique({ where: { id }, select: { category: true } });
-  if (existing?.category === FULL_NAME_HANDOFF_RULE_CATEGORY || existing?.category === PURCHASE_LINK_RULE_CATEGORY || existing?.category === QUOTATION_RESPONSE_ENGINE_CATEGORY || existing?.category === QUOTATION_COMPLETION_RULE_CATEGORY) {
+  if (existing?.category === FULL_NAME_HANDOFF_RULE_CATEGORY || existing?.category === PURCHASE_LINK_RULE_CATEGORY || existing?.category === QUOTATION_RESPONSE_ENGINE_CATEGORY || existing?.category === QUOTATION_COMPLETION_RULE_CATEGORY || existing?.category === PRODUCT_INTENT_ROUTING_RULE_CATEGORY) {
     throw new Error('این قانون سیستمی قابل حذف نیست؛ می‌توانید آن را غیرفعال کنید.');
   }
   await prisma.aiRule.delete({

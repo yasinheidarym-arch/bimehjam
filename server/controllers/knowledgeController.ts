@@ -1480,7 +1480,7 @@ export async function deleteArticle(req: Request, res: Response) {
 export async function testAiResponse(req: Request, res: Response) {
   const startTime = Date.now();
   try {
-    const { question, history, customerId, conversationId } = req.body;
+    const { question, history, customerId, conversationId, currentPageUrl, simulationState } = req.body;
     if (!question || typeof question !== 'string') {
       return res.status(400).json({ success: false, error: 'لطفاً متن سوال را وارد کنید.' });
     }
@@ -1504,12 +1504,22 @@ export async function testAiResponse(req: Request, res: Response) {
       name: 'کاربر تست مرکز آموزش',
       city: 'تهران',
       leadScore: 65,
+      metadata: typeof currentPageUrl === 'string' && currentPageUrl.trim()
+        ? JSON.stringify({ lastUrl: currentPageUrl.trim() })
+        : '{}',
     };
 
+    const safeSimulationState = simulationState && typeof simulationState === 'object'
+      ? simulationState as Record<string, unknown>
+      : {};
     const testConversation = {
       id: conversationId || 'sim_conv_test',
       goftinoChatId: 'sim_chat_test',
-      collectedData: {},
+      currentProductId: typeof safeSimulationState.currentProductId === 'string' ? safeSimulationState.currentProductId : null,
+      currentProductName: typeof safeSimulationState.currentProductName === 'string' ? safeSimulationState.currentProductName : null,
+      collectedData: safeSimulationState.collectedData && typeof safeSimulationState.collectedData === 'object'
+        ? safeSimulationState.collectedData
+        : {},
     };
 
     // Execute real Brain Layer with Knowledge Retrieval from Training Center
@@ -1583,6 +1593,12 @@ export async function testAiResponse(req: Request, res: Response) {
         },
         knowledgeUsed: knowledgeUsedList,
         appliedRules: appliedRulesList,
+        productIntentRouting: brainResult.workflowContext?.productIntentRouting || null,
+        simulationState: {
+          currentProductId: brainResult.quotationState?.productId || null,
+          currentProductName: brainResult.quotationState?.productName || null,
+          collectedData: brainResult.collectedData,
+        },
         extractedKnowledge: {
           matchedProduct: brainResult.extractedKnowledge.matchedProduct,
           quotationWorkflow: brainResult.extractedKnowledge.quotationWorkflow,
@@ -1609,6 +1625,12 @@ export async function testAiResponse(req: Request, res: Response) {
           userPrompt: brainResult.userPrompt,
           rawResponse: brainResult.replyText,
           collectedData: brainResult.collectedData,
+          productIntentRouting: brainResult.workflowContext?.productIntentRouting || null,
+          simulationState: {
+            currentProductId: brainResult.quotationState?.productId || null,
+            currentProductName: brainResult.quotationState?.productName || null,
+            collectedData: brainResult.collectedData,
+          },
           validationResult: `${brainResult.validationResult} (${brainResult.validationReason})`,
         },
       },

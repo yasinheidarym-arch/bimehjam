@@ -63,7 +63,7 @@ test('detailed quotation confirmation starts at the first question instead of be
   assert.equal(firstQuestion?.title, 'نوع کاربری ساختمان');
   assert.equal(shouldCaptureCurrentQuestionAnswer(true, firstQuestion, 'استعلام دقیق می‌خواهم'), false);
   assert.deepEqual(purchaseLinkQuotationSelectedState(productId), {
-    status: 'DETAILED_QUOTATION_SELECTED', productId,
+    status: 'DETAILED_QUOTATION_SELECTED', productId, mode: 'ASSISTED', assistedQuestionLimit: 5,
   });
 });
 

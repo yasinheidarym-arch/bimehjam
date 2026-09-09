@@ -374,7 +374,8 @@ export async function extractQuotationAnswersWithGemini(
 export async function processSessionAnswers(
   sessionId: string,
   newAnswers: Record<string, string>,
-  source: 'customer' | 'ai_extracted' | 'operator' = 'customer'
+  source: 'customer' | 'ai_extracted' | 'operator' = 'customer',
+  options: { questionLimit?: number } = {},
 ) {
   return prisma.$transaction(async (tx) => {
   const session = await tx.quotationSession.findUnique({
@@ -438,7 +439,10 @@ export async function processSessionAnswers(
   const allQuestions = [...(session.workflow?.questions || [])].sort(
     (a, b) => a.order - b.order || a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id),
   );
-  const activeQuestions = applicableQuotationQuestions(allQuestions, updatedData);
+  const applicableQuestions = applicableQuotationQuestions(allQuestions, updatedData);
+  const activeQuestions = options.questionLimit && options.questionLimit > 0
+    ? applicableQuestions.slice(0, options.questionLimit)
+    : applicableQuestions;
 
   // Determine missing questions
   const missingQuestions = activeQuestions.filter(

@@ -9,6 +9,7 @@ export const LEGACY_PURCHASE_LINK_RULE_CATEGORY = 'SYSTEM_PURCHASE_LINK_BEFORE_Q
 
 export type QuotationRoutingTemplates = {
   version: 1;
+  assistedQuestionLimit: number;
   acceptanceExamples: string[];
   samePageResponse: string;
   differentPageResponse: string;
@@ -20,6 +21,7 @@ export type QuotationRoutingTemplates = {
 
 export const DEFAULT_QUOTATION_ROUTING_TEMPLATES: QuotationRoutingTemplates = {
   version: 1,
+  assistedQuestionLimit: 5,
   acceptanceExamples: [
     'برام حساب کنید',
     'شما حساب کنید',
@@ -56,6 +58,8 @@ export function parseQuotationRoutingTemplates(value: unknown): QuotationRouting
     }
     if (!String((parsed as Record<string, unknown>).differentPageResponse).includes('{{purchaseUrl}}')) return null;
     const acceptanceExamples = (parsed as Record<string, unknown>).acceptanceExamples;
+    const assistedQuestionLimit = (parsed as Record<string, unknown>).assistedQuestionLimit ?? DEFAULT_QUOTATION_ROUTING_TEMPLATES.assistedQuestionLimit;
+    if (!Number.isInteger(assistedQuestionLimit) || Number(assistedQuestionLimit) < 3 || Number(assistedQuestionLimit) > 5) return null;
     if (acceptanceExamples !== undefined && (
       !Array.isArray(acceptanceExamples) ||
       acceptanceExamples.some((example) => typeof example !== 'string' || !example.trim())
@@ -63,6 +67,7 @@ export function parseQuotationRoutingTemplates(value: unknown): QuotationRouting
     return {
       ...DEFAULT_QUOTATION_ROUTING_TEMPLATES,
       ...(parsed as Partial<QuotationRoutingTemplates>),
+      assistedQuestionLimit: Number(assistedQuestionLimit),
       acceptanceExamples: Array.isArray(acceptanceExamples)
         ? acceptanceExamples.map((example) => String(example).trim())
         : [...DEFAULT_QUOTATION_ROUTING_TEMPLATES.acceptanceExamples],
@@ -210,8 +215,8 @@ export function purchaseLinkAwaitingState(productId: string) {
   return { status: 'AWAITING_CUSTOMER_CHOICE', productId } as const;
 }
 
-export function purchaseLinkQuotationSelectedState(productId: string) {
-  return { status: 'DETAILED_QUOTATION_SELECTED', productId } as const;
+export function purchaseLinkQuotationSelectedState(productId: string, assistedQuestionLimit = DEFAULT_QUOTATION_ROUTING_TEMPLATES.assistedQuestionLimit) {
+  return { status: 'DETAILED_QUOTATION_SELECTED', productId, mode: 'ASSISTED', assistedQuestionLimit } as const;
 }
 
 export function purchaseLinkDecisionLogSummary(productName: string): string {

@@ -27,7 +27,7 @@ import {
 } from '../../shared/productPurchaseLink';
 import { resolveProductByUrl } from './productIntelligenceService';
 import { buildQuotationAudit } from './quotationAudit';
-import { buildAiBehaviorSystemPrompt, classifyConversationIntentWithRuntime, classifyQuotationRoutingWithRuntime, resolveAiBehaviorRules, runAiBehaviorStructuredModel, validateRequestedAction } from './aiBehaviorRuntime';
+import { buildAiBehaviorSystemPrompt, classifyConversationIntentWithRuntime, classifyProductIntentWithRuntime, classifyQuotationRoutingWithRuntime, resolveAiBehaviorRules, runAiBehaviorStructuredModel, validateRequestedAction, type ProductRoutingCandidate } from './aiBehaviorRuntime';
 import { parseQuotationResponseEngineConfig, QUOTATION_RESPONSE_ENGINE_CATEGORY } from '../../shared/quotationResponseEngine';
 import { parseQuotationRoutingTemplates, PURCHASE_LINK_RULE_CATEGORY } from '../../shared/productPurchaseLink';
 import { getQuotationCompletionConfig } from './aiBehaviorService';
@@ -40,6 +40,13 @@ import {
   readCurrentPageProductSuggestion,
   shouldOfferCurrentPageProductSuggestion,
 } from '../../shared/currentPageProductSuggestion';
+import {
+  applyProductIntentClassification,
+  invalidateStaleProductState,
+  PRODUCT_INTENT_ROUTING_RULE_CATEGORY,
+  readProductIntentRoutingState,
+  type ProductIntentClassification,
+} from '../../shared/productIntentRouting';
 
 
 export interface BrainResult {
@@ -91,6 +98,7 @@ export interface BrainResult {
     registrationStatus: string;
     matchedCategory: { id: string; name: string } | null;
     currentPageProductSuggestionDecision: 'NONE' | 'OFFERED' | 'AWAITING_CONFIRMATION' | 'ACCEPTED' | 'REJECTED';
+    productIntentRouting: Record<string, unknown>;
     quotationAnswerValidationReason?: string;
     quotationOptionSelection?: QuotationOptionSelection;
   };
@@ -236,11 +244,115 @@ export async function processBrainLayer(params: {
         categoryId: currentPageMap.product.categoryId || null,
       }
     : null;
-  const existingPageSuggestion = readCurrentPageProductSuggestion(existingCollectedData.currentPageProductSuggestion);
+  let existingPageSuggestion = readCurrentPageProductSuggestion(existingCollectedData.currentPageProductSuggestion);
   let suggestionAccepted = existingPageSuggestion?.status === 'AWAITING_CONFIRMATION' &&
     isCurrentPageProductSuggestionAccepted(userMessageContent);
   let suggestionRejected = existingPageSuggestion?.status === 'AWAITING_CONFIRMATION' &&
     isCurrentPageProductSuggestionRejected(userMessageContent);
+
+  const previousProductRoutingState = readProductIntentRoutingState(existingCollectedData.productIntentRouting);
+  const routingCandidatesRaw = await prisma.insuranceProduct.findMany({
+    where: {
+      status: 'ACTIVE',
+      ...(restrictKnowledgeScope && allowedCategoryId ? { categoryId: allowedCategoryId } : {}),
+    },
+    select: {
+      id: true, name: true, description: true, purchaseUrl: true, categoryId: true,
+      categoryRef: { select: { name: true } },
+      subCategoryRef: { select: { name: true } },
+      urlMaps: { where: { aiEnabled: true }, select: { pageTitle: true } },
+    },
+    orderBy: [{ categoryId: 'asc' }, { name: 'asc' }, { id: 'asc' }],
+  });
+  const routingCandidates: ProductRoutingCandidate[] = routingCandidatesRaw.map(product => ({
+    id: product.id,
+    name: product.name,
+    categoryId: product.categoryId || null,
+    categoryName: product.categoryRef?.name || null,
+    subCategoryName: product.subCategoryRef?.name || null,
+    description: (product.description || '').slice(0, 500),
+    pageTitles: product.urlMaps.map(item => item.pageTitle).filter(Boolean).slice(0, 12),
+    purchaseUrlAvailable: Boolean(product.purchaseUrl),
+  }));
+  const previousActiveProductId = previousProductRoutingState?.activeProductId || conversation.currentProductId || null;
+  let productRoutingResult = applyProductIntentClassification({
+    classification: {
+      decision: 'NO_CHANGE', selectedProductId: null, confidence: 0, explicitCorrection: false,
+      confirmation: 'NONE', intentSummary: '', reason: 'Semantic routing was not available.', clarificationQuestion: null,
+    },
+    candidates: routingCandidates,
+    previous: previousProductRoutingState,
+    legacyActiveProductId: conversation.currentProductId || null,
+    originPageProduct: currentPageProduct ? { id: currentPageProduct.id, name: currentPageProduct.name } : null,
+  });
+  let productRoutingAudit: Record<string, unknown> = {
+    originPageProduct: currentPageProduct,
+    previousActiveProductId,
+    previousConfirmedProductId: previousProductRoutingState?.confirmedProductId || null,
+    decision: 'NO_CHANGE', confidence: 0, reason: 'Semantic routing was not available.',
+    newActiveProductId: productRoutingResult.selectedProductId,
+    appliedRuleIds: [],
+  };
+  if (suggestionAccepted && existingPageSuggestion) {
+    const accepted: ProductIntentClassification = {
+      decision: 'SELECT_PRODUCT', selectedProductId: existingPageSuggestion.productId, confidence: 1,
+      explicitCorrection: false, confirmation: 'EXPLICIT', intentSummary: existingPageSuggestion.productName,
+      reason: 'Customer explicitly accepted the pending current-page product suggestion.', clarificationQuestion: null,
+    };
+    productRoutingResult = applyProductIntentClassification({
+      classification: accepted, candidates: routingCandidates, previous: previousProductRoutingState,
+      legacyActiveProductId: conversation.currentProductId || null,
+      originPageProduct: currentPageProduct ? { id: currentPageProduct.id, name: currentPageProduct.name } : null,
+    });
+    productRoutingAudit = { ...productRoutingAudit, ...accepted, newActiveProductId: productRoutingResult.selectedProductId, source: 'PAGE_SUGGESTION_CONFIRMATION' };
+  } else {
+    try {
+      const semanticProduct = await classifyProductIntentWithRuntime({
+        message: userMessageContent,
+        recentMessages: messageHistory.map(message => ({ senderType: message.senderType, content: message.content })),
+        context: {
+          channel: 'GOFTINO', productId: previousActiveProductId, categoryId: allowedCategoryId || null,
+          currentPageUrl, conversationState: conversation.currentProductId ? 'QUOTATION' : 'GENERAL',
+          messageType: 'CUSTOMER_MESSAGE', userRole: 'CUSTOMER',
+        },
+        candidates: routingCandidates,
+        originPageProductId: previousProductRoutingState?.originPageProductId || currentPageProduct?.id || null,
+        previousActiveProductId,
+        previousConfirmedProductId: previousProductRoutingState?.confirmedProductId || null,
+      });
+      const ruleApplied = semanticProduct.resolution.selected.some(rule => rule.category === PRODUCT_INTENT_ROUTING_RULE_CATEGORY);
+      if (ruleApplied) {
+        productRoutingResult = applyProductIntentClassification({
+          classification: semanticProduct.output, candidates: routingCandidates, previous: previousProductRoutingState,
+          legacyActiveProductId: conversation.currentProductId || null,
+          originPageProduct: currentPageProduct ? { id: currentPageProduct.id, name: currentPageProduct.name } : null,
+        });
+      }
+      productRoutingAudit = {
+        originPageProduct: currentPageProduct,
+        previousActiveProductId,
+        previousConfirmedProductId: previousProductRoutingState?.confirmedProductId || null,
+        ...semanticProduct.output,
+        newActiveProductId: productRoutingResult.selectedProductId,
+        appliedRuleIds: semanticProduct.resolution.selected.map(rule => rule.id),
+        source: ruleApplied ? 'AI_BEHAVIOR_RUNTIME' : 'RULE_INACTIVE',
+      };
+    } catch {
+      // Availability fallback preserves the prior product but never promotes the page hint.
+    }
+  }
+  if (productRoutingResult.changed) {
+    const previousQuestionFields = previousActiveProductId
+      ? (await prisma.quotationQuestion.findMany({ where: { productId: previousActiveProductId }, select: { fieldName: true } })).map(item => item.fieldName)
+      : [];
+    existingCollectedData = invalidateStaleProductState(existingCollectedData, previousQuestionFields);
+    if (productRoutingAudit.source !== 'PAGE_SUGGESTION_CONFIRMATION') {
+      existingPageSuggestion = null;
+      suggestionAccepted = false;
+      suggestionRejected = false;
+    }
+  }
+  existingCollectedData.productIntentRouting = productRoutingResult.state;
 
   // Step 1: Intelligent Knowledge Retrieval from AI Training Center (5 Sources)
   const extractedKnowledge = await retrieveRelevantKnowledgeFromTrainingCenter({
@@ -252,7 +364,7 @@ export async function processBrainLayer(params: {
       pageUrl: currentPageUrl || undefined,
       interestedInsuranceTypes: customer.interestedInsuranceTypes,
       categoryId: allowedCategoryId || null,
-      productId: conversation.currentProductId || (suggestionAccepted ? existingPageSuggestion.productId : null),
+      productId: productRoutingResult.selectedProductId || (suggestionAccepted ? existingPageSuggestion?.productId || null : null),
       restrictToCategory: Boolean(restrictKnowledgeScope),
     },
     existingCollectedData,
@@ -368,6 +480,10 @@ export async function processBrainLayer(params: {
   let quotationTurn: Awaited<ReturnType<typeof advanceQuotationTurn>> | null = null;
   let pageProductSuggestionState: CurrentPageProductSuggestionState | null = existingPageSuggestion;
   let pageProductSuggestionDecision: NonNullable<BrainResult['workflowContext']>['currentPageProductSuggestionDecision'] = 'NONE';
+  const detectedProductConfirmed = Boolean(
+    extractedKnowledge.matchedProduct
+    && productRoutingResult.state.confirmedProductId === extractedKnowledge.matchedProduct.id,
+  );
 
   if (
     suggestionAccepted && existingPageSuggestion &&
@@ -419,10 +535,21 @@ export async function processBrainLayer(params: {
       : currentPageProductSuggestionReply(currentPageProduct.name);
   }
 
+  if (productRoutingResult.clarificationQuestion) {
+    extractedKnowledge.matchedProduct = null;
+    extractedKnowledge.quotationWorkflow = null;
+    extractedKnowledge.productKnowledgeAvailable = false;
+    extractedKnowledge.productSelectionRequired = true;
+    pageProductSuggestionState = null;
+    pageProductSuggestionDecision = 'NONE';
+    deterministicReply = productRoutingResult.clarificationQuestion;
+  }
+
   if (
     !deterministicReply &&
     quotationRoutingRule && routingRuleActive &&
     extractedKnowledge.matchedProduct &&
+    detectedProductConfirmed &&
     extractedKnowledge.matchedProduct.purchaseUrl &&
     (['OFFER_PURCHASE_ROUTE', 'REQUEST_LINK_AGAIN'].includes(semanticRoutingDecision || '') || (!semanticRoutingAvailable && shouldOfferProductPurchaseLink({
       intent,
@@ -457,6 +584,7 @@ export async function processBrainLayer(params: {
     !deterministicReply &&
     quotationRoutingRule && routingRuleActive &&
     extractedKnowledge.matchedProduct &&
+    detectedProductConfirmed &&
     (semanticRoutingDecision === 'WAIT_FOR_PRODUCT_DECISION' || semanticRoutingDecision === 'WAIT_FOR_CHOICE' || (!semanticRoutingAvailable && shouldWaitForProductPurchaseDecision({
       productId: extractedKnowledge.matchedProduct.id,
       purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
@@ -473,7 +601,7 @@ export async function processBrainLayer(params: {
       purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
       currentPageUrl,
     });
-  } else if (!deterministicReply && explicitFormRequested && extractedKnowledge.matchedProduct && quotationRoutingRule && routingRuleActive) {
+  } else if (!deterministicReply && explicitFormRequested && extractedKnowledge.matchedProduct && detectedProductConfirmed && quotationRoutingRule && routingRuleActive) {
     const samePage = isDetectedProductCurrentPage({
       productId: extractedKnowledge.matchedProduct.id,
       currentPageProductId: currentPageProduct?.id,
@@ -485,7 +613,7 @@ export async function processBrainLayer(params: {
       { productName: extractedKnowledge.matchedProduct.name, purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl, currentPageUrl },
     );
   } else if (
-    !deterministicReply && extractedKnowledge.matchedProduct &&
+    !deterministicReply && extractedKnowledge.matchedProduct && detectedProductConfirmed &&
     (intent === 'Insurance Quotation' || conversation.currentProductId === extractedKnowledge.matchedProduct.id)
   ) {
     const product = extractedKnowledge.matchedProduct;
@@ -507,13 +635,23 @@ export async function processBrainLayer(params: {
         && existingCollectedData.quotationSubmission?.productId === product.id
         ? existingCollectedData.quotationSubmission.sessionId : undefined,
     });
-    let evaluation = await processSessionAnswers(session.id, {}, 'customer');
+    const storedAssistedLimit = existingCollectedData.purchaseLinkState?.status === 'DETAILED_QUOTATION_SELECTED'
+      && existingCollectedData.purchaseLinkState?.productId === product.id
+      && Number.isInteger(existingCollectedData.purchaseLinkState?.assistedQuestionLimit)
+      ? Number(existingCollectedData.purchaseLinkState.assistedQuestionLimit)
+      : null;
+    const assistedQuestionLimit = directQuotationRequested
+      ? quotationRoutingRule?.templates.assistedQuestionLimit || 5
+      : storedAssistedLimit;
+    const sessionQuestions = session.workflow?.questions || [];
+    const assistedQuestions = assistedQuestionLimit ? sessionQuestions.slice(0, assistedQuestionLimit) : sessionQuestions;
+    let evaluation = await processSessionAnswers(session.id, {}, 'customer', { questionLimit: assistedQuestionLimit || undefined });
     const workflowWasActive = conversation.currentProductId === product.id;
     const pendingQuestion = evaluation.nextQuestion;
     if (workflowWasActive) {
       quotationTurn = await advanceQuotationTurn({
         sessionId: session.id,
-        questions: session.workflow?.questions || [],
+        questions: assistedQuestions,
         answers: evaluation.collectedData,
         previous: existingCollectedData.quotationTurnState as QuotationTurnState | undefined,
         message: userMessageContent,
@@ -532,7 +670,7 @@ export async function processBrainLayer(params: {
         recentMessages: messageHistory.map(message => ({ senderType: message.senderType, content: message.content })),
       });
       if (Object.keys(quotationTurn.updates).length) {
-        evaluation = await processSessionAnswers(session.id, quotationTurn.updates, 'customer');
+        evaluation = await processSessionAnswers(session.id, quotationTurn.updates, 'customer', { questionLimit: assistedQuestionLimit || undefined });
       }
       quotationInvalidReply = quotationTurn.clarification;
       quotationAnswerValidationReason = quotationTurn.decisions.map(d => `${d.fieldName || 'question'}: ${d.reason}`).join(' | ');
@@ -561,7 +699,7 @@ export async function processBrainLayer(params: {
       };
     }
 
-    const questions = session.workflow?.questions || [];
+    const questions = assistedQuestions;
     const answered = evaluation.collectedData as Record<string, string>;
     const remainingQuestions = evaluation.remainingQuestions.map((question) => question.title);
     const nextQuestion = evaluation.nextQuestion;
@@ -655,6 +793,7 @@ export async function processBrainLayer(params: {
       ? { id: extractedKnowledge.matchedCategoryId, name: extractedKnowledge.matchedCategory }
       : null,
     currentPageProductSuggestionDecision: pageProductSuggestionDecision,
+    productIntentRouting: productRoutingAudit,
     ...(quotationAnswerValidationReason
       ? { quotationAnswerValidationReason }
       : {}),
@@ -819,6 +958,7 @@ export async function processBrainLayer(params: {
       responseValidation: { status: validationStatus, reason: validation.reason },
     }),
     quotationTurn: quotationTurn ? { currentQuestionBefore: quotationTurn.currentQuestionBefore, state: quotationTurn.state, classification: quotationTurn.classification, guidance: quotationTurn.guidance, appliedRule: quotationTurn.appliedRule, decisions: quotationTurn.decisions, savedFields: Object.keys(quotationTurn.updates) } : null,
+    productIntentRouting: productRoutingAudit,
   });
 
   // Record BrainLog in Database
@@ -851,11 +991,12 @@ export async function processBrainLayer(params: {
     ...existingCollectedDataWithoutLegacyValidation,
     ...(extractedKnowledge.quotationWorkflow?.answeredFields || {}),
     ...(!quotationState ? newlyExtractedData : {}),
+    productIntentRouting: productRoutingResult.state,
     ...(quotationTurn ? { quotationTurnState: quotationTurn.state } : {}),
     ...(purchaseLinkOffer
       ? { purchaseLinkState: purchaseLinkAwaitingState(purchaseLinkOffer.productId) }
       : quotationState && directQuotationRequested
-        ? { purchaseLinkState: purchaseLinkQuotationSelectedState(quotationState.productId) }
+        ? { purchaseLinkState: purchaseLinkQuotationSelectedState(quotationState.productId, quotationRoutingRule?.templates.assistedQuestionLimit || 5) }
         : {}),
     ...(pageProductSuggestionState
       ? { currentPageProductSuggestion: pageProductSuggestionState }

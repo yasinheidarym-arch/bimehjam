@@ -1139,6 +1139,9 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
 
   // Prepare collectedData JSON string for persistence
   const updatedCollectedDataStr = JSON.stringify(brainResult.collectedData || {});
+  const productIntentRouting = brainResult.workflowContext?.productIntentRouting;
+  const productIntentChanged = Boolean(productIntentRouting)
+    && productIntentRouting?.previousActiveProductId !== productIntentRouting?.newActiveProductId;
 
   // Update Conversation status & collectedData
   await prisma.conversation.update({
@@ -1158,6 +1161,8 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
               currentProductName: brainResult.quotationState.productName,
               remainingQuestions: JSON.stringify(brainResult.quotationState.remainingQuestions),
             }
+          : productIntentChanged
+            ? { currentProductId: null, currentProductName: null, remainingQuestions: '[]' }
           : {}),
     },
   });

@@ -645,6 +645,13 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
   let matchedProductRaw: any = null;
 
   if (products.length > 0) {
+    // customerContext.productId is no longer the page or a stale conversational
+    // hint. It is a backend-validated product-routing decision, so it is the
+    // authoritative candidate for this turn and must not be re-ranked by old
+    // transcript words.
+    if (params.customerContext?.productId) {
+      matchedProductRaw = products.find(product => product.id === params.customerContext?.productId) || null;
+    }
     const scoredProducts = products.map((product) => {
       const productName = normalizeForMatch(product.name);
       const productWords = tokenize(productName);
@@ -711,7 +718,9 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
 
     // Product is activated only when subcategory is identified.
     // Category alone is not enough to load product knowledge or quotation workflow.
-    if (best && params.customerContext?.productId && best.product.id === params.customerContext.productId) {
+    if (matchedProductRaw) {
+      // Already selected from the validated routing context above.
+    } else if (best && params.customerContext?.productId && best.product.id === params.customerContext.productId) {
       matchedProductRaw = best.product;
     } else if (best && (matchedSubCategoryRaw || best.directMatch)) {
       matchedProductRaw = best.product;

@@ -13,6 +13,10 @@ import { QUOTATION_RESPONSE_ENGINE_CATEGORY } from '../../shared/quotationRespon
 import { QUOTATION_COMPLETION_RULE_CATEGORY } from '../../shared/quotationCompletionRule';
 import { FULL_NAME_HANDOFF_RULE_CATEGORY } from '../../shared/humanHandoffRule';
 import { CATEGORY_KNOWLEDGE_PREFIX } from './categoryKnowledgeScope';
+import {
+  PRODUCT_INTENT_ROUTING_RULE_CATEGORY,
+  type ProductIntentClassification,
+} from '../../shared/productIntentRouting';
 
 export type AiBehaviorContext = {
   channel: string;
@@ -81,6 +85,7 @@ const SYSTEM_CATEGORIES = new Set([
   QUOTATION_RESPONSE_ENGINE_CATEGORY,
   QUOTATION_COMPLETION_RULE_CATEGORY,
   FULL_NAME_HANDOFF_RULE_CATEGORY,
+  PRODUCT_INTENT_ROUTING_RULE_CATEGORY,
 ]);
 
 function runtimeVersion(rule: AiBehaviorRuleRecord): string {
@@ -116,6 +121,7 @@ function implicitScope(category: string): AiBehaviorRuleScope {
   if (category === PURCHASE_LINK_RULE_CATEGORY) return { intents: ['Insurance Quotation'] };
   if (category === QUOTATION_COMPLETION_RULE_CATEGORY) return { quotationStates: ['AWAITING_DELIVERY_CHOICE', 'PROCESSING', 'SUBMITTED', 'FAILED'] };
   if (category === FULL_NAME_HANDOFF_RULE_CATEGORY) return { conversationStates: ['COLLECTING_PROFILE', 'HUMAN_HANDOFF'] };
+  if (category === PRODUCT_INTENT_ROUTING_RULE_CATEGORY) return { channels: ['GOFTINO'], messageTypes: ['CUSTOMER_MESSAGE'], userRoles: ['CUSTOMER'] };
   if (category.startsWith(CATEGORY_KNOWLEDGE_PREFIX)) return { categoryIds: [category.slice(CATEGORY_KNOWLEDGE_PREFIX.length)] };
   // Legacy CUSTOM rules are retained for customer chat only. Unknown legacy
   // categories are deliberately not promoted to global rules.
@@ -267,6 +273,61 @@ export async function classifyQuotationRoutingWithRuntime(input: {
       required: ['decision', 'confidence', 'reason'],
     },
     payload: { message: input.message, recentMessages: input.recentMessages.slice(-6), routing: input.routing },
+  });
+}
+
+export type ProductRoutingCandidate = {
+  id: string;
+  name: string;
+  categoryId: string | null;
+  categoryName: string | null;
+  subCategoryName: string | null;
+  description: string;
+  pageTitles: string[];
+  purchaseUrlAvailable: boolean;
+};
+
+export async function classifyProductIntentWithRuntime(input: {
+  message: string;
+  recentMessages: Array<{ senderType: string; content: string }>;
+  context: AiBehaviorContext;
+  candidates: ProductRoutingCandidate[];
+  originPageProductId: string | null;
+  previousActiveProductId: string | null;
+  previousConfirmedProductId: string | null;
+}) {
+  return runAiBehaviorStructuredModel<ProductIntentClassification>({
+    context: input.context,
+    taskContract: [
+      'فقط محصول موردنیاز مشتری را از candidateهای واقعی طبقه‌بندی کن؛ متن پاسخ نهایی یا عملیات تولید نکن.',
+      'اولویت قطعی: اصلاح/نیاز صریح در آخرین پیام، سپس intent تأییدشده گفتگو، سپس استنباط قوی، و در آخر محصول صفحه فقط به‌عنوان hint.',
+      'اگر آخرین پیام پاسخ یک سؤال استعلامی و فاقد نشانه تغییر نیاز است، KEEP_ACTIVE بده.',
+      'اگر نیاز جدید با محصول قبلی ناسازگار است SELECT_PRODUCT یا در ابهام واقعی CLEAR_AND_CLARIFY بده؛ محصول قبلی را صرفاً به علت state یا صفحه حفظ نکن.',
+      'در ساختمان، مرحله ساخت/تخریب/بازسازی را از کاربری آینده جدا کن. «مسکونی» بودن پروژه در حال ساخت، آن را مسئولیت مدیر ساختمان نمی‌کند.',
+      'selectedProductId فقط باید ID دقیق یکی از candidateها یا null باشد. سؤال رفع ابهام فقط یک سؤال کوتاه و غیرترکیبی باشد.',
+    ].join('\n'),
+    schemaName: 'product_intent_routing',
+    schema: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        decision: { type: 'string', enum: ['KEEP_ACTIVE', 'SELECT_PRODUCT', 'CLEAR_AND_CLARIFY', 'CATEGORY_ONLY', 'NO_CHANGE'] },
+        selectedProductId: { type: ['string', 'null'] },
+        confidence: { type: 'number', minimum: 0, maximum: 1 },
+        explicitCorrection: { type: 'boolean' },
+        confirmation: { type: 'string', enum: ['EXPLICIT', 'STRONG_INFERENCE', 'NONE'] },
+        intentSummary: { type: 'string' }, reason: { type: 'string' },
+        clarificationQuestion: { type: ['string', 'null'] },
+      },
+      required: ['decision', 'selectedProductId', 'confidence', 'explicitCorrection', 'confirmation', 'intentSummary', 'reason', 'clarificationQuestion'],
+    },
+    payload: {
+      message: input.message,
+      recentMessages: input.recentMessages.slice(-8),
+      originPageProductId: input.originPageProductId,
+      previousActiveProductId: input.previousActiveProductId,
+      previousConfirmedProductId: input.previousConfirmedProductId,
+      candidates: input.candidates,
+    },
   });
 }
 

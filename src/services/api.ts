@@ -326,8 +326,12 @@ export const knowledgeService = {
   },
 
   // 6. Live AI Test
-  testAi: async (question: string, history?: Array<{ role: 'user' | 'assistant'; content: string }>) => {
-    return apiClient.post('/knowledge/test-ai', { question, history });
+  testAi: async (
+    question: string,
+    history?: Array<{ role: 'user' | 'assistant'; content: string }>,
+    context?: { currentPageUrl?: string; simulationState?: Record<string, unknown> },
+  ) => {
+    return apiClient.post('/knowledge/test-ai', { question, history, ...context });
   },
 
   // 7. Quotation Questions inside Insurance Product

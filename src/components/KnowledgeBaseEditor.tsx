@@ -111,7 +111,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       appliedRules: Array<{ title: string; enforcement: string; directive: string }>;
       details?: any;
     };
-  }>>([
+  }>>([ 
     {
       id: 'msg-welcome-1',
       sender: 'ai',
@@ -119,6 +119,8 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       timestamp: new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
+  const [chatCurrentPageUrl, setChatCurrentPageUrl] = useState('');
+  const [chatSimulationState, setChatSimulationState] = useState<Record<string, unknown>>({});
   const [chatInput, setChatInput] = useState<string>('');
   const [chatLoading, setChatLoading] = useState<boolean>(false);
   const [expandedKnowledgeMap, setExpandedKnowledgeMap] = useState<{ [msgId: string]: boolean }>({});
@@ -934,7 +936,10 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     }));
 
     try {
-      const res = await knowledgeService.testAi(query, historyPayload);
+      const res = await knowledgeService.testAi(query, historyPayload, {
+        currentPageUrl: chatCurrentPageUrl.trim() || undefined,
+        simulationState: chatSimulationState,
+      });
 
       console.log("===== TEST AI FRONT RESPONSE =====");
       console.log(res);
@@ -943,6 +948,8 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       const data = res.data || res;
 
       if (data) {
+        const nextSimulationState = data.simulationState || data.details?.simulationState;
+        if (nextSimulationState && typeof nextSimulationState === 'object') setChatSimulationState(nextSimulationState);
         const aiMsgId = 'ai-' + Date.now();
         const newAiMsg = {
           id: aiMsgId,
@@ -973,6 +980,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
   };
 
   const handleResetChat = () => {
+    setChatSimulationState({});
     setChatMessages([
       {
         id: 'msg-welcome-1',
@@ -1231,6 +1239,19 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
             <RotateCcw className="w-3.5 h-3.5" />
             <span>شروع گفت‌وگوی جدید</span>
           </button>
+        </div>
+
+        <div className="border-b border-slate-800 bg-slate-950 px-5 py-2.5">
+          <label className="flex flex-col gap-1 text-[10px] text-slate-400 md:flex-row md:items-center">
+            <span className="shrink-0 font-bold">صفحهٔ مبدأ شبیه‌سازی (اختیاری):</span>
+            <input
+              dir="ltr"
+              value={chatCurrentPageUrl}
+              onChange={(event) => setChatCurrentPageUrl(event.target.value)}
+              placeholder="https://bimejam.com/..."
+              className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs text-slate-200 outline-none focus:border-indigo-500"
+            />
+          </label>
         </div>
 
         {/* Chat Messages Body */}
@@ -3690,6 +3711,11 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                   <p className="text-[11px] leading-relaxed text-indigo-700">
                     متغیرهای مجاز: <code>{'{{productName}}'}</code>، <code>{'{{purchaseUrl}}'}</code> و <code>{'{{currentPageUrl}}'}</code>
                   </p>
+                  <label className="block space-y-1">
+                    <span className="font-bold text-slate-700">حداکثر سؤال در مسیر کمکی:</span>
+                    <input type="number" min={3} max={5} required value={behaviorForm.routingTemplates.assistedQuestionLimit} onChange={(e) => setBehaviorForm({ ...behaviorForm, routingTemplates: { ...behaviorForm.routingTemplates!, assistedQuestionLimit: Math.max(3, Math.min(5, Number(e.target.value) || 3)) } })} className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white" />
+                    <span className="text-[10px] text-slate-500">پس از نپذیرفتن فرم آنلاین، فقط ۳ تا ۵ سؤال ضروری نخست پرسیده می‌شود.</span>
+                  </label>
                   <label className="block space-y-1">
                     <span className="font-bold text-slate-700">نمونه عبارت‌های پذیرش استعلام چتی:</span>
                     <textarea
