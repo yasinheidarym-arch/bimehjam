@@ -75,24 +75,25 @@ export async function selectQuotationGuidanceWithAi(input: {
   message: string;
   question: QuotationTurnQuestion;
   knowledge: string;
-  source: 'HELP_TEXT' | 'PRODUCT_KNOWLEDGE';
+  source: 'HELP_TEXT' | 'PRODUCT_KNOWLEDGE' | 'CATEGORY_KNOWLEDGE' | 'GENERAL_MODEL_KNOWLEDGE';
   sourceText: string;
   tone: string;
   helpText?: string;
   productKnowledge?: string;
+  categoryKnowledge?: string;
   allowedOptions?: string[];
   behaviorContext?: { channel: string; productId?: string | null; categoryId?: string | null; currentPageUrl?: string | null; intent?: string | null; conversationState?: string | null; quotationState?: string | null; currentField?: string | null; messageType?: string | null; userRole?: string | null };
 }) {
   const result = await runAiBehaviorStructuredModel<Record<string, unknown>>({
     context: { ...input.behaviorContext, channel: input.behaviorContext?.channel || 'GOFTINO', conversationState: 'QUOTATION', currentField: input.question.fieldName },
-    taskContract: 'پاسخ راهنمای کوتاه و طبیعی بساز. اول کفایت helpText را بسنج، سپس دانش محصول، دانش عمومی محدود و در پایان محدودیت صادقانه. مبلغ، گزینه، پوشش یا شرط اختصاصی نساز. source و passages را دقیق گزارش کن؛ متن کامل سؤال را تکرار نکن.',
+    taskContract: `فقط با منبع تعیین‌شده در payload پاسخ راهنمای کوتاه و طبیعی بساز. اگر source از نوع دانش ذخیره‌شده است، هیچ ادعایی بیرون از sourceText نساز. اگر GENERAL_MODEL_KNOWLEDGE است فقط توضیح عمومی مفهومی بده و مبلغ، گزینه، پوشش، استثنا یا شرط اختصاصی بیمه نساز؛ اگر پاسخ مطمئن ممکن نیست source خروجی را HONEST_LIMITATION قرار بده. در سایر حالت‌ها source خروجی دقیقاً برابر source ورودی باشد؛ متن کامل سؤال را تکرار نکن.`,
     schemaName: 'quotation_grounded_guidance',
     schema: {
         type: 'object', additionalProperties: false,
         properties: {
           helpResponse: { type: 'string', maxLength: 600 },
           passages: { type: 'array', maxItems: 2, items: { type: 'string' } },
-          source: { type: 'string', enum: ['HELP_TEXT', 'PRODUCT_KNOWLEDGE', 'GENERAL_MODEL_KNOWLEDGE', 'HONEST_LIMITATION'] },
+          source: { type: 'string', enum: ['HELP_TEXT', 'PRODUCT_KNOWLEDGE', 'CATEGORY_KNOWLEDGE', 'GENERAL_MODEL_KNOWLEDGE', 'HONEST_LIMITATION'] },
         },
         required: ['helpResponse', 'passages', 'source'],
     },

@@ -618,7 +618,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
     const fullNameHandoffRuleActive = await isFullNameHandoffRuleActive();
     const humanHandoffConfig = await getHumanHandoffRuleConfig();
     const quotationCompletionConfig = await getQuotationCompletionConfig();
-    const quotationCompletionPrompt = quotationCompletionConfig.choicePrompt;
+    const quotationCompletionPrompt = quotationCompletionConfig?.choicePrompt || '';
     const quotationFinalizationRules = await getQuotationFinalizationRuleContext();
 
     let terminalSubmission = existingCollectedData.quotationSubmission
@@ -638,7 +638,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
           },
         })
       : null;
-    const terminalDecision = terminalSubmission && terminalClassification
+    const terminalDecision = terminalSubmission && terminalClassification && quotationCompletionConfig
       ? handleTerminalQuotationSubmission(terminalSubmission, terminalClassification.intent, quotationCompletionConfig)
       : null;
     if (terminalDecision?.action === 'RETRY') pendingQuotationSubmission = terminalDecision.state;
@@ -661,7 +661,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         after: { status: terminalSubmission.status, step: terminalSubmission.step },
         behaviorRuntime: terminalClassification?.behaviorRuntime,
       };
-    } else if (pendingQuotationSubmission) {
+    } else if (pendingQuotationSubmission && quotationCompletionConfig && humanHandoffConfig) {
       const finalizationBefore = { status: pendingQuotationSubmission.status, step: pendingQuotationSubmission.step };
       const submissionMessage = terminalDecision?.action === 'RETRY'
         ? (terminalDecision.route === 'CALL' ? 'تماس' : 'اعلام قیمت در چت')
@@ -773,7 +773,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         },
         behaviorRuntime: deliveryChoiceBehaviorRuntime,
       };
-    } else if (pendingHandoff) {
+    } else if (pendingHandoff && humanHandoffConfig) {
       const decision = resolveHumanHandoffNameRule({
         ruleActive: fullNameHandoffRuleActive,
         reason: pendingHandoff.reason,
@@ -812,7 +812,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
       }
     } else if (policyDecision.kind === 'HANDOFF') {
       brainResult = policyHandoffResult(
-        humanHandoffConfig.policyBlockedPrompt,
+        humanHandoffConfig?.policyBlockedPrompt || 'پاسخ خودکار تخصصی برای این رشته فعال نیست.',
         `Goftino policy decision: ${policyDecision.reason}`,
       );
       await createAiLog({
@@ -823,7 +823,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         status: 'WARNING',
         details: `پاسخ تخصصی AI متوقف شد: ${policyDecision.reason}`,
       });
-    } else if (customerRequestedHuman && !productQuotationActive) {
+    } else if (customerRequestedHuman && !productQuotationActive && humanHandoffConfig) {
       const decision = resolveHumanHandoffNameRule({ ruleActive: fullNameHandoffRuleActive, reason: 'DIRECT_HUMAN_REQUEST', existingCustomerName: customer.name, prompts: humanHandoffConfig });
       if (decision.action === 'ASK_NAME') {
         brainResult = humanHandoffResult({
@@ -875,7 +875,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         messageId,
       });
 
-      if (brainResult.quotationState?.isCompleted && brainResult.task?.create && !terminalSubmission) {
+      if (brainResult.quotationState?.isCompleted && brainResult.task?.create && !terminalSubmission && quotationCompletionConfig && humanHandoffConfig) {
         const answeredFields = brainResult.extractedKnowledge.quotationWorkflow?.answeredFields || {};
         const answers = (brainResult.extractedKnowledge.quotationWorkflow?.allQuestions || [])
           .filter((question) => answeredFields[question.fieldName] !== undefined && answeredFields[question.fieldName] !== '')

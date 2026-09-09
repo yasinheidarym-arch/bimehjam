@@ -27,6 +27,7 @@ export type AiBehaviorRuleScope = {
 };
 
 export type AiBehaviorRuleEnvelope = {
+  kind?: 'AI_BEHAVIOR_RULE';
   version: 1;
   instruction: string;
   scope?: AiBehaviorRuleScope;
@@ -45,8 +46,13 @@ export function parseAiBehaviorRuleEnvelope(value: unknown): AiBehaviorRuleEnvel
   try {
     const parsed = JSON.parse(value) as Record<string, unknown>;
     if (parsed.version !== AI_BEHAVIOR_RUNTIME_VERSION || typeof parsed.instruction !== 'string' || !parsed.instruction.trim()) return null;
+    // System rule configs also contain `version` and `instruction`. They are not
+    // generic runtime envelopes unless they explicitly identify themselves or
+    // carry one of the envelope-only routing fields.
+    if (parsed.kind !== 'AI_BEHAVIOR_RULE' && !Object.prototype.hasOwnProperty.call(parsed, 'scope') && !Object.prototype.hasOwnProperty.call(parsed, 'conflictKey')) return null;
     const rawScope = parsed.scope && typeof parsed.scope === 'object' ? parsed.scope as Record<string, unknown> : {};
     return {
+      kind: 'AI_BEHAVIOR_RULE',
       version: AI_BEHAVIOR_RUNTIME_VERSION,
       instruction: parsed.instruction.trim(),
       scope: {
@@ -70,6 +76,7 @@ export function parseAiBehaviorRuleEnvelope(value: unknown): AiBehaviorRuleEnvel
 export function serializeAiBehaviorRuleEnvelope(value: AiBehaviorRuleEnvelope): string {
   if (!value.instruction.trim()) throw new Error('متن قانون رفتار نمی‌تواند خالی باشد.');
   return JSON.stringify({
+    kind: 'AI_BEHAVIOR_RULE',
     version: AI_BEHAVIOR_RUNTIME_VERSION,
     instruction: value.instruction.trim(),
     scope: value.scope || {},

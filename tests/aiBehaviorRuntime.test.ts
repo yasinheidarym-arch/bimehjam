@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildAiBehaviorSystemPrompt, resolveAiBehaviorRulesFromRecords, validateRequestedAction, type AiBehaviorRuleRecord } from '../server/services/aiBehaviorRuntime';
+import { buildAiBehaviorSystemPrompt, quotationBehaviorContext, resolveAiBehaviorRulesFromRecords, validateRequestedAction, type AiBehaviorRuleRecord } from '../server/services/aiBehaviorRuntime';
 import { serializeAiBehaviorRuleEnvelope } from '../shared/aiBehaviorRuntime';
+import { FULL_NAME_HANDOFF_RULE_CATEGORY, FULL_NAME_HANDOFF_RULE_DIRECTIVE } from '../shared/humanHandoffRule';
+import { categoryKnowledgeScope } from '../server/services/categoryKnowledgeScope';
 
 const now = '2026-09-08T00:00:00.000Z';
 const rule = (id: string, directive: string, extra: Partial<AiBehaviorRuleRecord> = {}): AiBehaviorRuleRecord => ({
@@ -57,6 +59,27 @@ test('scope mismatch, malformed config and no relevant rule fall back safely', (
 test('model actions are restricted by the backend allowlist', () => {
   assert.equal(validateRequestedAction('DELETE_DATABASE', ['NONE', 'REQUEST_HUMAN']), 'NONE');
   assert.equal(validateRequestedAction('REQUEST_HUMAN', ['NONE', 'REQUEST_HUMAN']), 'REQUEST_HUMAN');
+});
+
+test('system config JSON receives its implicit state scope instead of becoming global', () => {
+  const systemRule = rule('handoff', FULL_NAME_HANDOFF_RULE_DIRECTIVE, { category: FULL_NAME_HANDOFF_RULE_CATEGORY });
+  const greeting = resolveAiBehaviorRulesFromRecords([systemRule], { channel: 'GOFTINO', conversationState: 'GENERAL', messageType: 'CUSTOMER_MESSAGE' });
+  const handoff = resolveAiBehaviorRulesFromRecords([systemRule], { channel: 'GOFTINO', conversationState: 'HUMAN_HANDOFF', messageType: 'CUSTOMER_MESSAGE' });
+  assert.equal(greeting.selected.length, 0);
+  assert.deepEqual(handoff.selected.map(item => item.id), ['handoff']);
+});
+
+test('legacy category rule is limited to its stable category id', () => {
+  const categoryRule = rule('category-rule', 'فقط قانون همین دسته', { category: categoryKnowledgeScope('c1') });
+  assert.equal(resolveAiBehaviorRulesFromRecords([categoryRule], context).selected.length, 1);
+  assert.equal(resolveAiBehaviorRulesFromRecords([categoryRule], { ...context, categoryId: 'c2' }).selected.length, 0);
+});
+
+test('simulator and production quotation turns share one canonical runtime context', () => {
+  const production = quotationBehaviorContext({ productId: 'p1', categoryId: 'c1', currentPageUrl: 'https://example.test/p1', currentField: 'age' });
+  const simulator = quotationBehaviorContext({ channel: 'SIMULATOR', productId: 'p1', categoryId: 'c1', currentPageUrl: 'https://example.test/p1', currentField: 'age' });
+  assert.deepEqual(simulator, production);
+  assert.deepEqual(resolveAiBehaviorRulesFromRecords([rule('r', 'رفتار')], simulator).selected.map(item => item.id), resolveAiBehaviorRulesFromRecords([rule('r', 'رفتار')], production).selected.map(item => item.id));
 });
 
 test('legacy business prompt cannot override runtime prompt', () => {

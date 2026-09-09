@@ -12,8 +12,8 @@ import {
   updateQuotationQuestionExamples,
 } from '../services/aiBehaviorService';
 import { advanceQuotationTurn } from '../services/quotationStateMachine';
-import { classifyQuotationTurnWithAi } from '../services/quotationClassifierService';
-import { resolveAiBehaviorRules } from '../services/aiBehaviorRuntime';
+import { classifyQuotationTurnWithAi, selectQuotationGuidanceWithAi } from '../services/quotationClassifierService';
+import { quotationBehaviorContext, resolveAiBehaviorRules } from '../services/aiBehaviorRuntime';
 import {
   seedProductMapData,
   resolveProductByUrl,
@@ -1004,16 +1004,29 @@ export async function deleteQuotationQuestion(req: Request, res: Response) {
 
 export async function simulateQuotationResponse(req: Request, res: Response) {
   try {
-    const { question, questions, answers, message } = req.body || {};
+    const { question, questions, answers, message, productKnowledge, categoryKnowledge, history, currentPageUrl, productId, categoryId, quotationState } = req.body || {};
     if (!question || typeof message !== 'string') return res.status(400).json({ success: false, error: 'question and message are required' });
     const allQuestions = Array.isArray(questions) && questions.length ? questions : [question];
     const rule = await getQuotationResponseEngineRule();
-    const runtimeContext = { channel: 'SIMULATOR', conversationState: 'QUOTATION', quotationState: 'IN_PROGRESS', currentField: question.fieldName || null, messageType: 'CUSTOMER_MESSAGE', userRole: 'CUSTOMER' };
+    // The simulator uses the exact customer-chat decision context. Only side
+    // effects are omitted by this controller.
+    const runtimeContext = quotationBehaviorContext({
+      productId: typeof productId === 'string' ? productId : null,
+      categoryId: typeof categoryId === 'string' ? categoryId : null,
+      currentPageUrl: typeof currentPageUrl === 'string' ? currentPageUrl : null,
+      quotationState: typeof quotationState === 'string' ? quotationState : 'IN_PROGRESS',
+      currentField: question.fieldName || null,
+    });
     const behaviorRuntime = await resolveAiBehaviorRules(runtimeContext);
     const result = await advanceQuotationTurn({
       sessionId: 'admin-simulator', questions: allQuestions, answers: answers && typeof answers === 'object' ? answers : {}, message,
       engine: rule ? { active: rule.status === 'ACTIVE', title: rule.title, priority: rule.sortOrder, config: rule.config } : null,
       model: classifyQuotationTurnWithAi,
+      productKnowledge: typeof productKnowledge === 'string' ? productKnowledge : '',
+      categoryKnowledge: typeof categoryKnowledge === 'string' ? categoryKnowledge : '',
+      guidanceSelector: selectQuotationGuidanceWithAi,
+      recentMessages: Array.isArray(history) ? history.filter(item => item && typeof item.senderType === 'string' && typeof item.content === 'string').slice(-8) : [],
+      sessionStatus: typeof quotationState === 'string' ? quotationState : 'IN_PROGRESS',
       behaviorContext: runtimeContext,
     });
     return res.status(200).json({ success: true, data: {

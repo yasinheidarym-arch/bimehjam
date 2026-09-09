@@ -1,9 +1,5 @@
 import prisma from '../db/client';
 import { applicableQuotationQuestions } from './quotationStateMachine';
-import { GoogleGenAI } from '@google/genai';
-
-const apiKey = process.env.GEMINI_API_KEY;
-const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
 
 /**
  * Seed default Quotation Workflows for all Insurance Products
@@ -364,51 +360,12 @@ export async function extractQuotationAnswersWithGemini(
   customerMessage: string,
   questions: Array<{ fieldName: string; title: string; type: string; options?: string | null }>
 ): Promise<Record<string, string>> {
-  if (!ai || !customerMessage.trim() || questions.length === 0) {
-    return {};
-  }
-
-  try {
-    const fieldsDescription = questions
-      .map(
-        (q) =>
-          `- ${q.fieldName}: ${q.title} (نوع: ${q.type}${
-            q.options && q.options !== '[]' ? `, گزینه‌ها: ${q.options}` : ''
-          })`
-      )
-      .join('\n');
-
-    const prompt = `شما یک ماژول استخراج داده‌های فرم بیمه هستید.
-متن پیام مشتری: "${customerMessage}"
-
-فیلدهای موردنظر جهت استخراج:
-${fieldsDescription}
-
-دستورالعمل:
-متن مشتری را دقیقاً بررسی کنید. اگر کاربر به هر یک از فیلدهای فوق پاسخ داده یا مقداری برای آن ذکر کرده است (حتی اگر چند فیلد را همزمان در یک جمله گفته باشد، مانند "ساختمان ۵ طبقه، ۲۰ واحد، ۲ آسانسور")، مقادیر آن‌ها را استخراج کنید.
-خروجی فقط و فقط باید یک آرایه JSON متناظر باشد و هیچ متن اضافه، markdown یا توضیح دیگری نداشته باشد.
-
-فرمت خروجی مطلوب:
-{
-  "extracted": {
-    "fieldName1": "مقدار1",
-    "fieldName2": "مقدار2"
-  }
-}`;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
-    });
-
-    const text = response.text || '';
-    const cleanJson = text.replace(/```json/gi, '').replace(/```/g, '').trim();
-    const parsed = JSON.parse(cleanJson);
-    return parsed.extracted || {};
-  } catch (error) {
-    console.error('Error extracting quotation answers with Gemini:', error);
-    return {};
-  }
+  void customerMessage;
+  void questions;
+  // Retained as a compatibility export for external callers. The legacy
+  // independent-model path is disabled; active quotation interpretation is
+  // exclusively handled by aiBehaviorRuntime + the backend validator.
+  return {};
 }
 
 /**
@@ -533,72 +490,8 @@ export async function generateQuotationEnginePromptContext(params: {
   customerUrl?: string;
   customerMessage: string;
 }): Promise<string> {
-  const { resolveProductByUrl } = await import('./productIntelligenceService');
-
-  // 1. Identify product from URL or message
-  let resolvedMap = null;
-  if (params.customerUrl) {
-    resolvedMap = await resolveProductByUrl(params.customerUrl);
-  }
-
-  if (!resolvedMap || !resolvedMap.product) return '';
-
-  const product = resolvedMap.product;
-
-  // 2. Get or create Quotation Session
-  const session = await getOrCreateQuotationSession({
-    conversationId: params.conversationId,
-    productId: product.id,
-  });
-
-  // 3. Extract any answers from customer message
-  const questions = session.workflow?.questions || [];
-  if (questions.length > 0 && params.customerMessage) {
-    const extracted = await extractQuotationAnswersWithGemini(params.customerMessage, questions);
-    if (Object.keys(extracted).length > 0) {
-      await processSessionAnswers(session.id, extracted, 'ai_extracted');
-    }
-  }
-
-  // 4. Re-evaluate session state
-  const evaluation = await processSessionAnswers(session.id, {}, 'customer');
-
-  const collectedEntries = Object.entries(evaluation.collectedData);
-  const collectedSummaryText =
-    collectedEntries.length > 0
-      ? collectedEntries.map(([k, v]) => `  • ${k}: ${v}`).join('\n')
-      : '  (هنوز پاسخی ثبت نشده است)';
-
-  if (evaluation.isCompleted) {
-    return `
-✅ تکمیل کامل فرآیند استعلام قیمت (${product.name}):
-- تمام سوالات استعلام قیمت با موفقیت دریافت گردید:
-${collectedSummaryText}
-
-🛑 دستورالعمل پاسخ هوش مصنوعی:
-۱. پرسش‌های بیمه‌ای کامل شده‌اند، اما ثبت درخواست هنوز انجام نشده است.
-۲. هیچ قیمت قطعی، کد، زمان تضمینی یا ادعای ارجاع مطرح نکنید؛ جمع‌آوری اطلاعات تماس و تأیید نهایی در لایهٔ قطعی بعدی انجام می‌شود.
-`;
-  }
-
-  const nextQ = evaluation.nextQuestion;
-  if (!nextQ) return '';
-
-  return `
-📋 موتور جریان هوشمند استعلام قیمت (Dynamic Quotation Engine):
-- محصول جاری: "${product.name}"
-- پیشرفت استعلام: ${evaluation.completedAnswersCount} از ${evaluation.totalQuestionsCount} سوال دریافت شده است.
-
-مشخصات دریافت شده تا این لحظه:
-${collectedSummaryText}
-
-🎯 سوال اختصاصی بعدی که باید **دقیقاً همین الان** از کاربر بپرسید:
-👉 "${nextQ.title}" ${nextQ.options && nextQ.options !== '[]' ? `(گزینه‌ها: ${nextQ.options})` : ''}
-
-🛑 قوانین صریح جریان سوالات:
-۱. **قانون طلایی**: فقط و فقط یک سوال مطرح کنید (دقیقاً همان سوال فوق).
-۲. هرگز سوالات قبلی دریافت شده را تکرار نکنید.
-۳. اگر کاربر اطلاعات دیگری ارائه داد، آن را ثبت کرده و سپس به سوال فوق بازگردید.
-۴. بعد از دریافت پاسخ این سوال، سیستم به‌صورت خودکار سوال بعدی را در پیام بعدی بارگذاری خواهد کرد.
-`;
+  void params;
+  // The callerless legacy prompt path is intentionally inert. Production uses
+  // the shared runtime/state-machine path and must not assemble a second prompt.
+  return '';
 }

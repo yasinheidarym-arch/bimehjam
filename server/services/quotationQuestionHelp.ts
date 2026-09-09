@@ -45,6 +45,7 @@ export function naturalizeQuotationHelp(question: QuotationTurnQuestion, source:
     .replace(/زیر\s*زمین/g, 'زیرزمین')
     .replace(/ را با هم جمع کنید/g, ' با هم جمع می‌شود')
     .replace(/ را نام ببرید/g, ' را مشخص بفرمایید')
+    .replace(/توضیح دهید/g, 'توضیح بفرمایید')
     .replace(/می[‌ ]باشد/g, 'است')
     .replace(/نمایید/g, 'بفرمایید')
     .replace(/[.。]+$/u, '')

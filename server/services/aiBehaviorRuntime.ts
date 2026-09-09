@@ -12,6 +12,7 @@ import { PURCHASE_LINK_RULE_CATEGORY } from '../../shared/productPurchaseLink';
 import { QUOTATION_RESPONSE_ENGINE_CATEGORY } from '../../shared/quotationResponseEngine';
 import { QUOTATION_COMPLETION_RULE_CATEGORY } from '../../shared/quotationCompletionRule';
 import { FULL_NAME_HANDOFF_RULE_CATEGORY } from '../../shared/humanHandoffRule';
+import { CATEGORY_KNOWLEDGE_PREFIX } from './categoryKnowledgeScope';
 
 export type AiBehaviorContext = {
   channel: string;
@@ -25,6 +26,18 @@ export type AiBehaviorContext = {
   messageType?: string | null;
   userRole?: string | null;
 };
+
+export function quotationBehaviorContext(input: Partial<AiBehaviorContext> = {}): AiBehaviorContext {
+  return {
+    ...input,
+    channel: 'GOFTINO',
+    intent: input.intent || 'Insurance Quotation',
+    conversationState: 'QUOTATION',
+    quotationState: input.quotationState || 'IN_PROGRESS',
+    messageType: input.messageType || 'CUSTOMER_MESSAGE',
+    userRole: input.userRole || 'CUSTOMER',
+  };
+}
 
 export type AiBehaviorRuleRecord = {
   id: string;
@@ -103,7 +116,11 @@ function implicitScope(category: string): AiBehaviorRuleScope {
   if (category === PURCHASE_LINK_RULE_CATEGORY) return { intents: ['Insurance Quotation'] };
   if (category === QUOTATION_COMPLETION_RULE_CATEGORY) return { quotationStates: ['AWAITING_DELIVERY_CHOICE', 'PROCESSING', 'SUBMITTED', 'FAILED'] };
   if (category === FULL_NAME_HANDOFF_RULE_CATEGORY) return { conversationStates: ['COLLECTING_PROFILE', 'HUMAN_HANDOFF'] };
-  return {};
+  if (category.startsWith(CATEGORY_KNOWLEDGE_PREFIX)) return { categoryIds: [category.slice(CATEGORY_KNOWLEDGE_PREFIX.length)] };
+  // Legacy CUSTOM rules are retained for customer chat only. Unknown legacy
+  // categories are deliberately not promoted to global rules.
+  if (category === 'CUSTOM') return { channels: ['GOFTINO'], messageTypes: ['CUSTOMER_MESSAGE'] };
+  return { channels: ['__UNSCOPED_LEGACY_RULE__'] };
 }
 
 export function resolveAiBehaviorRulesFromRecords(records: AiBehaviorRuleRecord[], context: AiBehaviorContext): AiBehaviorResolution {
@@ -136,7 +153,7 @@ export function resolveAiBehaviorRulesFromRecords(records: AiBehaviorRuleRecord[
       conflictKey: envelope?.conflictKey || (SYSTEM_CATEGORIES.has(rule.category) ? rule.category : rule.id),
     });
   }
-  eligible.sort((a, b) => b.specificity - a.specificity || a.sortOrder - b.sortOrder || a.version.localeCompare(b.version) || a.id.localeCompare(b.id));
+  eligible.sort((a, b) => a.sortOrder - b.sortOrder || b.specificity - a.specificity || a.version.localeCompare(b.version) || a.id.localeCompare(b.id));
   const selected: ResolvedAiBehaviorRule[] = [];
   const winners = new Map<string, string>();
   for (const rule of eligible) {

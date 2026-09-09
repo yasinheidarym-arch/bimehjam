@@ -54,6 +54,38 @@ test('guidance level 3 allows bounded general knowledge without product inventio
   assert.doesNotMatch(result.text, /تومان|قیمت قطعی/);
 });
 
+test('guidance uses category knowledge only after insufficient field and product sources', async () => {
+  const calls: string[] = [];
+  const result = await resolveQuotationGuidance({
+    message: 'ماده ۶۶ چیست؟', question: amountQuestion,
+    knowledge: 'دانش محصول درباره موضوع دیگری است.',
+    categoryKnowledge: 'ماده ۶۶ به مسئولیت کارفرما در رخدادهای کاری مرتبط است.',
+    select: async (input) => {
+      calls.push(input.source);
+      return { source: input.source, helpResponse: 'این ماده درباره مسئولیت کارفرما در رخدادهای کاری است.', passages: [] };
+    },
+  });
+  assert.equal(result.source, 'CATEGORY_KNOWLEDGE');
+  assert.deepEqual(calls, ['CATEGORY_KNOWLEDGE']);
+});
+
+test('backend attributes guidance from verified evidence, not the source claimed by model', async () => {
+  const result = await resolveQuotationGuidance({
+    message: 'کدام مبلغ را باید انتخاب کنم؟', question: amountQuestion, knowledge: '',
+    select: async () => ({ source: 'PRODUCT_KNOWLEDGE', helpResponse: 'مبلغ ثبت‌شده را با توجه به نیازتان در نظر بگیرید.', passages: [] }),
+  });
+  assert.equal(result.source, 'HELP_TEXT');
+});
+
+test('general guidance rejects invented numeric examples', async () => {
+  const result = await resolveQuotationGuidance({
+    message: 'ماده ۶۶ چیست؟', question: { ...amountQuestion, helpText: '' }, knowledge: '',
+    select: async () => ({ source: 'GENERAL_MODEL_KNOWLEDGE', helpResponse: 'برای این مورد 680 واحد در نظر بگیرید.', passages: [] }),
+  });
+  assert.notEqual(result.source, 'GENERAL_MODEL_KNOWLEDGE');
+  assert.doesNotMatch(result.text, /680/);
+});
+
 test('guidance level 4 reports an honest limitation', async () => {
   const result = await resolveQuotationGuidance({
     message: 'شرط اختصاصی بیمه‌گر چیست؟', question: { ...amountQuestion, helpText: '' }, knowledge: '',

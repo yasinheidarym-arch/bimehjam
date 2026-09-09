@@ -9,8 +9,6 @@ import { getOrCreateQuotationSession, processSessionAnswers } from './quotationW
 import {
   isInsuranceQuotationRequest,
   isExplicitQuotationFormRequest,
-  quotationCompletedReply,
-  quotationFormReply,
   quotationQuestionReply,
   sortQuotationQuestions,
 } from './quotationConversationFlow';
@@ -32,6 +30,7 @@ import { buildQuotationAudit } from './quotationAudit';
 import { buildAiBehaviorSystemPrompt, classifyConversationIntentWithRuntime, classifyQuotationRoutingWithRuntime, resolveAiBehaviorRules, runAiBehaviorStructuredModel, validateRequestedAction } from './aiBehaviorRuntime';
 import { parseQuotationResponseEngineConfig, QUOTATION_RESPONSE_ENGINE_CATEGORY } from '../../shared/quotationResponseEngine';
 import { parseQuotationRoutingTemplates, PURCHASE_LINK_RULE_CATEGORY } from '../../shared/productPurchaseLink';
+import { getQuotationCompletionConfig } from './aiBehaviorService';
 import {
   categoryProductClarificationReply,
   currentPageProductSuggestionReply,
@@ -261,6 +260,7 @@ export async function processBrainLayer(params: {
 
   // Step 2: Intent & Stage Detection
   let detectedIntent = detectIntent(userMessageContent, historyText);
+  let semanticIntentResolved = false;
   try {
     const semanticIntent = await classifyConversationIntentWithRuntime({
       message: userMessageContent,
@@ -271,18 +271,24 @@ export async function processBrainLayer(params: {
         conversationState: conversation.currentProductId ? 'QUOTATION' : 'GENERAL', messageType: 'CUSTOMER_MESSAGE', userRole: 'CUSTOMER',
       },
     });
-    if (semanticIntent.output.confidence >= .65) detectedIntent = semanticIntent.output.intent;
+    if (semanticIntent.output.confidence >= .65) {
+      detectedIntent = semanticIntent.output.intent;
+      semanticIntentResolved = true;
+    }
   } catch {
     // The deliberately small fallback above preserves availability.
   }
-  const productPurchaseRequested = hasRecentProductPurchaseIntent(
-    userMessageContent,
-    messageHistory.filter((message) => message.senderType === 'CUSTOMER').map((message) => message.content),
-  );
+  const productPurchaseRequested = semanticIntentResolved
+    ? detectedIntent === 'Insurance Quotation'
+    : hasRecentProductPurchaseIntent(
+        userMessageContent,
+        messageHistory.filter((message) => message.senderType === 'CUSTOMER').map((message) => message.content),
+      );
   const intent = extractedKnowledge.matchedProduct && productPurchaseRequested
     ? 'Insurance Quotation'
     : detectedIntent;
   let semanticRoutingDecision: string | null = null;
+  let semanticRoutingAvailable = false;
   try {
     const routing = await classifyQuotationRoutingWithRuntime({
       message: userMessageContent,
@@ -301,19 +307,23 @@ export async function processBrainLayer(params: {
         quotationWorkflowActive: Boolean(conversation.currentProductId),
       },
     });
+    semanticRoutingAvailable = true;
     if (routing.output.confidence >= .7) semanticRoutingDecision = routing.output.decision;
   } catch {
     // Provider-unavailable fallback uses the narrow deterministic helpers.
   }
-  if (semanticRoutingDecision === 'ACCEPT_PAGE_PRODUCT') suggestionAccepted = true;
-  if (semanticRoutingDecision === 'REJECT_PAGE_PRODUCT') suggestionRejected = true;
+  if (semanticRoutingAvailable) {
+    suggestionAccepted = semanticRoutingDecision === 'ACCEPT_PAGE_PRODUCT';
+    suggestionRejected = semanticRoutingDecision === 'REJECT_PAGE_PRODUCT';
+  }
   const stage = detectCustomerStage(messageHistory.length, intent, customer.leadScore || 50, historyText);
-  const explicitFormRequested = isExplicitQuotationFormRequest(userMessageContent);
+  const explicitFormRequested = semanticRoutingDecision === 'REQUEST_LINK_AGAIN' ||
+    (!semanticRoutingAvailable && isExplicitQuotationFormRequest(userMessageContent));
   const matchedProductWasOffered = Boolean(
     extractedKnowledge.matchedProduct &&
     new Set(offeredPurchaseLinkProductIds).has(extractedKnowledge.matchedProduct.id),
   );
-  const directQuotationRequested = semanticRoutingDecision === 'START_CHAT_QUOTATION' || (semanticRoutingDecision === null && (
+  const directQuotationRequested = semanticRoutingDecision === 'START_CHAT_QUOTATION' || (!semanticRoutingAvailable && (
     isDirectQuotationWorkflowRequest(userMessageContent) ||
     (matchedProductWasOffered && isPositiveQuotationWorkflowResponse(userMessageContent))
   ));
@@ -333,6 +343,7 @@ export async function processBrainLayer(params: {
     userRole: 'CUSTOMER',
   };
   const behaviorRuntime = await resolveAiBehaviorRules(behaviorContext);
+  const quotationCompletionConfig = await getQuotationCompletionConfig();
   const routingRuntimeRule = behaviorRuntime.selected.find(rule => rule.category === PURCHASE_LINK_RULE_CATEGORY);
   const routingTemplates = routingRuntimeRule ? parseQuotationRoutingTemplates(routingRuntimeRule.directive) : null;
   const quotationRoutingRule = routingRuntimeRule && routingTemplates ? {
@@ -386,7 +397,7 @@ export async function processBrainLayer(params: {
     deterministicReply = quotationRoutingRule
       ? renderQuotationRoutingTemplate(quotationRoutingRule.templates.pageProductSuggestionResponse, { productName: existingPageSuggestion.productName, categoryName: existingPageSuggestion.categoryName, currentPageUrl })
       : currentPageProductSuggestionReply(existingPageSuggestion.productName);
-  } else if (currentPageUrl && extractedKnowledge.productSelectionRequired && currentPageProduct && extractedKnowledge.matchedCategoryId && currentPageProduct.categoryId === extractedKnowledge.matchedCategoryId && (semanticRoutingDecision === 'SUGGEST_PAGE_PRODUCT' || (semanticRoutingDecision === null && shouldOfferCurrentPageProductSuggestion({
+  } else if (currentPageUrl && extractedKnowledge.productSelectionRequired && currentPageProduct && extractedKnowledge.matchedCategoryId && currentPageProduct.categoryId === extractedKnowledge.matchedCategoryId && (semanticRoutingDecision === 'SUGGEST_PAGE_PRODUCT' || (!semanticRoutingAvailable && shouldOfferCurrentPageProductSuggestion({
     message: userMessageContent,
     matchedCategoryId: extractedKnowledge.matchedCategoryId,
     matchedCategoryName: extractedKnowledge.matchedCategory,
@@ -413,7 +424,7 @@ export async function processBrainLayer(params: {
     quotationRoutingRule && routingRuleActive &&
     extractedKnowledge.matchedProduct &&
     extractedKnowledge.matchedProduct.purchaseUrl &&
-    (['OFFER_PURCHASE_ROUTE', 'REQUEST_LINK_AGAIN'].includes(semanticRoutingDecision || '') || (semanticRoutingDecision === null && shouldOfferProductPurchaseLink({
+    (['OFFER_PURCHASE_ROUTE', 'REQUEST_LINK_AGAIN'].includes(semanticRoutingDecision || '') || (!semanticRoutingAvailable && shouldOfferProductPurchaseLink({
       intent,
       productId: extractedKnowledge.matchedProduct.id,
       purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
@@ -446,7 +457,7 @@ export async function processBrainLayer(params: {
     !deterministicReply &&
     quotationRoutingRule && routingRuleActive &&
     extractedKnowledge.matchedProduct &&
-    (semanticRoutingDecision === 'WAIT_FOR_PRODUCT_DECISION' || semanticRoutingDecision === 'WAIT_FOR_CHOICE' || (semanticRoutingDecision === null && shouldWaitForProductPurchaseDecision({
+    (semanticRoutingDecision === 'WAIT_FOR_PRODUCT_DECISION' || semanticRoutingDecision === 'WAIT_FOR_CHOICE' || (!semanticRoutingAvailable && shouldWaitForProductPurchaseDecision({
       productId: extractedKnowledge.matchedProduct.id,
       purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
       offeredProductIds: offeredPurchaseLinkProductIds,
@@ -462,15 +473,25 @@ export async function processBrainLayer(params: {
       purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
       currentPageUrl,
     });
-  } else if (!deterministicReply && explicitFormRequested && extractedKnowledge.matchedProduct) {
-    deterministicReply = quotationFormReply();
+  } else if (!deterministicReply && explicitFormRequested && extractedKnowledge.matchedProduct && quotationRoutingRule && routingRuleActive) {
+    const samePage = isDetectedProductCurrentPage({
+      productId: extractedKnowledge.matchedProduct.id,
+      currentPageProductId: currentPageProduct?.id,
+      purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
+      currentPageUrl,
+    });
+    deterministicReply = renderQuotationRoutingTemplate(
+      samePage ? quotationRoutingRule.templates.samePageResponse : quotationRoutingRule.templates.differentPageResponse,
+      { productName: extractedKnowledge.matchedProduct.name, purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl, currentPageUrl },
+    );
   } else if (
     !deterministicReply && extractedKnowledge.matchedProduct &&
     (intent === 'Insurance Quotation' || conversation.currentProductId === extractedKnowledge.matchedProduct.id)
   ) {
     const product = extractedKnowledge.matchedProduct;
+    const categoryGuidanceKnowledge = extractedKnowledge.relevantArticles
+      .map(article => `${article.title}\n${article.content}`).join('\n\n');
     const quotationGuidanceKnowledge = [
-      ...extractedKnowledge.relevantArticles.map(article => `${article.title}\n${article.content}`),
       product.aiKnowledgeArticle || '',
       product.description || '',
       product.coverage || '',
@@ -504,6 +525,7 @@ export async function processBrainLayer(params: {
         } : null,
         model: classifyQuotationTurnWithAi,
         productKnowledge: quotationGuidanceKnowledge,
+        categoryKnowledge: categoryGuidanceKnowledge,
         guidanceSelector: selectQuotationGuidanceWithAi,
         sessionStatus: session.status,
         behaviorContext,
@@ -608,7 +630,7 @@ export async function processBrainLayer(params: {
     deterministicReply = quotationTurn?.responseText || quotationInvalidReply || (questionReply
       ? [chatStartPrefix, questionReply].filter(Boolean).join('\n')
       : evaluation.isCompleted
-        ? quotationCompletedReply()
+        ? quotationCompletionConfig?.choicePrompt || null
         : 'برای این محصول سؤال استعلام فعالی پیدا نشد. می‌توانید از کارشناس راهنمایی بخواهید.');
   }
 
@@ -757,7 +779,7 @@ export async function processBrainLayer(params: {
     generatedOperatorSummary = '';
   }
 
-  if (quotationState?.isCompleted && !quotationInterruptionQuestion && !quotationInvalidReply) {
+  if (quotationState?.isCompleted && quotationCompletionConfig && !quotationInterruptionQuestion && !quotationInvalidReply) {
     generatedTask = {
       create: true,
       title: `محاسبه قیمت ${quotationState.productName}`,

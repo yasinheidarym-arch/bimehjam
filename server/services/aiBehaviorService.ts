@@ -178,11 +178,17 @@ export async function isFullNameHandoffRuleActive(): Promise<boolean> {
   return rule?.status === 'ACTIVE';
 }
 
-export async function getHumanHandoffRuleConfig() {
-  const rule = await prisma.aiRule.findFirst({ where: { category: FULL_NAME_HANDOFF_RULE_CATEGORY } });
+type StoredRuleConfig = { status: string; directive: string } | null | undefined;
+
+export function resolveHumanHandoffRuleConfigRecord(rule: StoredRuleConfig) {
   return rule?.status === 'ACTIVE'
     ? (parseHumanHandoffRule(rule.directive) || DEFAULT_HUMAN_HANDOFF_RULE_CONFIG)
-    : DEFAULT_HUMAN_HANDOFF_RULE_CONFIG;
+    : null;
+}
+
+export async function getHumanHandoffRuleConfig() {
+  const rule = await prisma.aiRule.findFirst({ where: { category: FULL_NAME_HANDOFF_RULE_CATEGORY } });
+  return resolveHumanHandoffRuleConfigRecord(rule);
 }
 
 /**
@@ -363,14 +369,20 @@ export async function getQuotationRoutingRule() {
   };
 }
 
-export async function getQuotationCompletionPrompt(): Promise<string> {
+export async function getQuotationCompletionPrompt(): Promise<string | null> {
   const rule = await prisma.aiRule.findFirst({ where: { category: QUOTATION_COMPLETION_RULE_CATEGORY } });
-  return rule?.status === 'ACTIVE' ? (parseQuotationCompletionRule(rule.directive)?.choicePrompt || DEFAULT_QUOTATION_COMPLETION_PROMPT) : DEFAULT_QUOTATION_COMPLETION_PROMPT;
+  return rule?.status === 'ACTIVE' ? (parseQuotationCompletionRule(rule.directive)?.choicePrompt || DEFAULT_QUOTATION_COMPLETION_PROMPT) : null;
 }
 
 export async function getQuotationCompletionConfig() {
   const rule = await prisma.aiRule.findFirst({ where: { category: QUOTATION_COMPLETION_RULE_CATEGORY } });
-  return rule?.status === 'ACTIVE' ? (parseQuotationCompletionRule(rule.directive) || DEFAULT_QUOTATION_COMPLETION_CONFIG) : DEFAULT_QUOTATION_COMPLETION_CONFIG;
+  return resolveQuotationCompletionConfigRecord(rule);
+}
+
+export function resolveQuotationCompletionConfigRecord(rule: StoredRuleConfig) {
+  return rule?.status === 'ACTIVE'
+    ? (parseQuotationCompletionRule(rule.directive) || DEFAULT_QUOTATION_COMPLETION_CONFIG)
+    : null;
 }
 
 export async function getQuotationFinalizationRuleContext() {
