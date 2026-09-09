@@ -14,6 +14,7 @@ type GuidanceGenerator = (context: {
   helpText?: string;
   productKnowledge?: string;
   allowedOptions?: string[];
+  behaviorContext?: { channel: string; productId?: string | null; categoryId?: string | null; currentPageUrl?: string | null; intent?: string | null; conversationState?: string | null; quotationState?: string | null; currentField?: string | null; messageType?: string | null; userRole?: string | null };
 }) => Promise<unknown>;
 
 function groundedCandidate(raw: unknown, sourceText: string, question: QuotationTurnQuestion): string | null {
@@ -60,6 +61,7 @@ export async function resolveQuotationGuidance(input: {
   question: QuotationTurnQuestion;
   select: GuidanceGenerator;
   tone?: string;
+  behaviorContext?: { channel: string; productId?: string | null; categoryId?: string | null; currentPageUrl?: string | null; intent?: string | null; conversationState?: string | null; quotationState?: string | null; currentField?: string | null; messageType?: string | null; userRole?: string | null };
 }): Promise<{ text: string; source: QuotationGuidanceSource }> {
   const tone = input.tone || 'کارشناس حرفه‌ای، محترمانه، صمیمی و غیررسمیِ کنترل‌شده؛ خطاب جمع و بدون عبارت دستوری یا بچگانه';
   const helpText = input.question.helpText?.trim() || '';
@@ -73,6 +75,7 @@ export async function resolveQuotationGuidance(input: {
       productKnowledge,
       allowedOptions: quotationQuestionOptions(input.question).map(option => option.value),
       tone,
+      behaviorContext: input.behaviorContext,
     });
     const source = selectedSource(raw) || (helpText ? 'HELP_TEXT' : productKnowledge ? 'PRODUCT_KNOWLEDGE' : null);
     if (source === 'HELP_TEXT' && helpText) {

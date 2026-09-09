@@ -13,6 +13,7 @@ import {
 } from '../services/aiBehaviorService';
 import { advanceQuotationTurn } from '../services/quotationStateMachine';
 import { classifyQuotationTurnWithAi } from '../services/quotationClassifierService';
+import { resolveAiBehaviorRules } from '../services/aiBehaviorRuntime';
 import {
   seedProductMapData,
   resolveProductByUrl,
@@ -1007,16 +1008,27 @@ export async function simulateQuotationResponse(req: Request, res: Response) {
     if (!question || typeof message !== 'string') return res.status(400).json({ success: false, error: 'question and message are required' });
     const allQuestions = Array.isArray(questions) && questions.length ? questions : [question];
     const rule = await getQuotationResponseEngineRule();
+    const runtimeContext = { channel: 'SIMULATOR', conversationState: 'QUOTATION', quotationState: 'IN_PROGRESS', currentField: question.fieldName || null, messageType: 'CUSTOMER_MESSAGE', userRole: 'CUSTOMER' };
+    const behaviorRuntime = await resolveAiBehaviorRules(runtimeContext);
     const result = await advanceQuotationTurn({
       sessionId: 'admin-simulator', questions: allQuestions, answers: answers && typeof answers === 'object' ? answers : {}, message,
       engine: rule ? { active: rule.status === 'ACTIVE', title: rule.title, priority: rule.sortOrder, config: rule.config } : null,
       model: classifyQuotationTurnWithAi,
+      behaviorContext: runtimeContext,
     });
     return res.status(200).json({ success: true, data: {
       status: result.classification.status, confidence: result.classification.confidence, reason: result.classification.reason,
       appliedRule: result.appliedRule, savedData: result.updates, responseText: result.responseText,
       nextQuestion: result.state.currentQuestion,
       guidance: result.guidance,
+      behaviorRuntime: {
+        promptVersion: behaviorRuntime.promptVersion,
+        selectedRules: behaviorRuntime.selected.map(item => ({ id: item.id, title: item.title, version: item.version, priority: item.sortOrder })),
+        rejectedRules: behaviorRuntime.rejected,
+        knowledgeSource: result.guidance?.source || null,
+        proposedAction: result.classification.status,
+        stateChange: { savedFields: Object.keys(result.updates), nextQuestion: result.state.currentQuestion },
+      },
     } });
   } catch (error: any) { return res.status(500).json({ success: false, error: error.message }); }
 }

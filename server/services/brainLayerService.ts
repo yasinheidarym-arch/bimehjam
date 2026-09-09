@@ -1,8 +1,6 @@
-import OpenAI from 'openai';
 import { advanceQuotationTurn, type QuotationTurnState } from './quotationStateMachine';
 import { classifyQuotationTurnWithAi, selectQuotationGuidanceWithAi } from './quotationClassifierService';
 import prisma from '../db/client';
-import { getAiConfig } from './settingService';
 import {
   retrieveRelevantKnowledgeFromTrainingCenter,
   ExtractedKnowledgePayload,
@@ -31,7 +29,9 @@ import {
 } from '../../shared/productPurchaseLink';
 import { resolveProductByUrl } from './productIntelligenceService';
 import { buildQuotationAudit } from './quotationAudit';
-import { getQuotationResponseEngineRule, getQuotationRoutingRule } from './aiBehaviorService';
+import { buildAiBehaviorSystemPrompt, classifyConversationIntentWithRuntime, classifyQuotationRoutingWithRuntime, resolveAiBehaviorRules, runAiBehaviorStructuredModel, validateRequestedAction } from './aiBehaviorRuntime';
+import { parseQuotationResponseEngineConfig, QUOTATION_RESPONSE_ENGINE_CATEGORY } from '../../shared/quotationResponseEngine';
+import { parseQuotationRoutingTemplates, PURCHASE_LINK_RULE_CATEGORY } from '../../shared/productPurchaseLink';
 import {
   categoryProductClarificationReply,
   currentPageProductSuggestionReply,
@@ -109,33 +109,10 @@ export interface BrainResult {
 
 // 1. Detect Intent
 export function detectIntent(message: string, historyText: string): string {
-  // فقط پیام واقعی مشتری بررسی شود؛ تاریخچه شامل پاسخ‌های AI است و باعث تشخیص اشتباه می‌شود
-  const text = message.toLowerCase();
-
-  if (text.includes('اپراتور') || text.includes('انسان') || text.includes('مشاور تلفنی') || text.includes('وصل کن') || text.includes('کارشناس انسانی')) {
-    return 'Human Operator Request';
-  }
-  if (text.includes('خسارت') || text.includes('تصادف') || text.includes('غرامت') || text.includes('اعلام خسارت') || text.includes('کروکی')) {
-    return 'Claim Support';
-  }
-  if (text.includes('اقساط') || text.includes('چک') || text.includes('پیش پرداخت') || text.includes('ماهانه') || text.includes('سفته') || text.includes('قسط')) {
-    return 'Installment Payment';
-  }
-  if (text.includes('گران') || text.includes('چرا قیمت نمیدید') || text.includes('تخفیف بیشتر') || text.includes('شرکت دیگر')) {
-    return 'Customer Objection';
-  }
-  if (text.includes('مقایسه') || text.includes('کدام شرکت') || text.includes('تفاوت بیمه') || text.includes('کدام بهتره')) {
-    return 'Policy Comparison';
-  }
-  if (text.includes('تمدید') || text.includes('انقضا') || text.includes('سال قبل') || text.includes('بیمه قبلی') || text.includes('اتمام بیمه')) {
-    return 'Policy Renewal';
-  }
-  if (isInsuranceQuotationRequest(text)) {
-    return 'Insurance Quotation';
-  }
-  if (text.includes('شکایت') || text.includes('ناراضی') || text.includes('چرا دیر') || text.includes('کاهش کیفیت')) {
-    return 'Complaint';
-  }
+  // Provider-unavailable fallback only. Business intent classification is
+  // semantic and rule-aware in AIBehaviorRuntime.
+  void historyText;
+  if (isInsuranceQuotationRequest(message)) return 'Insurance Quotation';
   return 'General Inquiry';
 }
 
@@ -261,9 +238,9 @@ export async function processBrainLayer(params: {
       }
     : null;
   const existingPageSuggestion = readCurrentPageProductSuggestion(existingCollectedData.currentPageProductSuggestion);
-  const suggestionAccepted = existingPageSuggestion?.status === 'AWAITING_CONFIRMATION' &&
+  let suggestionAccepted = existingPageSuggestion?.status === 'AWAITING_CONFIRMATION' &&
     isCurrentPageProductSuggestionAccepted(userMessageContent);
-  const suggestionRejected = existingPageSuggestion?.status === 'AWAITING_CONFIRMATION' &&
+  let suggestionRejected = existingPageSuggestion?.status === 'AWAITING_CONFIRMATION' &&
     isCurrentPageProductSuggestionRejected(userMessageContent);
 
   // Step 1: Intelligent Knowledge Retrieval from AI Training Center (5 Sources)
@@ -283,7 +260,21 @@ export async function processBrainLayer(params: {
   });
 
   // Step 2: Intent & Stage Detection
-  const detectedIntent = detectIntent(userMessageContent, historyText);
+  let detectedIntent = detectIntent(userMessageContent, historyText);
+  try {
+    const semanticIntent = await classifyConversationIntentWithRuntime({
+      message: userMessageContent,
+      recentMessages: messageHistory.map(message => ({ senderType: message.senderType, content: message.content })),
+      context: {
+        channel: 'GOFTINO', productId: extractedKnowledge.matchedProduct?.id || conversation.currentProductId || null,
+        categoryId: extractedKnowledge.matchedCategoryId || allowedCategoryId || null, currentPageUrl,
+        conversationState: conversation.currentProductId ? 'QUOTATION' : 'GENERAL', messageType: 'CUSTOMER_MESSAGE', userRole: 'CUSTOMER',
+      },
+    });
+    if (semanticIntent.output.confidence >= .65) detectedIntent = semanticIntent.output.intent;
+  } catch {
+    // The deliberately small fallback above preserves availability.
+  }
   const productPurchaseRequested = hasRecentProductPurchaseIntent(
     userMessageContent,
     messageHistory.filter((message) => message.senderType === 'CUSTOMER').map((message) => message.content),
@@ -291,19 +282,69 @@ export async function processBrainLayer(params: {
   const intent = extractedKnowledge.matchedProduct && productPurchaseRequested
     ? 'Insurance Quotation'
     : detectedIntent;
+  let semanticRoutingDecision: string | null = null;
+  try {
+    const routing = await classifyQuotationRoutingWithRuntime({
+      message: userMessageContent,
+      recentMessages: messageHistory.map(message => ({ senderType: message.senderType, content: message.content })),
+      context: {
+        channel: 'GOFTINO', productId: extractedKnowledge.matchedProduct?.id || conversation.currentProductId || null,
+        categoryId: extractedKnowledge.matchedCategoryId || allowedCategoryId || null, currentPageUrl, intent,
+        conversationState: conversation.currentProductId ? 'QUOTATION' : 'GENERAL', messageType: 'CUSTOMER_MESSAGE', userRole: 'CUSTOMER',
+      },
+      routing: {
+        matchedProductId: extractedKnowledge.matchedProduct?.id || null,
+        purchaseUrlAvailable: Boolean(extractedKnowledge.matchedProduct?.purchaseUrl),
+        currentPageProductId: currentPageProduct?.id || null,
+        offeredAlready: Boolean(extractedKnowledge.matchedProduct && new Set(offeredPurchaseLinkProductIds).has(extractedKnowledge.matchedProduct.id)),
+        pendingPageSuggestion: existingPageSuggestion?.status === 'AWAITING_CONFIRMATION',
+        quotationWorkflowActive: Boolean(conversation.currentProductId),
+      },
+    });
+    if (routing.output.confidence >= .7) semanticRoutingDecision = routing.output.decision;
+  } catch {
+    // Provider-unavailable fallback uses the narrow deterministic helpers.
+  }
+  if (semanticRoutingDecision === 'ACCEPT_PAGE_PRODUCT') suggestionAccepted = true;
+  if (semanticRoutingDecision === 'REJECT_PAGE_PRODUCT') suggestionRejected = true;
   const stage = detectCustomerStage(messageHistory.length, intent, customer.leadScore || 50, historyText);
   const explicitFormRequested = isExplicitQuotationFormRequest(userMessageContent);
   const matchedProductWasOffered = Boolean(
     extractedKnowledge.matchedProduct &&
     new Set(offeredPurchaseLinkProductIds).has(extractedKnowledge.matchedProduct.id),
   );
-  const directQuotationRequested = isDirectQuotationWorkflowRequest(userMessageContent) ||
-    (matchedProductWasOffered && isPositiveQuotationWorkflowResponse(userMessageContent));
+  const directQuotationRequested = semanticRoutingDecision === 'START_CHAT_QUOTATION' || (semanticRoutingDecision === null && (
+    isDirectQuotationWorkflowRequest(userMessageContent) ||
+    (matchedProductWasOffered && isPositiveQuotationWorkflowResponse(userMessageContent))
+  ));
   const registrationStatus = typeof existingCollectedData.quotationSubmission?.status === 'string'
     ? existingCollectedData.quotationSubmission.status
     : 'NOT_SUBMITTED';
-  const quotationRoutingRule = await getQuotationRoutingRule();
-  const quotationResponseEngineRule = await getQuotationResponseEngineRule();
+  const behaviorContext = {
+    channel: 'GOFTINO',
+    productId: extractedKnowledge.matchedProduct?.id || conversation.currentProductId || null,
+    categoryId: extractedKnowledge.matchedCategoryId || allowedCategoryId || null,
+    currentPageUrl,
+    intent,
+    conversationState: conversation.currentProductId || (intent === 'Insurance Quotation' && extractedKnowledge.matchedProduct) ? 'QUOTATION' : 'GENERAL',
+    quotationState: registrationStatus,
+    currentField: extractedKnowledge.quotationWorkflow?.nextQuestion?.fieldName || null,
+    messageType: 'CUSTOMER_MESSAGE',
+    userRole: 'CUSTOMER',
+  };
+  const behaviorRuntime = await resolveAiBehaviorRules(behaviorContext);
+  const routingRuntimeRule = behaviorRuntime.selected.find(rule => rule.category === PURCHASE_LINK_RULE_CATEGORY);
+  const routingTemplates = routingRuntimeRule ? parseQuotationRoutingTemplates(routingRuntimeRule.directive) : null;
+  const quotationRoutingRule = routingRuntimeRule && routingTemplates ? {
+    id: routingRuntimeRule.id, title: routingRuntimeRule.title, status: 'ACTIVE' as const,
+    sortOrder: routingRuntimeRule.sortOrder, templates: routingTemplates,
+  } : null;
+  const responseRuntimeRule = behaviorRuntime.selected.find(rule => rule.category === QUOTATION_RESPONSE_ENGINE_CATEGORY);
+  const responseEngineConfig = responseRuntimeRule ? parseQuotationResponseEngineConfig(responseRuntimeRule.directive) : null;
+  const quotationResponseEngineRule = responseRuntimeRule && responseEngineConfig ? {
+    id: responseRuntimeRule.id, title: responseRuntimeRule.title, status: 'ACTIVE' as const,
+    sortOrder: responseRuntimeRule.sortOrder, config: responseEngineConfig,
+  } : null;
   const routingRuleActive = quotationRoutingRule?.status === 'ACTIVE';
   let deterministicReply: string | null = null;
   let quotationState: BrainResult['quotationState'];
@@ -331,9 +372,10 @@ export async function processBrainLayer(params: {
       extractedKnowledge.quotationWorkflow = null;
       extractedKnowledge.productKnowledgeAvailable = false;
       extractedKnowledge.productSelectionRequired = Boolean(extractedKnowledge.matchedCategoryId);
-      deterministicReply = categoryProductClarificationReply(
-        extractedKnowledge.matchedCategory || existingPageSuggestion.categoryName,
-      );
+      const categoryName = extractedKnowledge.matchedCategory || existingPageSuggestion.categoryName;
+      deterministicReply = quotationRoutingRule
+        ? renderQuotationRoutingTemplate(quotationRoutingRule.templates.categoryClarificationResponse, { productName: '', categoryName, currentPageUrl })
+        : categoryProductClarificationReply(categoryName);
     }
   } else if (existingPageSuggestion?.status === 'AWAITING_CONFIRMATION') {
     pageProductSuggestionDecision = 'AWAITING_CONFIRMATION';
@@ -341,15 +383,17 @@ export async function processBrainLayer(params: {
     extractedKnowledge.quotationWorkflow = null;
     extractedKnowledge.productKnowledgeAvailable = false;
     extractedKnowledge.productSelectionRequired = true;
-    deterministicReply = currentPageProductSuggestionReply(existingPageSuggestion.productName);
-  } else if (currentPageUrl && shouldOfferCurrentPageProductSuggestion({
+    deterministicReply = quotationRoutingRule
+      ? renderQuotationRoutingTemplate(quotationRoutingRule.templates.pageProductSuggestionResponse, { productName: existingPageSuggestion.productName, categoryName: existingPageSuggestion.categoryName, currentPageUrl })
+      : currentPageProductSuggestionReply(existingPageSuggestion.productName);
+  } else if (currentPageUrl && extractedKnowledge.productSelectionRequired && currentPageProduct && extractedKnowledge.matchedCategoryId && currentPageProduct.categoryId === extractedKnowledge.matchedCategoryId && (semanticRoutingDecision === 'SUGGEST_PAGE_PRODUCT' || (semanticRoutingDecision === null && shouldOfferCurrentPageProductSuggestion({
     message: userMessageContent,
     matchedCategoryId: extractedKnowledge.matchedCategoryId,
     matchedCategoryName: extractedKnowledge.matchedCategory,
     productSelectionRequired: extractedKnowledge.productSelectionRequired,
     currentPageProduct,
     previousSuggestion: existingPageSuggestion,
-  })) {
+  })))) {
     pageProductSuggestionDecision = 'OFFERED';
     pageProductSuggestionState = {
       status: 'AWAITING_CONFIRMATION',
@@ -359,20 +403,23 @@ export async function processBrainLayer(params: {
       categoryName: extractedKnowledge.matchedCategory,
       currentPageUrl,
     };
-    deterministicReply = currentPageProductSuggestionReply(currentPageProduct.name);
+    deterministicReply = quotationRoutingRule
+      ? renderQuotationRoutingTemplate(quotationRoutingRule.templates.pageProductSuggestionResponse, { productName: currentPageProduct.name, categoryName: extractedKnowledge.matchedCategory, currentPageUrl })
+      : currentPageProductSuggestionReply(currentPageProduct.name);
   }
 
   if (
     !deterministicReply &&
     quotationRoutingRule && routingRuleActive &&
     extractedKnowledge.matchedProduct &&
-    shouldOfferProductPurchaseLink({
+    extractedKnowledge.matchedProduct.purchaseUrl &&
+    (['OFFER_PURCHASE_ROUTE', 'REQUEST_LINK_AGAIN'].includes(semanticRoutingDecision || '') || (semanticRoutingDecision === null && shouldOfferProductPurchaseLink({
       intent,
       productId: extractedKnowledge.matchedProduct.id,
       purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
       offeredProductIds: offeredPurchaseLinkProductIds,
       message: userMessageContent,
-    })
+    })))
   ) {
     const samePage = isDetectedProductCurrentPage({
       productId: extractedKnowledge.matchedProduct.id,
@@ -399,13 +446,13 @@ export async function processBrainLayer(params: {
     !deterministicReply &&
     quotationRoutingRule && routingRuleActive &&
     extractedKnowledge.matchedProduct &&
-    shouldWaitForProductPurchaseDecision({
+    (semanticRoutingDecision === 'WAIT_FOR_PRODUCT_DECISION' || semanticRoutingDecision === 'WAIT_FOR_CHOICE' || (semanticRoutingDecision === null && shouldWaitForProductPurchaseDecision({
       productId: extractedKnowledge.matchedProduct.id,
       purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
       offeredProductIds: offeredPurchaseLinkProductIds,
       quotationWorkflowActive: conversation.currentProductId === extractedKnowledge.matchedProduct.id,
       message: userMessageContent,
-    })
+    })))
   ) {
     // The link has been offered and the customer has not selected the detailed
     // quotation path yet. Do not expose nextQuestion to the LLM on this turn.
@@ -459,6 +506,7 @@ export async function processBrainLayer(params: {
         productKnowledge: quotationGuidanceKnowledge,
         guidanceSelector: selectQuotationGuidanceWithAi,
         sessionStatus: session.status,
+        behaviorContext,
         recentMessages: messageHistory.map(message => ({ senderType: message.senderType, content: message.content })),
       });
       if (Object.keys(quotationTurn.updates).length) {
@@ -596,341 +644,10 @@ export async function processBrainLayer(params: {
   const productSelectionRequired =
     extractedKnowledge.productSelectionRequired === true;
 
-  // Step 3: Build Final Dynamic System Prompt with AI Training Center Knowledge Injected
-  const systemPrompt = `
-شما مشاور حرفه‌ای بیمه جم هستید.
-
-نقش شما پاسخگویی طبیعی و انسانی در چت است.
-مانند یک کارشناس واقعی بیمه گفتگو کنید، نه مانند ربات، فرم یا سیستم خودکار.
-
-تصمیم‌های زیر قبلاً توسط سیستم انجام شده‌اند:
-- تشخیص نیت مشتری
-- مرحله مشتری
-- اطلاعات ناقص مورد نیاز
-- قوانین رفتاری
-- دانش تخصصی مرتبط
-
-شما نباید این موارد را دوباره تحلیل یا تغییر دهید.
-وظیفه شما فقط تولید بهترین پاسخ ممکن بر اساس Context ارائه شده است.
-
-${allowedCategoryId ? `رشتهٔ مجاز گفتینو: «${goftinoPolicyTitle || 'ثبت‌شده'}»
-فقط دانش و قوانین دستهٔ بیمهٔ مجازِ همین رشته و زیرمجموعه‌های آن را استفاده کن.` : restrictKnowledgeScope ? `رشتهٔ گفتینو «${goftinoPolicyTitle || 'ثبت‌شده'}» دستهٔ تخصصی ندارد.
-فقط قواعد عمومیِ ایمن را استفاده کن؛ به دانش هیچ دسته یا محصول بیمه‌ای دسترسی نداری. اطلاعات تخصصی را حدس نزن و در صورت نیاز سؤال روشن‌کننده بپرس.` : ''}
-
-
-==============================
-قوانین اصلی گفتگو
-==============================
-
-1. همیشه فقط به آخرین پیام مشتری پاسخ بده.
-
-تاریخچه گفتگو فقط برای درک شرایط قبلی استفاده می‌شود.
-
-هرگز به پیام‌های قدیمی پاسخ نده.
-
-
-2. هرگز اطلاعاتی که مشتری نگفته است را حدس نزن.
-
-شامل:
-- قیمت بیمه
-- مشخصات ساختمان یا غیره
-- تخفیف
-- شرایط شخصی مشتری
-- اطلاعات تماس
-
-
-3. هرگز قیمت قطعی یا تخمینی ارائه نکن.
-
-اگر سیستم مشخص کرده اطلاعات لازم وجود ندارد:
-به شکل طبیعی اطلاعات مورد نیاز را دریافت کن.
-
-
-4. هرگز به مشتری نگو:
-- چه فیلدهایی تکمیل شده
-- چه فیلدهایی ناقص است
-- سیستم چه اطلاعاتی نیاز دارد
-
-به جای آن مانند یک مشاور واقعی سوال مناسب بپرس.
-
-
-5. هرگز مکالمه را شبیه فرم یا پرسشنامه نکن.
-
-ممنوع:
-«لطفاً اطلاعات زیر را وارد کنید»
-«فیلدهای ناقص را تکمیل کنید»
-«اطلاعات مورد نیاز شامل...»
-
-مجاز:
-«مدل خودروتون رو می‌فرمایید؟»
-
-
-==============================
-سلام و شروع گفتگو
-==============================
-
-اگر مشتری فقط سلام کرد:
-
-یک پاسخ کوتاه و انسانی بده.
-
-مثال:
-سلام وقت بخیر 🌹
-در خدمتتون هستم.
-
-در این مرحله:
-- بیمه پیشنهاد نده
-- قیمت پیشنهاد نده
-- سوال فروش نپرس
-
-منتظر نیاز مشتری بمان.
-
-
-==============================
-پاسخ به سوال مستقیم
-==============================
-
-اگر مشتری سوال مشخصی پرسید:
-
-ابتدا پاسخ همان سوال را بده.
-
-سپس فقط اگر واقعاً لازم بود سوال تکمیلی بپرس.
-
-
-==============================
-فرآیند استعلام
-==============================
-
-وقتی سیستم اعلام کرده مشتری در فرآیند استعلام است:
-
-اطلاعات لازم را مرحله‌ای دریافت کن.
-
-هر بار فقط مهم‌ترین سوال بعدی را بپرس.
-
-چند سوال را همزمان مطرح نکن.
-
-
-اگر مشتری چند اطلاعات را در یک پیام ارائه کرد:
-
-آن‌ها را استفاده کن و دوباره همان سوال‌ها را نپرس.
-
-
-==============================
-دانش و محتوا
-==============================
-
-از دانش ارائه شده توسط سیستم استفاده کن.
-
-اگر محصول بیمه‌ای مشخص شده است:
-- دانش تخصصی همان محصول، مرجع اصلی پاسخ درباره آن محصول است.
-- قوانین اختصاصی همان محصول الزام‌آور هستند.
-- اطلاعات محصولات دیگر را به این محصول نسبت نده.
-- اگر پاسخ سوال در دانش اختصاصی محصول وجود ندارد، حدس نزن.
-- دانش عمومی و FAQها فقط در صورتی استفاده شوند که با دانش محصول انتخاب‌شده تناقض نداشته باشند.
-
-اما:
-- متن طولانی مقاله را کپی نکن.
-- توضیحات اضافی نده.
-- فقط اطلاعات مرتبط با سوال مشتری را ارائه کن.
-
-
-==============================
-دانش بازیابی‌شده از مرکز آموزش
-==============================
-
-${extractedKnowledge.productSelectionRequired
-  ? `
-⚠️ وضعیت انتخاب محصول:
-هنوز نوع بیمه دقیق مشتری مشخص نشده است.
-در این مرحله فقط باید به کمک قوانین عمومی، FAQ و اطلاعات دسته‌بندی شده گفتگو را هدایت کنید.
-به هیچ عنوان دانش محصول، قوانین محصول یا سوالات استعلام قیمت را استفاده نکنید.
-
-هدف:
-تشخیص نوع بیمه مورد نیاز مشتری.
-
-`
-  : extractedKnowledge.promptFormattedKnowledge || 'اطلاعات تخصصی مرتبطی در مرکز آموزش ثبت نشده است.'
-}
-
-${extractedKnowledge.noRelevantKnowledge
-  ? `
-⚠️ محتوای معتبر مرتبطی برای این دسته ثبت نشده است.
-هیچ ویژگی، پوشش، قیمت، شرط یا استثنای بیمه‌ای را حدس نزن.
-فقط یک سؤال روشن‌کننده و کوتاه برای مشخص‌شدن زیرمجموعه یا نیاز دقیق مشتری بپرس.
-`
-  : ''}
-
-${quotationInterruptionQuestion ? `
-⚠️ وقفه در استعلام:
-مشتری در پیام فعلی یک سؤال پرسیده است.
-فقط همان سؤال را کوتاه و صرفاً با دانش معتبر همین محصول پاسخ بده.
-سؤال استعلام را تولید، بازنویسی یا تکرار نکن؛ backend پس از پاسخ تو سؤال دقیق ذخیره‌شده را اضافه می‌کند.
-هیچ داده‌ای از این پیام برای فیلدهای استعلام استخراج نکن.
-` : ''}
-
-
-==============================
-قوانین بازیابی‌شده
-==============================
-
-${extractedKnowledge.promptFormattedRules || 'قانون اختصاصی مرتبطی برای این سوال ثبت نشده است.'}
-
-
-==============================
-لحن پاسخ
-==============================
-
-پاسخ‌ها باید:
-- مختصر و مفید باشند.
-- فارسی روان باشند.
-- کوتاه باشند.
-- دوستانه و حرفه‌ای باشند.
-- شبیه مکالمه واتساپی باشند.
-
-
-استفاده نکن:
-
-«به عنوان هوش مصنوعی»
-«کاربر گرامی»
-«لطفاً موارد زیر را ارسال کنید»
-«جهت کسب اطلاعات بیشتر تماس بگیرید»
-
-
-==============================
-ارجاع به کارشناس
-==============================
-
-اگر سیستم اعلام کرد handoff فعال است:
-
-فقط یک پاسخ کوتاه و مطمئن‌کننده بده.
-
-مثال:
-
-ممنون از اطلاعاتی که ارائه کردید. پس از تأیید شما، نتیجهٔ واقعی ثبت درخواست را اعلام می‌کنم.
-
-
-
-==============================
-مدیریت اقدام انسانی و ساخت Task
-==============================
-
-Task فقط زمانی ایجاد شود که گفتگو به مرحله‌ای رسیده باشد که نیاز به اقدام کارشناس انسانی وجود دارد.
-
-قبل از ایجاد Task:
-- ابتدا نیاز مشتری را کامل متوجه شو.
-- اطلاعات لازم برای اقدام را از مشتری دریافت کن.
-- در تکمیل استعلام یا درخواست مستقیم کارشناس، نام و نام خانوادگی مشتری باید پیش از ارجاع دریافت شود؛ اگر فقط نام کوچک ارائه شد، نام خانوادگی را بپرس.
-- اگر نام معتبر قبلاً در پرونده موجود است، دوباره آن را نپرس. اگر مشتری از اعلام نام خودداری کرد، ارجاع را متوقف نکن و نام را «ثبت نشده» در نظر بگیر.
-- اطلاعات دریافت شده را در collectedData ذخیره کن.
-- پیش از تأیید صریح مشتری، هیچ Task یا ادعای ثبت درخواست ایجاد نکن.
-- هرگز زمان تماس، قیمت قطعی، کد یکتا یا صدور را تضمین نکن؛ نتیجه فقط پس از موفقیت واقعی سیستم اعلام می‌شود.
-
-برای موارد زیر Task ایجاد کن:
-
-1) استعلام قیمت یا خرید بیمه
-
-اگر مشتری درخواست قیمت یا خرید دارد:
-- ابتدا سوالات لازم را مرحله‌ای دریافت کن.
-- تا زمانی که اطلاعات لازم کامل نشده است Task نساز.
-- بعد از تکمیل اطلاعات:
-
-type:
-Prepare Quotation
-
-
-2) پیگیری صدور بیمه‌نامه
-
-اگر مشتری اعلام کرد صدور بیمه انجام نشده یا نیاز به بررسی دارد:
-
-ابتدا اطلاعات لازم را دریافت کن:
-- نام ثبت شده در سیستم
-- شماره موبایل ثبت درخواست (در صورت نیاز)
-- توضیح مشکل
-
-بعد از دریافت اطلاعات:
-
-type:
-Follow Up Quote
-
-
-3) تمدید بیمه
-
-اگر مشتری درخواست تمدید دارد:
-
-اطلاعات لازم را دریافت کن:
-- نوع بیمه
-- اطلاعات شناسایی لازم
-
-بعد از تکمیل:
-
-type:
-Renewal Reminder
-
-
-4) درخواست تماس با کارشناس
-
-اگر مشتری مستقیماً درخواست ارتباط انسانی داشت:
-
-type:
-Call Customer
-
-
-قوانین مهم:
-- برای سلام، تشکر، سوال عمومی یا گفتگوهای آموزشی Task نساز.
-- Task با اطلاعات حدسی ساخته نشود.
-- عنوان Task باید کوتاه و عملیاتی باشد.
-- description باید خلاصه وضعیت مشتری و اطلاعات جمع‌آوری شده باشد.
-
-
-==============================
-خروجی
-==============================
-
-خروجی فقط JSON معتبر باشد.
-
-ساختار:
-
-{
-  "replyText": "متن پاسخ مشتری",
-  "collectedData": {},
-  "recommendedNextAction": "",
-  "leadScoreUpdate": 0,
-  "task": {
-    "create": false,
-    "title": "",
-    "type": "",
-    "priority": "",
-    "description": ""
-  },
-  "operatorSummary": ""
-}
-
-
-قوانین task:
-
-- مقدار create فقط زمانی true باشد که اطلاعات لازم برای اقدام انسانی جمع شده باشد.
-- اگر هنوز سوالی از مشتری باقی مانده است، create=false باشد.
-- title باید یک اقدام مشخص برای کارشناس باشد.
-- description باید شامل خلاصه درخواست مشتری و اطلاعات جمع‌آوری‌شده باشد.
-- اطلاعاتی که مشتری نگفته است در Task قرار نده.
-
-
-قوانین collectedData:
-
-- فقط اطلاعاتی را ذخیره کن که مشتری در پیام خودش گفته است.
-- پیام‌های قبلی مشتری قابل استفاده هستند.
-- پیام‌های تولیدشده توسط مشاور یا سیستم منبع اطلاعات محسوب نمی‌شوند.
-- هیچ مقدار پیش‌فرض، نمونه یا حدس ذخیره نکن.
-- اگر اطلاعات جدیدی وجود ندارد، مقدار قبلی را تغییر نده.
-`;
+  const systemPrompt = buildAiBehaviorSystemPrompt(behaviorRuntime,
+    'با استفاده از context و دانش معتبر، پاسخ مکالمه را بساز. عملیات اجرا نکن؛ فقط action پیشنهادی allowlistشده و داده‌ای را که عیناً در پیام مشتری وجود دارد برگردان.');
 
   const userPrompt = `سابقه گفتگوهای پیشین:\n${historyText || 'این اولین پیام ارسالی مشتری است.'}\n\nپیام جدید مشتری:\n"${userMessageContent}"`;
-
-  const aiConfig = await getAiConfig();
-  const apiKey = aiConfig.openaiApiKey || process.env.OPENAI_API_KEY || "";
-  if (!apiKey && !deterministicReply) {
-    throw new Error('OPENAI_API_KEY is not configured.');
-  }
-
-  const openai = apiKey ? new OpenAI({ apiKey }) : null;
 
   let promptTokens = 0;
   let completionTokens = 0;
@@ -943,98 +660,76 @@ Call Customer
     : { valid: false, reason: '' };
   let retryCount = 0;
   let validationStatus: 'PASSED' | 'REJECTED' | 'REGENERATED' = 'PASSED';
-  const targetModel = aiConfig.openaiModel || 'gpt-5';
   let modelUsed = deterministicReply
     ? purchaseLinkOffer ? 'Deterministic Product Purchase Link' : 'Deterministic Quotation Workflow'
-    : targetModel;
+    : 'AIBehaviorRuntime';
+  let effectiveBehaviorRuntime = behaviorRuntime;
+  let behaviorDecisionAudit: Record<string, unknown> | null = deterministicReply ? {
+    decision: 'DETERMINISTIC_BACKEND_ACTION', proposedAction: 'NONE', approvedAction: 'NONE',
+  } : null;
 
-  // Execution & Self-Correction Loop
+  // The conversational response path uses the same central runtime as the
+  // quotation classifier, guidance generator, terminal classifier and simulator.
   while (!deterministicReply && retryCount <= 2) {
-    const currentMessages: any[] = [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ];
-
-    if (retryCount > 0) {
-      currentMessages.push({
-        role: 'user',
-        content: `پاسخ قبلی شما به این دلیل رد شد: "${validation.reason}". لطفاً مجدداً با رعایت دقیق قوانین مرکز آموزش، بدون هیچ ارجاع کلیشه‌ای یا حدس قیمت، سوالات استعلام را به صورت صمیمی، کوتاه و مرحله‌ای بپرسید.`,
-      });
-    }
-
-    let completionText = '';
     try {
-      const response = await openai!.chat.completions.create({
-        model: targetModel,
-        messages: currentMessages,
-        response_format: { type: 'json_object' },
-        
+      const runtimeResult = await runAiBehaviorStructuredModel<{
+        decision: string;
+        intent: string;
+        responseText: string;
+        canonicalAnswer: string | null;
+        answeredFields: Array<{ fieldName: string; value: string; evidence: string }>;
+        needsClarification: boolean;
+        clarificationReason: string | null;
+        requestedAction: string;
+        shouldAdvance: boolean;
+        knowledgeSource: string;
+        appliedRuleIds: string[];
+        confidence: number;
+      }>({
+        context: behaviorContext,
+        taskContract: 'به آخرین پیام کاربر پاسخ بده. رفتار مکالمه فقط از قوانین فعال runtime می‌آید. دانش فقط از context مجاز است. answeredFields تنها برای داده‌ای مجاز است که evidence آن عیناً در پیام مشتری وجود دارد. هیچ Task/Lead/SMS نساز.',
+        schemaName: 'ai_behavior_turn',
+        schema: {
+          type: 'object', additionalProperties: false,
+          properties: {
+            decision: { type: 'string' }, intent: { type: 'string' }, responseText: { type: 'string' },
+            canonicalAnswer: { type: ['string', 'null'] },
+            answeredFields: { type: 'array', items: { type: 'object', additionalProperties: false, properties: { fieldName: { type: 'string' }, value: { type: 'string' }, evidence: { type: 'string' } }, required: ['fieldName', 'value', 'evidence'] } },
+            needsClarification: { type: 'boolean' }, clarificationReason: { type: ['string', 'null'] },
+            requestedAction: { type: 'string', enum: ['NONE', 'SAVE_VALID_ANSWER', 'KEEP_CURRENT_QUESTION', 'ADVANCE_QUESTION', 'CORRECT_ANSWER', 'START_NEW_QUOTATION', 'PAUSE_QUOTATION', 'REQUEST_HUMAN', 'RETRY_SUBMISSION'] },
+            shouldAdvance: { type: 'boolean' }, knowledgeSource: { type: 'string' },
+            appliedRuleIds: { type: 'array', items: { type: 'string' } }, confidence: { type: 'number', minimum: 0, maximum: 1 },
+          },
+          required: ['decision', 'intent', 'responseText', 'canonicalAnswer', 'answeredFields', 'needsClarification', 'clarificationReason', 'requestedAction', 'shouldAdvance', 'knowledgeSource', 'appliedRuleIds', 'confidence'],
+        },
+        payload: {
+          message: userMessageContent,
+          recentMessages: messageHistory.slice(-8).map(message => ({ senderType: message.senderType, content: message.content })),
+          context: workflowContext,
+          knowledge: extractedKnowledge.promptFormattedKnowledge,
+          retry: retryCount ? { rejectedReason: validation.reason } : null,
+        },
       });
-
-      modelUsed = targetModel;
-      promptTokens += response.usage?.prompt_tokens || 0;
-      completionTokens += response.usage?.completion_tokens || 0;
-      completionText = response.choices[0]?.message?.content || '{}';
-
-    } catch (err: any) {
-      console.error('🔥 BRAIN LAYER PRIMARY ERROR:', {
-        message: err.message,
-        code: err.code,
-        status: err.status,
-        type: err.type,
-      });
-      console.warn(`${targetModel} error in brain layer, attempting gpt-4o fallback:`, err.message);
-      modelUsed = 'gpt-4o';
-      try {
-        const fallbackResponse = await openai!.chat.completions.create({
-          model: 'gpt-4o',
-          messages: currentMessages,
-          response_format: { type: 'json_object' },
-          
-        });
-
-        promptTokens += fallbackResponse.usage?.prompt_tokens || 0;
-        completionTokens += fallbackResponse.usage?.completion_tokens || 0;
-        completionText = fallbackResponse.choices[0]?.message?.content || '{}';
-      } catch (fallbackErr: any) {
-        console.error('🔥 BRAIN LAYER GPT4 FALLBACK ERROR:', {
-          message: fallbackErr.message,
-          code: fallbackErr.code,
-          status: fallbackErr.status,
-          type: fallbackErr.type,
-        });
-        console.warn('gpt-4o error, attempting gpt-4o-mini fallback:', fallbackErr.message);
-        modelUsed = 'gpt-4o-mini';
-        const miniFallback = await openai!.chat.completions.create({
-          model: 'gpt-4o-mini',
-          messages: currentMessages,
-          response_format: { type: 'json_object' },
-          
-        });
-        promptTokens += miniFallback.usage?.prompt_tokens || 0;
-        completionTokens += miniFallback.usage?.completion_tokens || 0;
-        completionText = miniFallback.choices[0]?.message?.content || '{}';
-      }
-    }
-
-
-    try {
-      const parsed = JSON.parse(completionText);
-
-      finalReplyText = parsed.replyText || '';
-
-      generatedTask = parsed.task || undefined;
-      generatedOperatorSummary = parsed.operatorSummary || '';
-      if (parsed.collectedData && typeof parsed.collectedData === 'object') {
-        const filteredData = Object.fromEntries(
-          Object.entries(parsed.collectedData)
-            .filter(([_, value]) => value !== '' && value !== null && value !== undefined)
-        );
-
-        newlyExtractedData = filteredData;
-      }
-    } catch (pErr) {
-      finalReplyText = completionText;
+      modelUsed = runtimeResult.model;
+      effectiveBehaviorRuntime = runtimeResult.resolution;
+      promptTokens += runtimeResult.usage.promptTokens;
+      completionTokens += runtimeResult.usage.completionTokens;
+      finalReplyText = runtimeResult.output.responseText || '';
+      const requestedAction = validateRequestedAction(runtimeResult.output.requestedAction, ['NONE', 'REQUEST_HUMAN', 'START_NEW_QUOTATION', 'PAUSE_QUOTATION']);
+      behaviorDecisionAudit = {
+        decision: runtimeResult.output.decision,
+        proposedAction: runtimeResult.output.requestedAction,
+        approvedAction: requestedAction,
+        confidence: runtimeResult.output.confidence,
+        knowledgeSource: runtimeResult.output.knowledgeSource,
+      };
+      generatedTask = requestedAction === 'REQUEST_HUMAN' ? { create: false, requestedByBehaviorRuntime: true } : undefined;
+      newlyExtractedData = Object.fromEntries((runtimeResult.output.answeredFields || [])
+        .filter(item => item.fieldName && item.value && item.evidence && userMessageContent.includes(item.evidence))
+        .map(item => [item.fieldName, item.value]));
+      generatedOperatorSummary = '';
+    } catch {
+      finalReplyText = '';
     }
 
     // Validate Response against Training Center Policies
@@ -1053,7 +748,7 @@ Call Customer
 
   // Fallback if still invalid
   if (!validation.valid && !finalReplyText) {
-    finalReplyText = `سلام، خوش آمدید. لطفاً بفرمایید در چه زمینه‌ای از خدمات بیمه‌ای نیاز به راهنمایی دارید تا دقیق‌تر راهنمایی‌تان کنم.`;
+    finalReplyText = 'در حال حاضر امکان آماده‌کردن پاسخ مطمئن وجود ندارد. لطفاً پیام را کوتاه‌تر تکرار کنید.';
   }
 
   if (quotationInterruptionQuestion) {
@@ -1083,6 +778,15 @@ Call Customer
     currentPageProductSuggestionDecision: pageProductSuggestionDecision,
     quotationOptionSelection,
     quotationValidation,
+    behaviorRuntime: {
+      promptVersion: effectiveBehaviorRuntime.promptVersion,
+      resolvedAt: effectiveBehaviorRuntime.resolvedAt,
+      context: effectiveBehaviorRuntime.context,
+      candidates: effectiveBehaviorRuntime.candidates,
+      selected: effectiveBehaviorRuntime.selected.map(rule => ({ id: rule.id, title: rule.title, version: rule.version, priority: rule.sortOrder, specificity: rule.specificity })),
+      rejected: effectiveBehaviorRuntime.rejected,
+      decision: behaviorDecisionAudit,
+    },
     ...buildQuotationAudit({
       messageId, conversationId: conversation.id,
       quotationSessionId: quotationState?.sessionId || null,

@@ -141,6 +141,18 @@ export interface AiBehaviorRule {
   status: 'ACTIVE' | 'INACTIVE';
   category?: string;
   enforcementLevel?: string;
+  scope?: {
+    channels?: string[];
+    productIds?: string[];
+    categoryIds?: string[];
+    intents?: string[];
+    conversationStates?: string[];
+    quotationStates?: string[];
+    fieldNames?: string[];
+    messageTypes?: string[];
+    userRoles?: string[];
+  };
+  conflictKey?: string;
   createdAt?: string;
   updatedAt?: string;
 }

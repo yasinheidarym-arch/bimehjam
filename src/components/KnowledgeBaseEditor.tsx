@@ -50,7 +50,13 @@ import {
 } from 'lucide-react';
 import { knowledgeService } from '../services/api';
 import { AiBehaviorRule } from '../types';
-import { FULL_NAME_HANDOFF_RULE_CATEGORY } from '../../shared/humanHandoffRule';
+import {
+  DEFAULT_HUMAN_HANDOFF_RULE_CONFIG,
+  FULL_NAME_HANDOFF_RULE_CATEGORY,
+  parseHumanHandoffRule,
+  serializeHumanHandoffRule,
+  type HumanHandoffRuleConfig,
+} from '../../shared/humanHandoffRule';
 import {
   DEFAULT_QUOTATION_ROUTING_TEMPLATES,
   isValidOptionalProductPurchaseUrl,
@@ -68,6 +74,13 @@ import {
   serializeQuotationResponseEngineConfig,
   type QuotationResponseEngineConfig,
 } from '../../shared/quotationResponseEngine';
+import {
+  DEFAULT_QUOTATION_COMPLETION_CONFIG,
+  parseQuotationCompletionRule,
+  QUOTATION_COMPLETION_RULE_CATEGORY,
+  serializeQuotationCompletionRule,
+  type QuotationCompletionRuleConfig,
+} from '../../shared/quotationCompletionRule';
 
 type ModuleTab = 'categories' | 'products' | 'faqs' | 'ai-behavior';
 type ModuleLoadState = 'loading' | 'ready' | 'error';
@@ -256,6 +269,10 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     sortOrder: number;
     routingTemplates: QuotationRoutingTemplates | null;
     engineConfig: QuotationResponseEngineConfig | null;
+    completionConfig: QuotationCompletionRuleConfig | null;
+    handoffConfig: HumanHandoffRuleConfig | null;
+    runtimeScope: Record<string, string>;
+    conflictKey: string;
   }>({
     title: '',
     directive: '',
@@ -263,6 +280,10 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     sortOrder: 0,
     routingTemplates: null,
     engineConfig: null,
+    completionConfig: null,
+    handoffConfig: null,
+    runtimeScope: {},
+    conflictKey: '',
   });
   const [quotationSimulator, setQuotationSimulator] = useState({ question: '', fieldName: 'current_field', type: 'text', options: '', message: '' });
   const [quotationSimulatorResult, setQuotationSimulatorResult] = useState<any>(null);
@@ -324,7 +345,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
   // --- Handlers for Dynamic AI Behavior Rules ---
   const handleOpenCreateBehaviorModal = () => {
     setEditingBehaviorRule(null);
-    setBehaviorForm({ title: '', directive: '', status: 'ACTIVE', sortOrder: aiBehaviorRules.length + 1, routingTemplates: null, engineConfig: null });
+    setBehaviorForm({ title: '', directive: '', status: 'ACTIVE', sortOrder: aiBehaviorRules.length + 1, routingTemplates: null, engineConfig: null, completionConfig: null, handoffConfig: null, runtimeScope: {}, conflictKey: '' });
     setShowBehaviorModal(true);
   };
 
@@ -341,37 +362,58 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       engineConfig: rule.category === QUOTATION_RESPONSE_ENGINE_CATEGORY
         ? parseQuotationResponseEngineConfig(rule.directive) || DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG
         : null,
+      completionConfig: rule.category === QUOTATION_COMPLETION_RULE_CATEGORY
+        ? parseQuotationCompletionRule(rule.directive) || DEFAULT_QUOTATION_COMPLETION_CONFIG
+        : null,
+      handoffConfig: rule.category === FULL_NAME_HANDOFF_RULE_CATEGORY
+        ? parseHumanHandoffRule(rule.directive) || DEFAULT_HUMAN_HANDOFF_RULE_CONFIG
+        : null,
+      runtimeScope: Object.fromEntries(Object.entries(rule.scope || {}).map(([key, values]) => [key, (values || []).join(', ')])),
+      conflictKey: rule.conflictKey || '',
     });
     setShowBehaviorModal(true);
   };
 
   const handleSaveBehaviorRule = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!behaviorForm.title.trim() || (!behaviorForm.directive.trim() && !behaviorForm.routingTemplates && !behaviorForm.engineConfig)) {
+    if (!behaviorForm.title.trim() || (!behaviorForm.directive.trim() && !behaviorForm.routingTemplates && !behaviorForm.engineConfig && !behaviorForm.completionConfig && !behaviorForm.handoffConfig)) {
       alert('لطفاً عنوان و متن دستورالعمل قانون را وارد نمایید.');
       return;
     }
     setLoading(true);
     try {
       if (editingBehaviorRule) {
+        const scope = Object.fromEntries(Object.entries(behaviorForm.runtimeScope).flatMap(([key, value]) => {
+          const values = String(value).split(',').map(item => item.trim()).filter(Boolean);
+          return values.length ? [[key, values]] : [];
+        }));
         await knowledgeService.updateAiBehavior(editingBehaviorRule.id, {
           title: behaviorForm.title,
           directive: behaviorForm.routingTemplates ? serializeQuotationRoutingTemplates(behaviorForm.routingTemplates)
-            : behaviorForm.engineConfig ? serializeQuotationResponseEngineConfig(behaviorForm.engineConfig) : behaviorForm.directive,
+            : behaviorForm.engineConfig ? serializeQuotationResponseEngineConfig(behaviorForm.engineConfig)
+              : behaviorForm.completionConfig ? serializeQuotationCompletionRule(behaviorForm.completionConfig)
+                : behaviorForm.handoffConfig ? serializeHumanHandoffRule(behaviorForm.handoffConfig) : behaviorForm.directive,
           status: behaviorForm.status,
           sortOrder: behaviorForm.sortOrder,
+          ...(!behaviorForm.routingTemplates && !behaviorForm.engineConfig && !behaviorForm.completionConfig && !behaviorForm.handoffConfig ? { scope, conflictKey: behaviorForm.conflictKey.trim() } : {}),
         });
       } else {
+        const scope = Object.fromEntries(Object.entries(behaviorForm.runtimeScope).flatMap(([key, value]) => {
+          const values = String(value).split(',').map(item => item.trim()).filter(Boolean);
+          return values.length ? [[key, values]] : [];
+        }));
         await knowledgeService.createAiBehavior({
           title: behaviorForm.title,
           directive: behaviorForm.directive,
           status: behaviorForm.status,
           sortOrder: behaviorForm.sortOrder,
+          scope,
+          conflictKey: behaviorForm.conflictKey.trim(),
         });
       }
       setShowBehaviorModal(false);
       setEditingBehaviorRule(null);
-      setBehaviorForm({ title: '', directive: '', status: 'ACTIVE', sortOrder: 0, routingTemplates: null, engineConfig: null });
+      setBehaviorForm({ title: '', directive: '', status: 'ACTIVE', sortOrder: 0, routingTemplates: null, engineConfig: null, completionConfig: null, handoffConfig: null, runtimeScope: {}, conflictKey: '' });
       await loadTabContent();
     } catch (err: any) {
       alert('خطا در ذخیره‌سازی قانون رفتار: ' + err.message);
@@ -3670,6 +3712,8 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                     ['differentPageResponse', 'متن وقتی کاربر در صفحهٔ محصول دیگری است'],
                     ['awaitingChoiceResponse', 'متن انتظار برای انتخاب فرم یا استعلام چتی'],
                     ['chatStartResponse', 'متن کوتاه پیش از سؤال اول استعلام چتی'],
+                    ['pageProductSuggestionResponse', 'متن پیشنهاد محصول صفحهٔ فعلی'],
+                    ['categoryClarificationResponse', 'متن درخواست انتخاب محصول از دسته'],
                   ] as const).map(([key, label]) => (
                     <label key={key} className="block space-y-1">
                       <span className="font-bold text-slate-700">{label}:</span>
@@ -3686,8 +3730,37 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                     </label>
                   ))}
                 </div>
+              ) : behaviorForm.completionConfig ? (
+                <div className="space-y-3 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
+                  <p className="text-[11px] text-emerald-800">تمام متن‌های مرحلهٔ پایانی از همین قانون خوانده می‌شوند و پس از ذخیره، بدون deploy روی پیام بعدی اثر دارند.</p>
+                  {([
+                    ['choicePrompt', 'پرسش انتخاب تماس یا اعلام قیمت در چت'],
+                    ['callSuccess', 'پیام پس از ثبت موفق مسیر تماس'],
+                    ['chatSuccess', 'پیام پس از ثبت موفق مسیر چت'],
+                    ['failure', 'پیام شکست ثبت واقعی'],
+                    ['failedTerminal', 'پاسخ ادامه گفتگو پس از شکست'],
+                    ['callSubmitted', 'پاسخ تکراری پس از ثبت مسیر تماس'],
+                    ['chatSubmitted', 'پاسخ تکراری پس از ثبت مسیر چت'],
+                  ] as const).map(([key, label]) => (
+                    <label key={key} className="block space-y-1"><span className="font-bold text-slate-700">{label}</span><textarea rows={2} required value={behaviorForm.completionConfig![key]} onChange={(e) => setBehaviorForm({ ...behaviorForm, completionConfig: { ...behaviorForm.completionConfig!, [key]: e.target.value } })} className="w-full rounded-xl border border-slate-200 bg-white p-2.5" /></label>
+                  ))}
+                </div>
+              ) : behaviorForm.handoffConfig ? (
+                <div className="space-y-3 rounded-2xl border border-sky-100 bg-sky-50/40 p-4">
+                  <p className="text-[11px] text-sky-800">متن جمع‌آوری مشخصات در هر turn از همین قانون خوانده می‌شود.</p>
+                  <label className="block space-y-1"><span className="font-bold">دستور رفتاری</span><textarea rows={3} value={behaviorForm.handoffConfig.instruction} onChange={(e) => setBehaviorForm({ ...behaviorForm, handoffConfig: { ...behaviorForm.handoffConfig!, instruction: e.target.value } })} className="w-full rounded-xl border border-slate-200 bg-white p-2.5" /></label>
+                  {([
+                    ['fullNamePrompt', 'درخواست نام کامل'], ['lastNamePrompt', 'درخواست نام خانوادگی'],
+                    ['mobilePrompt', 'درخواست موبایل'], ['cityPrompt', 'درخواست شهر'],
+                    ['interruptionPrefix', 'متن حفظ اطلاعات هنگام وقفه'],
+                    ['successPrompt', 'پیام پس از ثبت موفق ارجاع'],
+                    ['policyBlockedPrompt', 'پیام ارجاع رشتهٔ غیرفعال یا محدود'],
+                  ] as const).map(([key, label]) => (
+                    <label key={key} className="block space-y-1"><span className="font-bold">{label}</span><textarea rows={2} required value={behaviorForm.handoffConfig![key]} onChange={(e) => setBehaviorForm({ ...behaviorForm, handoffConfig: { ...behaviorForm.handoffConfig!, [key]: e.target.value } })} className="w-full rounded-xl border border-slate-200 bg-white p-2.5" /></label>
+                  ))}
+                </div>
               ) : (
-                <div>
+                <div className="space-y-4">
                   <label className="font-bold text-slate-700 block mb-1">متن و دستورالعمل قانون (Directive):</label>
                   <textarea
                     rows={4}
@@ -3697,6 +3770,31 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                     placeholder="دستورالعمل صریح و دقیقی که هوش مصنوعی قبل از هر پاسخ باید رعایت کند..."
                     className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:border-amber-500 leading-relaxed font-sans"
                   ></textarea>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 space-y-3">
+                    <div>
+                      <h4 className="font-bold text-slate-800">محدوده اجرای قانون</h4>
+                      <p className="mt-1 text-[11px] text-slate-500">هر فیلد اختیاری است؛ چند مقدار را با ویرگول جدا کنید. قانون بدون محدوده، عمومی است.</p>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {([
+                        ['channels', 'کانال‌ها', 'GOFTINO, SIMULATOR'],
+                        ['productIds', 'شناسه محصول‌ها', 'product-id'],
+                        ['categoryIds', 'شناسه دسته‌ها', 'category-id'],
+                        ['intents', 'intentها', 'Insurance Quotation'],
+                        ['conversationStates', 'وضعیت مکالمه', 'QUOTATION, GENERAL'],
+                        ['quotationStates', 'وضعیت استعلام', 'IN_PROGRESS, FAILED'],
+                        ['fieldNames', 'فیلدهای سؤال', 'buildingAge'],
+                        ['messageTypes', 'نوع پیام', 'CUSTOMER_MESSAGE'],
+                        ['userRoles', 'نقش کاربر', 'CUSTOMER'],
+                      ] as const).map(([key, label, placeholder]) => (
+                        <label key={key}><span className="mb-1 block font-bold text-slate-700">{label}</span><input value={behaviorForm.runtimeScope[key] || ''} onChange={(e) => setBehaviorForm({ ...behaviorForm, runtimeScope: { ...behaviorForm.runtimeScope, [key]: e.target.value } })} placeholder={placeholder} className="w-full rounded-xl border border-slate-200 p-2.5" /></label>
+                      ))}
+                      <label>
+                        <span className="mb-1 block font-bold text-slate-700">کلید تعارض (اختیاری)</span>
+                        <input value={behaviorForm.conflictKey} onChange={(e) => setBehaviorForm({ ...behaviorForm, conflictKey: e.target.value })} placeholder="مثلاً quotation-tone" className="w-full rounded-xl border border-slate-200 p-2.5" />
+                      </label>
+                    </div>
+                  </div>
                 </div>
               )}
 

@@ -1,4 +1,3 @@
-import OpenAI from 'openai';
 import { withConversationTurn } from './conversationTurnQueue';
 import prisma from '../db/client';
 import axios from 'axios';
@@ -13,7 +12,7 @@ import {
   HumanHandoffReason,
   resolveHumanHandoffNameRule,
 } from './humanHandoffNameFlow';
-import { getQuotationCompletionPrompt, getQuotationFinalizationRuleContext, isFullNameHandoffRuleActive } from './aiBehaviorService';
+import { getHumanHandoffRuleConfig, getQuotationCompletionConfig, getQuotationFinalizationRuleContext, isFullNameHandoffRuleActive } from './aiBehaviorService';
 import { AiMode, shouldExecuteAi } from '../../shared/aiSchedule';
 import {
   offeredPurchaseLinkProductIds,
@@ -27,15 +26,11 @@ import {
   startQuotationSubmission,
 } from './quotationSubmissionFlow';
 import { classifyQuotationTerminalIntentWithAi } from './quotationClassifierService';
+import { classifyConversationIntentWithRuntime, classifyQuotationDeliveryChoiceWithRuntime } from './aiBehaviorRuntime';
 import { buildQuotationAudit } from './quotationAudit';
 import {
   finalizeQuotationCompletion,
-  QUOTATION_CALL_SUCCESS,
-  QUOTATION_CHAT_SUCCESS,
-  QUOTATION_COMPLETION_FAILURE,
 } from './quotationCompletionService';
-
-const DEFAULT_GOFTINO_HANDOFF_MESSAGE = 'برای بررسی دقیق درخواست شما، همکاران متخصص بیمه جم ادامهٔ گفتگو را پیگیری می‌کنند. 🌹';
 
 function customerGoftinoTopicId(metadata?: string | null): string | null {
   if (!metadata) return null;
@@ -106,6 +101,7 @@ type QuotationFinalizationAudit = {
   phase: string;
   before: { status: string; step: string } | null;
   after: { status: string; step: string };
+  behaviorRuntime?: unknown;
 };
 
 // Helper to log steps to DB
@@ -590,9 +586,24 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
 
     scheduleGoftinoTyping();
 
-    const handoffRequestRegex = /کارشناس|اپراتور|انسان|تماس|مشاور تلفنی|وصل کن/i;
-    const customerRequestedHuman = handoffRequestRegex.test(userMessageContent);
     const existingCollectedData = parseConversationCollectedData(conversation.collectedData);
+    let customerRequestedHuman = false;
+    try {
+      const semanticIntent = await classifyConversationIntentWithRuntime({
+        message: userMessageContent,
+        recentMessages: messagesReversed.map(message => ({ senderType: message.senderType, content: message.content })),
+        context: {
+          channel: 'GOFTINO', productId: conversation.currentProductId, intent: null,
+          conversationState: conversation.currentProductId ? 'QUOTATION' : 'GENERAL',
+          quotationState: existingCollectedData.quotationSubmission?.status || null,
+          messageType: 'CUSTOMER_MESSAGE', userRole: 'CUSTOMER',
+        },
+      });
+      customerRequestedHuman = semanticIntent.output.intent === 'Human Operator Request' && semanticIntent.output.confidence >= .75;
+    } catch {
+      // Narrow provider-unavailable safety fallback; semantic handling is primary.
+      customerRequestedHuman = /کارشناس|اپراتور|انسان/.test(userMessageContent);
+    }
     let pendingQuotationSubmission = existingCollectedData.quotationSubmission?.pending === true
       ? existingCollectedData.quotationSubmission as QuotationSubmissionState
       : null;
@@ -605,7 +616,9 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
       ? existingCollectedData.humanHandoff as HumanHandoffNameState
       : null;
     const fullNameHandoffRuleActive = await isFullNameHandoffRuleActive();
-    const quotationCompletionPrompt = await getQuotationCompletionPrompt();
+    const humanHandoffConfig = await getHumanHandoffRuleConfig();
+    const quotationCompletionConfig = await getQuotationCompletionConfig();
+    const quotationCompletionPrompt = quotationCompletionConfig.choicePrompt;
     const quotationFinalizationRules = await getQuotationFinalizationRuleContext();
 
     let terminalSubmission = existingCollectedData.quotationSubmission
@@ -618,10 +631,15 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
           status: terminalSubmission.status as 'SUBMITTED' | 'FAILED',
           deliveryChoice: terminalSubmission.deliveryChoice,
           recentMessages: messagesReversed.map(message => ({ senderType: message.senderType, content: message.content })),
+          behaviorContext: {
+            channel: 'GOFTINO', productId: terminalSubmission.productId, categoryId: terminalSubmission.categoryId,
+            currentPageUrl: terminalSubmission.currentPageUrl, intent: 'Insurance Quotation', conversationState: 'QUOTATION',
+            quotationState: terminalSubmission.status, messageType: 'CUSTOMER_MESSAGE', userRole: 'CUSTOMER',
+          },
         })
       : null;
     const terminalDecision = terminalSubmission && terminalClassification
-      ? handleTerminalQuotationSubmission(terminalSubmission, terminalClassification.intent)
+      ? handleTerminalQuotationSubmission(terminalSubmission, terminalClassification.intent, quotationCompletionConfig)
       : null;
     if (terminalDecision?.action === 'RETRY') pendingQuotationSubmission = terminalDecision.state;
     if (terminalDecision?.action === 'RELEASE') terminalSubmission = null;
@@ -641,13 +659,33 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         sessionId: terminalSubmission.sessionId, phase: `TERMINAL_${terminalClassification?.intent || 'OTHER'}`,
         before: { status: terminalSubmission.status, step: terminalSubmission.step },
         after: { status: terminalSubmission.status, step: terminalSubmission.step },
+        behaviorRuntime: terminalClassification?.behaviorRuntime,
       };
     } else if (pendingQuotationSubmission) {
       const finalizationBefore = { status: pendingQuotationSubmission.status, step: pendingQuotationSubmission.step };
       const submissionMessage = terminalDecision?.action === 'RETRY'
         ? (terminalDecision.route === 'CALL' ? 'تماس' : 'اعلام قیمت در چت')
         : userMessageContent;
-      const decision = advanceQuotationSubmission(pendingQuotationSubmission, submissionMessage);
+      let semanticDeliveryChoice: 'CALL' | 'CHAT' | null = null;
+      let deliveryChoiceBehaviorRuntime: unknown = null;
+      if (pendingQuotationSubmission.step === 'DELIVERY_CHOICE') {
+        try {
+          const choice = await classifyQuotationDeliveryChoiceWithRuntime({
+            message: submissionMessage,
+            recentMessages: messagesReversed.map(message => ({ senderType: message.senderType, content: message.content })),
+            context: {
+              channel: 'GOFTINO', productId: pendingQuotationSubmission.productId, categoryId: pendingQuotationSubmission.categoryId,
+              currentPageUrl: pendingQuotationSubmission.currentPageUrl, intent: 'Insurance Quotation', conversationState: 'QUOTATION',
+              quotationState: 'AWAITING_DELIVERY_CHOICE', messageType: 'CUSTOMER_MESSAGE', userRole: 'CUSTOMER',
+            },
+          });
+          deliveryChoiceBehaviorRuntime = choice.resolution;
+          if (choice.output.confidence >= .75 && choice.output.choice !== 'UNKNOWN') semanticDeliveryChoice = choice.output.choice;
+        } catch {
+          // The deterministic parser is only a provider-unavailable fallback.
+        }
+      }
+      const decision = advanceQuotationSubmission(pendingQuotationSubmission, submissionMessage, semanticDeliveryChoice, humanHandoffConfig);
       const profile = decision.state.profile;
       await prisma.customer.update({
         where: { id: customer.id },
@@ -679,6 +717,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
             preferredAssignedUserId: conversation.assignedUserId,
             profile,
             answers: decision.state.answers,
+            successReply: decision.route === 'CALL' ? quotationCompletionConfig.callSuccess : quotationCompletionConfig.chatSuccess,
           });
           const finalState: QuotationSubmissionState = {
             ...decision.state,
@@ -691,7 +730,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
             failureReason: outcome.ok ? undefined : outcome.error,
           };
           brainResult = humanHandoffResult({
-            replyText: outcome.ok ? outcome.replyText : QUOTATION_COMPLETION_FAILURE,
+            replyText: outcome.ok ? outcome.replyText : quotationCompletionConfig.failure,
             reason: 'QUOTATION_COMPLETED',
             fullName: profile.fullName,
             collectedData: { ...existingCollectedData, quotationSubmission: finalState },
@@ -708,7 +747,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
             failureReason: 'TASK_OR_LEAD_FAILED',
           };
           brainResult = humanHandoffResult({
-            replyText: QUOTATION_COMPLETION_FAILURE,
+            replyText: quotationCompletionConfig.failure,
             reason: 'QUOTATION_COMPLETED',
             collectedData: { ...existingCollectedData, quotationSubmission: finalState },
             deferHumanHandoff: true,
@@ -732,6 +771,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
           status: brainResult.collectedData?.quotationSubmission?.status || decision.state.status,
           step: brainResult.collectedData?.quotationSubmission?.step || decision.state.step,
         },
+        behaviorRuntime: deliveryChoiceBehaviorRuntime,
       };
     } else if (pendingHandoff) {
       const decision = resolveHumanHandoffNameRule({
@@ -740,6 +780,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         existingCustomerName: customer.name,
         message: userMessageContent,
         state: pendingHandoff,
+        prompts: humanHandoffConfig,
       });
       if (decision.action === 'ASK_NAME') {
         brainResult = humanHandoffResult({
@@ -751,7 +792,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
       } else {
         const reasonText = handoffReasonLabel(decision.reason);
         brainResult = humanHandoffResult({
-          replyText: 'سپاسگزارم. درخواست شما ثبت شد و همکارم ادامهٔ پیگیری را انجام می‌دهد. 🌹',
+          replyText: humanHandoffConfig.successPrompt,
           reason: decision.reason,
           fullName: decision.fullName,
           collectedData: {
@@ -771,7 +812,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
       }
     } else if (policyDecision.kind === 'HANDOFF') {
       brainResult = policyHandoffResult(
-        DEFAULT_GOFTINO_HANDOFF_MESSAGE,
+        humanHandoffConfig.policyBlockedPrompt,
         `Goftino policy decision: ${policyDecision.reason}`,
       );
       await createAiLog({
@@ -783,7 +824,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         details: `پاسخ تخصصی AI متوقف شد: ${policyDecision.reason}`,
       });
     } else if (customerRequestedHuman && !productQuotationActive) {
-      const decision = resolveHumanHandoffNameRule({ ruleActive: fullNameHandoffRuleActive, reason: 'DIRECT_HUMAN_REQUEST', existingCustomerName: customer.name });
+      const decision = resolveHumanHandoffNameRule({ ruleActive: fullNameHandoffRuleActive, reason: 'DIRECT_HUMAN_REQUEST', existingCustomerName: customer.name, prompts: humanHandoffConfig });
       if (decision.action === 'ASK_NAME') {
         brainResult = humanHandoffResult({
           replyText: decision.replyText,
@@ -794,7 +835,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
       } else {
         const reasonText = handoffReasonLabel(decision.reason);
         brainResult = humanHandoffResult({
-          replyText: 'درخواست شما ثبت شد و همکارم ادامهٔ پیگیری را انجام می‌دهد. 🌹',
+          replyText: humanHandoffConfig.successPrompt,
           reason: decision.reason,
           fullName: decision.fullName,
           collectedData: { ...existingCollectedData, humanHandoff: null, customerIdentity: { fullName: decision.fullName, status: decision.nameStatus }, handoffReason: reasonText },
@@ -851,6 +892,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
           answers,
           existingProfile: { fullName: customer.name, mobile: customer.phone, city: customer.city },
           choicePrompt: quotationCompletionPrompt,
+          profilePrompts: humanHandoffConfig,
           currentPageUrl: brainResult.workflowContext?.currentPageUrl || null,
           categoryId: brainResult.workflowContext?.matchedCategory?.id || null,
           categoryName: brainResult.workflowContext?.matchedCategory?.name || null,
@@ -905,7 +947,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
             answerValidation: null,
             responseValidation: { status: 'PASSED', reason: `Deterministic quotation finalization: ${audit.phase}` },
           }),
-          finalization: { phase: audit.phase, before: audit.before, after: audit.after, rules: rulePayload },
+          finalization: { phase: audit.phase, before: audit.before, after: audit.after, rules: rulePayload, behaviorRuntime: audit.behaviorRuntime || null },
         });
         brainResult.workflowContext = {
           currentPageUrl: submissionAuditState.currentPageUrl || null, currentPageProduct: null,

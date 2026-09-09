@@ -14,6 +14,8 @@ export type QuotationRoutingTemplates = {
   differentPageResponse: string;
   awaitingChoiceResponse: string;
   chatStartResponse: string;
+  pageProductSuggestionResponse: string;
+  categoryClarificationResponse: string;
 };
 
 export const DEFAULT_QUOTATION_ROUTING_TEMPLATES: QuotationRoutingTemplates = {
@@ -30,12 +32,14 @@ export const DEFAULT_QUOTATION_ROUTING_TEMPLATES: QuotationRoutingTemplates = {
   differentPageResponse: 'برای استعلام آنلاین {{productName}} از لینک زیر استفاده کنید:\n{{purchaseUrl}}\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.',
   awaitingChoiceResponse: 'اگر می‌خواهید استعلام را در چت انجام دهیم، بگویید «خودتان استعلام کنید»؛ در غیر این صورت می‌توانید فرم آنلاین را تکمیل کنید.',
   chatStartResponse: 'حتماً؛ سؤال‌های استعلام را یکی‌یکی می‌پرسم.',
+  pageProductSuggestionResponse: 'منظورتان {{productName}} است؟',
+  categoryClarificationResponse: 'کدام نوع {{categoryName}} مدنظرتان است؟',
 };
 
 export const PURCHASE_LINK_RULE_DIRECTIVE = JSON.stringify(DEFAULT_QUOTATION_ROUTING_TEMPLATES, null, 2);
 
-const ROUTING_TEMPLATE_KEYS = ['samePageResponse', 'differentPageResponse', 'awaitingChoiceResponse', 'chatStartResponse'] as const;
-const ROUTING_TEMPLATE_VARIABLES = new Set(['productName', 'purchaseUrl', 'currentPageUrl']);
+const ROUTING_TEMPLATE_KEYS = ['samePageResponse', 'differentPageResponse', 'awaitingChoiceResponse', 'chatStartResponse', 'pageProductSuggestionResponse', 'categoryClarificationResponse'] as const;
+const ROUTING_TEMPLATE_VARIABLES = new Set(['productName', 'purchaseUrl', 'currentPageUrl', 'categoryName']);
 const FORBIDDEN_UNVERIFIED_CLAIM = /کد\s*یکتا|کمتر از\s*[۰-۹0-9]+\s*دقیقه|قیمت\s*قطعی|زمان\s*تضمینی|درخواست.*(?:ثبت|ارسال|ارجاع)\s*(?:شد|گردید)/i;
 
 export function parseQuotationRoutingTemplates(value: unknown): QuotationRoutingTemplates | null {
@@ -43,7 +47,7 @@ export function parseQuotationRoutingTemplates(value: unknown): QuotationRouting
     const parsed = typeof value === 'string' ? JSON.parse(value) : value;
     if (!parsed || typeof parsed !== 'object' || (parsed as Record<string, unknown>).version !== 1) return null;
     for (const key of ROUTING_TEMPLATE_KEYS) {
-      const template = (parsed as Record<string, unknown>)[key];
+      const template = (parsed as Record<string, unknown>)[key] ?? DEFAULT_QUOTATION_ROUTING_TEMPLATES[key];
       if (typeof template !== 'string' || !template.trim()) return null;
       if (FORBIDDEN_UNVERIFIED_CLAIM.test(template)) return null;
       for (const match of template.matchAll(/{{\s*([^{}]+?)\s*}}/g)) {
@@ -57,7 +61,8 @@ export function parseQuotationRoutingTemplates(value: unknown): QuotationRouting
       acceptanceExamples.some((example) => typeof example !== 'string' || !example.trim())
     )) return null;
     return {
-      ...(parsed as Omit<QuotationRoutingTemplates, 'acceptanceExamples'>),
+      ...DEFAULT_QUOTATION_ROUTING_TEMPLATES,
+      ...(parsed as Partial<QuotationRoutingTemplates>),
       acceptanceExamples: Array.isArray(acceptanceExamples)
         ? acceptanceExamples.map((example) => String(example).trim())
         : [...DEFAULT_QUOTATION_ROUTING_TEMPLATES.acceptanceExamples],
@@ -74,7 +79,7 @@ export function serializeQuotationRoutingTemplates(value: QuotationRoutingTempla
 
 export function renderQuotationRoutingTemplate(
   template: string,
-  context: { productName: string; purchaseUrl?: string | null; currentPageUrl?: string | null },
+  context: { productName: string; purchaseUrl?: string | null; currentPageUrl?: string | null; categoryName?: string | null },
 ): string {
   return template.replace(/{{\s*([^{}]+?)\s*}}/g, (_match, key: string) => {
     if (!ROUTING_TEMPLATE_VARIABLES.has(key)) return '';
