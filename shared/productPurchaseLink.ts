@@ -9,8 +9,9 @@ export const LEGACY_PURCHASE_LINK_RULE_CATEGORY = 'SYSTEM_PURCHASE_LINK_BEFORE_Q
 
 export type QuotationRoutingTemplates = {
   version: 1;
-  assistedQuestionLimit: number;
+  assistedLeadQuestionLimit: number;
   acceptanceExamples: string[];
+  assistedLeadExamples: string[];
   samePageResponse: string;
   differentPageResponse: string;
   awaitingChoiceResponse: string;
@@ -21,7 +22,7 @@ export type QuotationRoutingTemplates = {
 
 export const DEFAULT_QUOTATION_ROUTING_TEMPLATES: QuotationRoutingTemplates = {
   version: 1,
-  assistedQuestionLimit: 5,
+  assistedLeadQuestionLimit: 5,
   acceptanceExamples: [
     'برام حساب کنید',
     'شما حساب کنید',
@@ -29,6 +30,11 @@ export const DEFAULT_QUOTATION_ROUTING_TEMPLATES: QuotationRoutingTemplates = {
     'استعلام بگیرید',
     'قیمت بگیرید',
     'بله، شما انجام بدید',
+  ],
+  assistedLeadExamples: [
+    'فرم را نمی‌خواهم، کارشناس تماس بگیرد',
+    'فقط برای تماس با کارشناس اطلاعاتم را بگیرید',
+    'خودم فرم را پر نمی‌کنم، با من تماس بگیرید',
   ],
   samePageResponse: 'فرم استعلام آنلاین {{productName}} در همین صفحه در دسترس است و می‌توانید خودتان آن را تکمیل کنید.\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.',
   differentPageResponse: 'برای استعلام آنلاین {{productName}} از لینک زیر استفاده کنید:\n{{purchaseUrl}}\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.',
@@ -58,19 +64,30 @@ export function parseQuotationRoutingTemplates(value: unknown): QuotationRouting
     }
     if (!String((parsed as Record<string, unknown>).differentPageResponse).includes('{{purchaseUrl}}')) return null;
     const acceptanceExamples = (parsed as Record<string, unknown>).acceptanceExamples;
-    const assistedQuestionLimit = (parsed as Record<string, unknown>).assistedQuestionLimit ?? DEFAULT_QUOTATION_ROUTING_TEMPLATES.assistedQuestionLimit;
-    if (!Number.isInteger(assistedQuestionLimit) || Number(assistedQuestionLimit) < 3 || Number(assistedQuestionLimit) > 5) return null;
+    const assistedLeadQuestionLimit = (parsed as Record<string, unknown>).assistedLeadQuestionLimit
+      ?? (parsed as Record<string, unknown>).assistedQuestionLimit
+      ?? DEFAULT_QUOTATION_ROUTING_TEMPLATES.assistedLeadQuestionLimit;
+    if (!Number.isInteger(assistedLeadQuestionLimit) || Number(assistedLeadQuestionLimit) < 3 || Number(assistedLeadQuestionLimit) > 5) return null;
     if (acceptanceExamples !== undefined && (
       !Array.isArray(acceptanceExamples) ||
       acceptanceExamples.some((example) => typeof example !== 'string' || !example.trim())
     )) return null;
+    const assistedLeadExamples = (parsed as Record<string, unknown>).assistedLeadExamples;
+    if (assistedLeadExamples !== undefined && (
+      !Array.isArray(assistedLeadExamples) || assistedLeadExamples.some(example => typeof example !== 'string' || !example.trim())
+    )) return null;
+    const normalizedParsed = { ...(parsed as Record<string, unknown>) };
+    delete normalizedParsed.assistedQuestionLimit;
     return {
       ...DEFAULT_QUOTATION_ROUTING_TEMPLATES,
-      ...(parsed as Partial<QuotationRoutingTemplates>),
-      assistedQuestionLimit: Number(assistedQuestionLimit),
+      ...(normalizedParsed as Partial<QuotationRoutingTemplates>),
+      assistedLeadQuestionLimit: Number(assistedLeadQuestionLimit),
       acceptanceExamples: Array.isArray(acceptanceExamples)
         ? acceptanceExamples.map((example) => String(example).trim())
         : [...DEFAULT_QUOTATION_ROUTING_TEMPLATES.acceptanceExamples],
+      assistedLeadExamples: Array.isArray(assistedLeadExamples)
+        ? assistedLeadExamples.map(example => String(example).trim())
+        : [...DEFAULT_QUOTATION_ROUTING_TEMPLATES.assistedLeadExamples],
     };
   } catch {
     return null;
@@ -144,6 +161,13 @@ export function isDirectQuotationWorkflowRequest(message: string): boolean {
   ].some((pattern) => pattern.test(normalized));
 }
 
+export function isAssistedLeadRequest(message: string): boolean {
+  const normalized = String(message || '').replace(/‌/g, ' ').trim().toLowerCase();
+  const asksForQuoteHandling = /(قیمت|استعلام|حساب|محاسبه).*(بگیر|بگیرید|کن|کنید|انجام)|(?:شما|خودتان|خودتون).*(قیمت|استعلام|حساب|محاسبه)/.test(normalized);
+  const asksForCallbackOnly = /(فقط|صرفا|صرفاً)?.*(تماس|زنگ).*(کارشناس|اپراتور|مشاور)|(?:کارشناس|اپراتور|مشاور).*(تماس|زنگ)/.test(normalized);
+  return asksForCallbackOnly && !asksForQuoteHandling;
+}
+
 export function isPositiveQuotationWorkflowResponse(message: string): boolean {
   const normalized = String(message || '').replace(/‌/g, ' ').trim().toLowerCase();
   return /^(آره|اره|بله|باشه|اوکی|حتما|حتماً|قبوله|موافقم)(?:\s|[،,.!؟?]|$)/.test(normalized);
@@ -215,8 +239,18 @@ export function purchaseLinkAwaitingState(productId: string) {
   return { status: 'AWAITING_CUSTOMER_CHOICE', productId } as const;
 }
 
-export function purchaseLinkQuotationSelectedState(productId: string, assistedQuestionLimit = DEFAULT_QUOTATION_ROUTING_TEMPLATES.assistedQuestionLimit) {
-  return { status: 'DETAILED_QUOTATION_SELECTED', productId, mode: 'ASSISTED', assistedQuestionLimit } as const;
+export function purchaseLinkQuotationSelectedState(productId: string) {
+  return { status: 'DETAILED_QUOTATION_SELECTED', productId, mode: 'ASSISTED_QUOTE' } as const;
+}
+
+export function purchaseLinkAssistedLeadState(productId: string, assistedLeadQuestionLimit = DEFAULT_QUOTATION_ROUTING_TEMPLATES.assistedLeadQuestionLimit) {
+  return { status: 'DETAILED_QUOTATION_SELECTED', productId, mode: 'ASSISTED_LEAD', assistedLeadQuestionLimit } as const;
+}
+
+export type ConversionMode = 'ASSISTED_LEAD' | 'ASSISTED_QUOTE';
+
+export function quotationQuestionLimitForConversionMode(mode: ConversionMode, assistedLeadQuestionLimit: number): number | undefined {
+  return mode === 'ASSISTED_LEAD' ? Math.max(3, Math.min(5, assistedLeadQuestionLimit)) : undefined;
 }
 
 export function purchaseLinkDecisionLogSummary(productName: string): string {

@@ -8,10 +8,17 @@ import {
 } from '../shared/productIntentRouting';
 import {
   DEFAULT_QUOTATION_ROUTING_TEMPLATES,
+  isAssistedLeadRequest,
   isDetectedProductCurrentPage,
   isDirectQuotationWorkflowRequest,
+  purchaseLinkAssistedLeadState,
+  purchaseLinkQuotationSelectedState,
+  quotationQuestionLimitForConversionMode,
   renderQuotationRoutingTemplate,
 } from '../shared/productPurchaseLink';
+import { conversationIntentFamily, salesFlowAllowedForIntent, simpleGreetingReply } from '../server/services/aiBehaviorRuntime';
+import { canonicalQuotationPrefill } from '../server/services/quotationStateMachine';
+import { detectIntent } from '../server/services/brainLayerService';
 
 const manager = { id: 'building-manager', name: 'بیمه مسئولیت مدیر ساختمان' };
 const construction = { id: 'building-construction', name: 'بیمه مسئولیت احداث ساختمان' };
@@ -81,10 +88,9 @@ test('correct current page uses same-page text without redundantly rendering its
   assert.doesNotMatch(reply, /https?:\/\//);
 });
 
-test('refusing the form enters assisted conversion capped at three to five questions', () => {
+test('refusing the form to request a quote enters the full assisted quote flow', () => {
   assert.equal(isDirectQuotationWorkflowRequest('فرم نمی‌خوام، شما سؤال‌ها رو بپرسید'), true);
-  assert.ok(DEFAULT_QUOTATION_ROUTING_TEMPLATES.assistedQuestionLimit >= 3);
-  assert.ok(DEFAULT_QUOTATION_ROUTING_TEMPLATES.assistedQuestionLimit <= 5);
+  assert.equal(quotationQuestionLimitForConversionMode('ASSISTED_QUOTE', DEFAULT_QUOTATION_ROUTING_TEMPLATES.assistedLeadQuestionLimit), undefined);
 });
 
 test('a previously stated fact survives when product remains unchanged', () => {
@@ -92,4 +98,58 @@ test('a previously stated fact survives when product remains unchanged', () => {
   const result = applyProductIntentClassification({ classification: classification({ decision: 'KEEP_ACTIVE' }), candidates, previous: previous(construction), originPageProduct: manager });
   assert.equal(result.changed, false);
   assert.deepEqual(facts, { worker_count: '5', customerCity: 'تهران' });
+});
+
+test('A: a simple greeting has a greeting-only response and cannot enter sales flow', () => {
+  assert.equal(simpleGreetingReply('سلام'), 'سلام، وقت بخیر، در خدمتم.');
+  assert.equal(salesFlowAllowedForIntent(conversationIntentFamily('Greeting'), false), false);
+});
+
+test('B: informational intent cannot enter sales flow without an active quotation', () => {
+  const fallbackIntent = detectIntent('بیمه مسئولیت شامل خسارت همسایه میشه؟', '');
+  assert.equal(conversationIntentFamily(fallbackIntent), 'INFORMATIONAL');
+  assert.equal(salesFlowAllowedForIntent('INFORMATIONAL', false), false);
+});
+
+test('C: a page-hint product remains inferred until the customer confirms it', () => {
+  const result = applyProductIntentClassification({
+    classification: classification({ decision: 'SELECT_PRODUCT', selectedProductId: construction.id, confirmation: 'STRONG_INFERENCE', clarificationQuestion: 'منظورتون بیمه مسئولیت احداث ساختمان برای پروژه ساختمانیه' }),
+    candidates, previous: null, originPageProduct: construction,
+  });
+  assert.equal(result.state.status, 'INFERRED');
+  assert.equal(result.state.confirmedProductId, null);
+  assert.match(result.clarificationQuestion || '', /احداث ساختمان/);
+});
+
+test('D: explicit confirmation promotes the suggested construction product', () => {
+  const inferred = applyProductIntentClassification({
+    classification: classification({ decision: 'SELECT_PRODUCT', selectedProductId: construction.id, confirmation: 'STRONG_INFERENCE' }),
+    candidates, previous: null, originPageProduct: construction,
+  });
+  const confirmed = applyProductIntentClassification({
+    classification: classification({ decision: 'SELECT_PRODUCT', selectedProductId: construction.id, confirmation: 'EXPLICIT' }),
+    candidates, previous: inferred.state, originPageProduct: construction,
+  });
+  assert.equal(confirmed.state.status, 'CONFIRMED');
+  assert.equal(confirmed.state.confirmedProductId, construction.id);
+});
+
+test('G: previously collected valid data prefills its real field and skips only that question', async () => {
+  const questions = [
+    { id: 'q1', createdAt: new Date('2026-01-01'), order: 1, title: 'تعداد کارگران', fieldName: 'workerCount', type: 'number', required: true, options: '[]', condition: null, aiQuestion: null, helpText: null, minVal: 1, maxVal: 100, minLength: null, maxLength: null },
+    { id: 'q2', createdAt: new Date('2026-01-02'), order: 2, title: 'تعداد طبقات', fieldName: 'floorCount', type: 'number', required: true, options: '[]', condition: null, aiQuestion: null, helpText: null, minVal: 1, maxVal: 50, minLength: null, maxLength: null },
+  ];
+  const prefill = await canonicalQuotationPrefill(questions, { workerCount: '۱۲', unrelated: 'ignored' });
+  assert.deepEqual(prefill, { workerCount: '12' });
+});
+
+test('E/H: assisted quote is unlimited while assisted lead is capped at three to five', () => {
+  const quote = purchaseLinkQuotationSelectedState(construction.id);
+  const lead = purchaseLinkAssistedLeadState(construction.id, 5);
+  assert.equal(quote.mode, 'ASSISTED_QUOTE');
+  assert.equal(quotationQuestionLimitForConversionMode(quote.mode, 5), undefined);
+  assert.equal(lead.mode, 'ASSISTED_LEAD');
+  assert.equal(quotationQuestionLimitForConversionMode(lead.mode, lead.assistedLeadQuestionLimit), 5);
+  assert.equal(isAssistedLeadRequest('فرم را نمی‌خواهم، فقط کارشناس با من تماس بگیرد'), true);
+  assert.equal(isAssistedLeadRequest('زحمتشو بکشید شما قیمت بگیرید'), false);
 });

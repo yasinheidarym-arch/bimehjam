@@ -229,9 +229,31 @@ export function validateRequestedAction(action: unknown, allowed: AiBehaviorAllo
 }
 
 export const CONVERSATION_INTENTS = [
-  'Insurance Quotation', 'Human Operator Request', 'Claim Support', 'Installment Payment',
+  'Greeting', 'Informational', 'Insurance Quotation', 'Support/Follow-up/Claim',
+  'Human Operator Request', 'Claim Support', 'Installment Payment',
   'Customer Objection', 'Policy Comparison', 'Policy Renewal', 'Complaint', 'General Inquiry',
 ] as const;
+
+export type ConversationIntentFamily = 'GREETING' | 'INFORMATIONAL' | 'SALES_QUOTE' | 'SUPPORT_SERVICE';
+
+export function conversationIntentFamily(intent: string): ConversationIntentFamily {
+  if (intent === 'Greeting') return 'GREETING';
+  if (intent === 'Insurance Quotation') return 'SALES_QUOTE';
+  if (['Support/Follow-up/Claim', 'Human Operator Request', 'Claim Support', 'Policy Renewal', 'Complaint'].includes(intent)) return 'SUPPORT_SERVICE';
+  return 'INFORMATIONAL';
+}
+
+export function isSimpleGreeting(message: string): boolean {
+  return /^(سلام|درود|وقت\s*(بخیر|خوش)|صبح\s*بخیر|عصر\s*بخیر|شب\s*بخیر)[\s،,.!؟?]*$/i.test(String(message || '').replace(/‌/g, ' ').trim());
+}
+
+export function simpleGreetingReply(message: string): string | null {
+  return isSimpleGreeting(message) ? 'سلام، وقت بخیر، در خدمتم.' : null;
+}
+
+export function salesFlowAllowedForIntent(family: ConversationIntentFamily, hasActiveQuotation: boolean): boolean {
+  return family === 'SALES_QUOTE' || hasActiveQuotation;
+}
 
 export async function classifyConversationIntentWithRuntime(input: {
   message: string;
@@ -240,7 +262,7 @@ export async function classifyConversationIntentWithRuntime(input: {
 }) {
   return runAiBehaviorStructuredModel<{ intent: typeof CONVERSATION_INTENTS[number]; confidence: number; reason: string }>({
     context: input.context,
-    taskContract: 'فقط intent معنایی آخرین پیام مشتری را با توجه به تاریخچه کوتاه و context طبقه‌بندی کن. متن پاسخ یا عملیات تولید نکن.',
+    taskContract: 'فقط intent معنایی آخرین پیام مشتری را با توجه به تاریخچه کوتاه و context طبقه‌بندی کن. Greeting برای سلام/احوالپرسیِ بدون درخواست؛ Informational برای سؤال یا راهنمایی بدون قصد خرید؛ Insurance Quotation فقط برای خرید، قیمت، استعلام یا صدور؛ Support/Follow-up/Claim برای پشتیبانی، پیگیری، خسارت یا خدمات. متن پاسخ یا عملیات تولید نکن.',
     schemaName: 'conversation_intent',
     schema: {
       type: 'object', additionalProperties: false,
@@ -255,7 +277,7 @@ export async function classifyConversationIntentWithRuntime(input: {
   });
 }
 
-export type QuotationRoutingDecision = 'OFFER_PURCHASE_ROUTE' | 'SUGGEST_PAGE_PRODUCT' | 'START_CHAT_QUOTATION' | 'REQUEST_LINK_AGAIN' | 'WAIT_FOR_CHOICE' | 'ACCEPT_PAGE_PRODUCT' | 'REJECT_PAGE_PRODUCT' | 'NONE';
+export type QuotationRoutingDecision = 'OFFER_PURCHASE_ROUTE' | 'SUGGEST_PAGE_PRODUCT' | 'START_CHAT_QUOTATION' | 'START_ASSISTED_LEAD' | 'REQUEST_LINK_AGAIN' | 'WAIT_FOR_CHOICE' | 'ACCEPT_PAGE_PRODUCT' | 'REJECT_PAGE_PRODUCT' | 'NONE';
 
 export async function classifyQuotationRoutingWithRuntime(input: {
   message: string;
@@ -265,11 +287,11 @@ export async function classifyQuotationRoutingWithRuntime(input: {
 }) {
   return runAiBehaviorStructuredModel<{ decision: QuotationRoutingDecision; confidence: number; reason: string }>({
     context: input.context,
-    taskContract: 'فقط تصمیم هدایت خرید/استعلام را طبقه‌بندی کن. OFFER_PURCHASE_ROUTE برای اولین پیشنهاد فرم/لینک پس از قصد خرید محصول مشخص؛ SUGGEST_PAGE_PRODUCT وقتی کاربر فقط دسته را خواسته و محصول صفحه زیر همان دسته است؛ START_CHAT_QUOTATION برای درخواست انجام استعلام در چت یا نخواستن فرم؛ REQUEST_LINK_AGAIN برای درخواست صریح تکرار لینک؛ WAIT_FOR_CHOICE وقتی پیشنهاد قبلی هنوز بی‌پاسخ است؛ ACCEPT_PAGE_PRODUCT/REJECT_PAGE_PRODUCT برای پاسخ به پیشنهاد محصول صفحه؛ NONE در غیر این صورت. متن پاسخ یا عملیات تولید نکن.',
+    taskContract: 'فقط تصمیم هدایت خرید/استعلام را طبقه‌بندی کن. OFFER_PURCHASE_ROUTE برای اولین پیشنهاد فرم/لینک پس از قصد خرید محصول مشخص؛ SUGGEST_PAGE_PRODUCT وقتی کاربر فقط دسته را خواسته و محصول صفحه زیر همان دسته است؛ START_CHAT_QUOTATION وقتی کاربر می‌خواهد AI خودش قیمت/استعلام را با workflow کامل انجام دهد؛ START_ASSISTED_LEAD فقط وقتی کاربر بدون درخواست استعلام کامل، جمع‌آوری حداقل اطلاعات برای تماس کارشناس را می‌خواهد؛ REQUEST_LINK_AGAIN برای درخواست صریح تکرار لینک؛ WAIT_FOR_CHOICE وقتی پیشنهاد قبلی هنوز بی‌پاسخ است؛ ACCEPT_PAGE_PRODUCT/REJECT_PAGE_PRODUCT برای پاسخ به پیشنهاد محصول صفحه؛ NONE در غیر این صورت. متن پاسخ یا عملیات تولید نکن.',
     schemaName: 'quotation_routing_decision',
     schema: {
       type: 'object', additionalProperties: false,
-      properties: { decision: { type: 'string', enum: ['OFFER_PURCHASE_ROUTE', 'SUGGEST_PAGE_PRODUCT', 'START_CHAT_QUOTATION', 'REQUEST_LINK_AGAIN', 'WAIT_FOR_CHOICE', 'ACCEPT_PAGE_PRODUCT', 'REJECT_PAGE_PRODUCT', 'NONE'] }, confidence: { type: 'number', minimum: 0, maximum: 1 }, reason: { type: 'string' } },
+      properties: { decision: { type: 'string', enum: ['OFFER_PURCHASE_ROUTE', 'SUGGEST_PAGE_PRODUCT', 'START_CHAT_QUOTATION', 'START_ASSISTED_LEAD', 'REQUEST_LINK_AGAIN', 'WAIT_FOR_CHOICE', 'ACCEPT_PAGE_PRODUCT', 'REJECT_PAGE_PRODUCT', 'NONE'] }, confidence: { type: 'number', minimum: 0, maximum: 1 }, reason: { type: 'string' } },
       required: ['decision', 'confidence', 'reason'],
     },
     payload: { message: input.message, recentMessages: input.recentMessages.slice(-6), routing: input.routing },

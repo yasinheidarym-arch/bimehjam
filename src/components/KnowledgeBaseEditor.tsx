@@ -3712,9 +3712,13 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                     متغیرهای مجاز: <code>{'{{productName}}'}</code>، <code>{'{{purchaseUrl}}'}</code> و <code>{'{{currentPageUrl}}'}</code>
                   </p>
                   <label className="block space-y-1">
-                    <span className="font-bold text-slate-700">حداکثر سؤال در مسیر کمکی:</span>
-                    <input type="number" min={3} max={5} required value={behaviorForm.routingTemplates.assistedQuestionLimit} onChange={(e) => setBehaviorForm({ ...behaviorForm, routingTemplates: { ...behaviorForm.routingTemplates!, assistedQuestionLimit: Math.max(3, Math.min(5, Number(e.target.value) || 3)) } })} className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white" />
-                    <span className="text-[10px] text-slate-500">پس از نپذیرفتن فرم آنلاین، فقط ۳ تا ۵ سؤال ضروری نخست پرسیده می‌شود.</span>
+                    <span className="font-bold text-slate-700">حداکثر سؤال در مسیر تماس کارشناس:</span>
+                    <input type="number" min={3} max={5} required value={behaviorForm.routingTemplates.assistedLeadQuestionLimit} onChange={(e) => setBehaviorForm({ ...behaviorForm, routingTemplates: { ...behaviorForm.routingTemplates!, assistedLeadQuestionLimit: Math.max(3, Math.min(5, Number(e.target.value) || 3)) } })} className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white" />
+                    <span className="text-[10px] text-slate-500">این محدودیت فقط برای ASSISTED_LEAD است؛ استعلام قیمتی که AI انجام می‌دهد همهٔ سؤال‌های واقعی محصول را می‌پرسد.</span>
+                  </label>
+                  <label className="block space-y-1">
+                    <span className="font-bold text-slate-700">نمونه عبارت‌های مسیر تماس کارشناس:</span>
+                    <textarea rows={3} required value={behaviorForm.routingTemplates.assistedLeadExamples.join('\n')} onChange={(e) => setBehaviorForm({ ...behaviorForm, routingTemplates: { ...behaviorForm.routingTemplates!, assistedLeadExamples: e.target.value.split('\n').map(item => item.trim()).filter(Boolean) } })} className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 bg-white" />
                   </label>
                   <label className="block space-y-1">
                     <span className="font-bold text-slate-700">نمونه عبارت‌های پذیرش استعلام چتی:</span>

@@ -35,7 +35,7 @@ function explicitlyMentionsQuestion(message: string, question: QuotationTurnQues
   return [question.fieldName, question.title, question.aiQuestion || ''].filter(Boolean).some(label => text.includes(normalize(label)));
 }
 
-async function canonicalAnswer(q: QuotationTurnQuestion, evidence: string, proposed?: string, optionId?: string | null, confidence = 1): Promise<string | null> {
+export async function canonicalQuotationAnswer(q: QuotationTurnQuestion, evidence: string, proposed?: string, optionId?: string | null, confidence = 1): Promise<string | null> {
   const text = normalize(evidence).replace(/[.!،؛]+$/g, '').trim();
   const options = quotationQuestionOptions(q);
   if (!text) return null;
@@ -89,6 +89,19 @@ async function canonicalAnswer(q: QuotationTurnQuestion, evidence: string, propo
   return value;
 }
 
+export async function canonicalQuotationPrefill(
+  questions: QuotationTurnQuestion[],
+  collectedData: Record<string, unknown>,
+): Promise<Record<string, string>> {
+  const entries = await Promise.all(questions.map(async question => {
+    const raw = collectedData[question.fieldName];
+    if (!['string', 'number', 'boolean'].includes(typeof raw)) return null;
+    const value = await canonicalQuotationAnswer(question, String(raw));
+    return value === null ? null : [question.fieldName, value] as const;
+  }));
+  return Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry)));
+}
+
 function parseClassification(raw: unknown, correction = false): QuotationClassification | null {
   if (!raw || typeof raw !== 'object') return null;
   const value = raw as Record<string, unknown>;
@@ -112,7 +125,7 @@ async function safeFallbackClassification(current: QuotationTurnQuestion | null,
   if (!current) return { status: 'UNRELATED', confidence: 1, reason: 'No pending question', assignments: [] };
   const asksQuestion = /[؟?]/.test(message);
   const source = answerPortion(message, asksQuestion) || message;
-  const exact = await canonicalAnswer(current, source);
+  const exact = await canonicalQuotationAnswer(current, source);
   if (exact !== null) return { status: correction ? 'CORRECTION' : 'VALID_ANSWER', confidence: 1, reason: asksQuestion ? 'Validated answer precedes a secondary question' : 'Deterministic field validation', assignments: [{ fieldName: current.fieldName, value: exact, evidence: source, confidence: 1 }] };
   if (/[؟?]|چطور|چگونه|راهنما|توضیح/.test(message)) return { status: 'QUESTION_ABOUT_CURRENT_FIELD', confidence: .8, reason: 'Provider-unavailable help-request fallback', assignments: [] };
   return { status: 'AMBIGUOUS', confidence: 0, reason: 'Safe fallback could not validate an answer', assignments: [] };
@@ -152,7 +165,7 @@ export async function advanceQuotationTurn(input: { sessionId: string; sessionSt
   if (!classification) classification = await safeFallbackClassification(current, normalize(input.message), fallbackCorrection);
   if (current && classification.status !== 'CORRECTION' && !['VALID_ANSWER', 'ANSWER_AND_QUESTION', 'MULTI_FIELD_ANSWER'].includes(classification.status)) {
     const normalizedMessage = normalize(input.message);
-    const deterministicValue = await canonicalAnswer(current, normalizedMessage);
+    const deterministicValue = await canonicalQuotationAnswer(current, normalizedMessage);
     const money = resolveQuotationMoney(current, normalizedMessage);
     const exactOption = quotationQuestionOptions(current).some(option => normalize(option.value) === normalizedMessage);
     const safeShape = current.type === 'number' || money?.status === 'MATCHED' || exactOption || isPlainQuotationNumber(normalizedMessage);
@@ -172,7 +185,7 @@ export async function advanceQuotationTurn(input: { sessionId: string; sessionSt
       (!correctionMode && classification?.status === 'MULTI_FIELD_ANSWER' && !Object.prototype.hasOwnProperty.call(answers, question.fieldName)) ||
       (!correctionMode && !Object.prototype.hasOwnProperty.call(answers, question.fieldName) && explicitlyMentionsQuestion(input.message, question));
     if (!canSave) return false;
-    const value = await canonicalAnswer(question, evidence, candidate.selectedOptionValue || candidate.value, candidate.selectedOptionId, candidate.confidence);
+    const value = await canonicalQuotationAnswer(question, evidence, candidate.selectedOptionValue || candidate.value, candidate.selectedOptionId, candidate.confidence);
     if (value === null) return false;
     updates[question.fieldName] = value; answers[question.fieldName] = value; attempts[question.fieldName] = 0;
     decisions.push({ status: correctionMode ? 'CORRECTION' : 'VALID_ANSWER', fieldName: question.fieldName, confidence: candidate.confidence, reason: classification?.reason || 'Validated classifier assignment', outcome: correctionMode ? 'CORRECTED' : 'SAVED' });

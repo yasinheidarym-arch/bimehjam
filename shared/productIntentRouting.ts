@@ -4,7 +4,7 @@ export const PRODUCT_INTENT_ROUTING_RULE_TITLE = 'تشخیص نیت، انتخا
 export const LEGACY_BUILDING_INTENT_RULE_TITLE = 'تشخیص منظور مشتری از «بیمه ساختمان» و هدایت به بیمه‌نامه صحیح (Building Insurance Intent Detection)';
 export const PRODUCT_INTENT_ROUTING_RULE_SORT_ORDER = -10;
 
-export const PRODUCT_INTENT_ROUTING_INSTRUCTION = [
+export const PRODUCT_INTENT_ROUTING_INSTRUCTION_V1 = [
   'آخرین نیاز یا اصلاح صریح مشتری بر هر محصول قبلی و محصول صفحه اولویت دارد.',
   'محصول صفحه فقط سرنخ است و بدون تأیید یا شواهد معنایی قوی، محصول قطعی نیست.',
   'اگر نیاز مشتری با محصول فعال قبلی ناسازگار است، محصول قبلی را حفظ نکن؛ محصول سازگار را از فهرست واقعی انتخاب کن یا برای رفع ابهام فقط یک سؤال کوتاه بپرس.',
@@ -13,6 +13,31 @@ export const PRODUCT_INTENT_ROUTING_INSTRUCTION = [
   'اصلاح‌هایی مانند «من می‌گویم ساختمان‌سازی» باید state و لینک محصول نامرتبط قبلی را بی‌اعتبار کند.',
   'هیچ شناسه یا محصولی خارج از candidateهای واقعی backend انتخاب نکن.',
 ].join('\n');
+
+export const PRODUCT_INTENT_ROUTING_INSTRUCTION = [
+  'پیش از کشف یا انتخاب محصول، intent مکالمه را تشخیص بده.',
+  'Greeting ساده فقط پاسخ خوش‌آمد طبیعی می‌گیرد و نباید سؤال فروش، نوع بیمه یا محصول ایجاد کند.',
+  'INFORMATIONAL فقط با دانش مجاز پاسخ داده می‌شود و Sales/Quote Flow را شروع نمی‌کند.',
+  'Sales/Quote شامل خرید، قیمت، استعلام یا صدور است. Support/Follow-up/Claim مسیر خدماتی مستقل دارد.',
+  'دسته انتخاب‌شده در گفتینو فقط category context است و محصول قطعی محسوب نمی‌شود.',
+  'آخرین نیاز یا اصلاح صریح مشتری بر هر محصول قبلی و محصول صفحه اولویت دارد.',
+  'محصول صفحه فقط سرنخ است و بدون تأیید یا شواهد معنایی قوی، محصول قطعی نیست.',
+  'اگر نیاز مشتری با محصول فعال قبلی ناسازگار است، محصول قبلی را حفظ نکن؛ محصول سازگار را از فهرست واقعی انتخاب کن یا برای رفع ابهام فقط یک سؤال کوتاه بپرس.',
+  'در درخواست‌های ساختمانی ابتدا مرحله ساختمان و موضوع پوشش را تشخیص بده: ساخت/تخریب/بازسازی در برابر بهره‌برداری و مدیریت ساختمان. کاربری مسکونی یا تجاری به‌تنهایی محصول مدیر ساختمان را ثابت نمی‌کند.',
+  'اصلاح صریح کاربر باید state و لینک محصول نامرتبط قبلی را بی‌اعتبار کند.',
+  'ASSISTED_LEAD فقط برای جمع‌آوری حداقل اطلاعات تماس کارشناس است و حداکثر ۳ تا ۵ سؤال کلیدی دارد.',
+  'ASSISTED_QUOTE وقتی کاربر می‌خواهد سامانه قیمت را برایش بگیرد، workflow کامل سؤال‌های واقعی محصول را اجرا می‌کند و محدودیت ۳ تا ۵ سؤال ندارد.',
+  'اطلاعاتی که قبلاً با اطمینان ثبت شده دوباره پرسیده نشود.',
+  'هیچ شناسه یا محصولی خارج از candidateهای واقعی backend انتخاب نکن.',
+].join('\n');
+
+export const PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE_V1 = JSON.stringify({
+  kind: 'AI_BEHAVIOR_RULE',
+  version: 1,
+  instruction: PRODUCT_INTENT_ROUTING_INSTRUCTION_V1,
+  scope: { channels: ['GOFTINO'], messageTypes: ['CUSTOMER_MESSAGE'], userRoles: ['CUSTOMER'] },
+  conflictKey: PRODUCT_INTENT_ROUTING_RULE_CATEGORY,
+}, null, 2);
 
 export const PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE = JSON.stringify({
   kind: 'AI_BEHAVIOR_RULE',

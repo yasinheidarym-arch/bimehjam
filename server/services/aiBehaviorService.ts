@@ -45,6 +45,7 @@ import {
   PRODUCT_INTENT_ROUTING_RULE_CATEGORY,
   PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE,
   PRODUCT_INTENT_ROUTING_RULE_ID,
+  PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE_V1,
   PRODUCT_INTENT_ROUTING_RULE_SORT_ORDER,
   PRODUCT_INTENT_ROUTING_RULE_TITLE,
   LEGACY_BUILDING_INTENT_RULE_TITLE,
@@ -144,6 +145,20 @@ async function ensureSeedRules() {
     }).catch(async (error: { code?: string }) => {
       if (error.code !== 'P2002') throw error;
     });
+  } else {
+    const parsedRouting = parseQuotationRoutingTemplates(purchaseLinkRule.directive);
+    if (parsedRouting) {
+      try {
+        const raw = JSON.parse(purchaseLinkRule.directive) as Record<string, unknown>;
+        if (!Object.prototype.hasOwnProperty.call(raw, 'assistedLeadQuestionLimit') || !Object.prototype.hasOwnProperty.call(raw, 'assistedLeadExamples')) {
+          // Preserve every manager-authored response while adding only the new
+          // conversion-mode controls to the existing rule.
+          await prisma.aiRule.update({ where: { id: purchaseLinkRule.id }, data: { directive: serializeQuotationRoutingTemplates(parsedRouting) } });
+        }
+      } catch {
+        // Invalid legacy content remains visible for the manager to repair.
+      }
+    }
   }
 
   const productIntentRule = await prisma.aiRule.findFirst({
@@ -172,6 +187,9 @@ async function ensureSeedRules() {
       category: PRODUCT_INTENT_ROUTING_RULE_CATEGORY,
       enforcementLevel: 'STRICT',
     } });
+  } else if (productIntentRule.directive === PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE_V1) {
+    // Upgrade only the untouched system v1 default. Manager edits remain authoritative.
+    await prisma.aiRule.update({ where: { id: productIntentRule.id }, data: { directive: PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE } });
   }
 
   const responseEngineRule = await prisma.aiRule.findFirst({
