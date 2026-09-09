@@ -312,7 +312,7 @@ export const knowledgeService = {
   getAiBehavior: async () => {
     return apiClient.get('/knowledge/ai-behavior');
   },
-  createAiBehavior: async (data: { title: string; directive: string; sortOrder?: number; status?: 'ACTIVE' | 'INACTIVE' }) => {
+  createAiBehavior: async (data: { title: string; directive: string; sortOrder?: number; status?: 'ACTIVE' | 'INACTIVE'; scope?: Record<string, string[]>; conflictKey?: string }) => {
     return apiClient.post('/knowledge/ai-behavior', data);
   },
   updateAiBehavior: async (id: string, data: any) => {

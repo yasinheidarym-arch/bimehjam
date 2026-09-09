@@ -1,5 +1,7 @@
 import { validStoredFullName } from './humanHandoffNameFlow';
 import { isQuotationInterruption } from './quotationStateMachine';
+import { DEFAULT_HUMAN_HANDOFF_RULE_CONFIG, type HumanHandoffRuleConfig } from '../../shared/humanHandoffRule';
+import { DEFAULT_QUOTATION_COMPLETION_CONFIG, type QuotationCompletionRuleConfig } from '../../shared/quotationCompletionRule';
 
 export type QuotationSubmissionStep = 'FULL_NAME' | 'LAST_NAME' | 'MOBILE' | 'CITY' | 'DELIVERY_CHOICE' | 'CONFIRM';
 export type QuotationSubmissionStatus = 'COLLECTING_PROFILE' | 'AWAITING_DELIVERY_CHOICE' | 'PROCESSING' | 'SUBMITTED' | 'FAILED' | 'AWAITING_CONFIRMATION' | 'NOT_SUBMITTED';
@@ -43,11 +45,6 @@ export type QuotationTerminalDecision =
   | { action: 'REPLY'; replyText: string; state: QuotationSubmissionState }
   | { action: 'RETRY'; route: QuotationDeliveryChoice; state: QuotationSubmissionState };
 
-const FULL_NAME_PROMPT = 'برای ثبت درخواست، لطفاً نام و نام خانوادگی‌تان را بفرمایید.';
-const LAST_NAME_PROMPT = 'ممنونم؛ لطفاً نام خانوادگی‌تان را هم بفرمایید.';
-const MOBILE_PROMPT = 'لطفاً شماره موبایل‌تان را برای پیگیری درخواست بفرمایید.';
-const CITY_PROMPT = 'لطفاً شهر محل سکونت یا محل مورد بیمه را بفرمایید.';
-
 function normalizeDigits(value: string): string {
   const fa = '۰۱۲۳۴۵۶۷۸۹';
   const ar = '٠١٢٣٤٥٦٧٨٩';
@@ -82,11 +79,11 @@ function nextMissingStep(profile: QuotationSubmissionState['profile']): Quotatio
   return 'DELIVERY_CHOICE';
 }
 
-function questionFor(step: QuotationSubmissionStep): string {
-  if (step === 'FULL_NAME') return FULL_NAME_PROMPT;
-  if (step === 'LAST_NAME') return LAST_NAME_PROMPT;
-  if (step === 'MOBILE') return MOBILE_PROMPT;
-  if (step === 'CITY') return CITY_PROMPT;
+function questionFor(step: QuotationSubmissionStep, prompts: HumanHandoffRuleConfig): string {
+  if (step === 'FULL_NAME') return prompts.fullNamePrompt;
+  if (step === 'LAST_NAME') return prompts.lastNamePrompt;
+  if (step === 'MOBILE') return prompts.mobilePrompt;
+  if (step === 'CITY') return prompts.cityPrompt;
   return '';
 }
 
@@ -100,6 +97,7 @@ export function startQuotationSubmission(input: {
   currentPageUrl?: string | null;
   categoryId?: string | null;
   categoryName?: string | null;
+  profilePrompts?: HumanHandoffRuleConfig;
 }): QuotationSubmissionDecision {
   const profile = {
     ...(validStoredFullName(input.existingProfile.fullName) ? { fullName: validStoredFullName(input.existingProfile.fullName)! } : {}),
@@ -121,12 +119,13 @@ export function startQuotationSubmission(input: {
     categoryId: input.categoryId || null,
     categoryName: input.categoryName || null,
   };
-  return { action: 'ASK', replyText: step === 'DELIVERY_CHOICE' ? state.choicePrompt : questionFor(step), state };
+  return { action: 'ASK', replyText: step === 'DELIVERY_CHOICE' ? state.choicePrompt : questionFor(step, input.profilePrompts || DEFAULT_HUMAN_HANDOFF_RULE_CONFIG), state };
 }
 
 export function handleTerminalQuotationSubmission(
   state: QuotationSubmissionState,
   intent: 'RETRY_SUBMISSION' | 'ASK_FAILURE_REASON' | 'START_NEW_QUOTATION' | 'REPLAY_RESULT' | 'OTHER',
+  templates: QuotationCompletionRuleConfig = DEFAULT_QUOTATION_COMPLETION_CONFIG,
 ): QuotationTerminalDecision {
   if (intent === 'START_NEW_QUOTATION') return { action: 'RELEASE', state };
   if (state.status === 'FAILED') {
@@ -135,13 +134,11 @@ export function handleTerminalQuotationSubmission(
     }
     return {
       action: 'REPLY',
-      replyText: 'ثبت درخواست در مرحلهٔ قبل کامل نشد. اطلاعات استعلام محفوظ است؛ در صورت تمایل می‌توانید درخواست کنید ثبت دوباره انجام شود.',
+      replyText: templates.failedTerminal,
       state,
     };
   }
-  const replyText = state.deliveryChoice === 'CALL'
-    ? 'درخواست تماس با کارشناس قبلاً ثبت شده است.'
-    : 'درخواست بررسی و اعلام قیمت در چت قبلاً ثبت شده است.';
+  const replyText = state.deliveryChoice === 'CALL' ? templates.callSubmitted : templates.chatSubmitted;
   return { action: 'REPLY', replyText, state };
 }
 
@@ -152,7 +149,7 @@ export function quotationDeliveryChoice(message: string): QuotationDeliveryChoic
   return null;
 }
 
-export function advanceQuotationSubmission(state: QuotationSubmissionState, message: string): QuotationSubmissionDecision {
+export function advanceQuotationSubmission(state: QuotationSubmissionState, message: string, semanticDeliveryChoice?: QuotationDeliveryChoice | null, profilePrompts: HumanHandoffRuleConfig = DEFAULT_HUMAN_HANDOFF_RULE_CONFIG): QuotationSubmissionDecision {
   const next: QuotationSubmissionState = {
     ...state,
     profile: { ...state.profile },
@@ -162,14 +159,14 @@ export function advanceQuotationSubmission(state: QuotationSubmissionState, mess
   };
   const normalizedResponse = message.replace(/‌/g, ' ').trim();
   if (next.step === 'DELIVERY_CHOICE') {
-    const route = quotationDeliveryChoice(message);
+    const route = semanticDeliveryChoice || quotationDeliveryChoice(message);
     if (!route) return { action: 'ASK', replyText: next.choicePrompt, state: next };
     next.deliveryChoice = route;
     next.status = 'PROCESSING';
     return { action: 'ROUTE', route, replyText: '', state: next };
   }
   if (isQuotationInterruption(message) || /^(آره|اره|بله|نه|خیر|باشه)$/.test(normalizedResponse)) {
-    return { action: 'ASK', replyText: `اطلاعات قبلی محفوظ است. ${questionFor(next.step)}`, state: next };
+    return { action: 'ASK', replyText: `${profilePrompts.interruptionPrefix} ${questionFor(next.step, profilePrompts)}`, state: next };
   }
   if (next.step === 'FULL_NAME') {
     const name = parseName(message);
@@ -177,21 +174,21 @@ export function advanceQuotationSubmission(state: QuotationSubmissionState, mess
     else if (name.givenName) {
       next.givenName = name.givenName;
       next.step = 'LAST_NAME';
-      return { action: 'ASK', replyText: LAST_NAME_PROMPT, state: next };
-    } else return { action: 'ASK', replyText: FULL_NAME_PROMPT, state: next };
+      return { action: 'ASK', replyText: profilePrompts.lastNamePrompt, state: next };
+    } else return { action: 'ASK', replyText: profilePrompts.fullNamePrompt, state: next };
   } else if (next.step === 'LAST_NAME') {
     const lastName = String(message || '').trim().replace(/\s+/g, ' ');
     const fullName = validStoredFullName(`${next.givenName || ''} ${lastName}`);
-    if (!fullName) return { action: 'ASK', replyText: LAST_NAME_PROMPT, state: next };
+    if (!fullName) return { action: 'ASK', replyText: profilePrompts.lastNamePrompt, state: next };
     next.profile.fullName = fullName;
     delete next.givenName;
   } else if (next.step === 'MOBILE') {
     const mobile = normalizeIranMobile(message);
-    if (!mobile) return { action: 'ASK', replyText: MOBILE_PROMPT, state: next };
+    if (!mobile) return { action: 'ASK', replyText: profilePrompts.mobilePrompt, state: next };
     next.profile.mobile = mobile;
   } else if (next.step === 'CITY') {
     const city = normalizeCity(message);
-    if (!city) return { action: 'ASK', replyText: CITY_PROMPT, state: next };
+    if (!city) return { action: 'ASK', replyText: profilePrompts.cityPrompt, state: next };
     next.profile.city = city;
   }
 
@@ -199,7 +196,7 @@ export function advanceQuotationSubmission(state: QuotationSubmissionState, mess
   next.status = next.step === 'DELIVERY_CHOICE' ? 'AWAITING_DELIVERY_CHOICE' : 'COLLECTING_PROFILE';
   return {
     action: 'ASK',
-    replyText: next.step === 'DELIVERY_CHOICE' ? next.choicePrompt : questionFor(next.step),
+    replyText: next.step === 'DELIVERY_CHOICE' ? next.choicePrompt : questionFor(next.step, profilePrompts),
     state: next,
   };
 }

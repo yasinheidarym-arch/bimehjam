@@ -23,6 +23,7 @@ export type QuotationCompletionInput = {
   preferredAssignedUserId?: string | null;
   profile: { fullName?: string; mobile?: string; city?: string };
   answers: QuotationSubmissionAnswer[];
+  successReply?: string;
 };
 
 export type QuotationCompletionDependencies = {
@@ -83,7 +84,7 @@ export async function finalizeQuotationCompletionCore(
       taskId: task.id,
       leadId: lead.id,
       smsStatus: smsResult,
-      replyText: input.route === 'CALL' ? QUOTATION_CALL_SUCCESS : QUOTATION_CHAT_SUCCESS,
+      replyText: input.successReply || (input.route === 'CALL' ? QUOTATION_CALL_SUCCESS : QUOTATION_CHAT_SUCCESS),
     };
   } catch {
     return { ok: false as const, error: 'TASK_OR_LEAD_FAILED', smsStatus: 'not-queued' };

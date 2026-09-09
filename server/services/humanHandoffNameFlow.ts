@@ -1,5 +1,9 @@
-export const FULL_NAME_REQUEST_MESSAGE = 'برای اینکه همکارم بتواند با شما تماس بگیرد، لطفاً نام و نام خانوادگی‌تان را بفرمایید.';
-export const LAST_NAME_REQUEST_MESSAGE = 'ممنونم؛ لطفاً نام خانوادگی‌تان را هم بفرمایید.';
+import { DEFAULT_HUMAN_HANDOFF_RULE_CONFIG, type HumanHandoffRuleConfig } from '../../shared/humanHandoffRule';
+
+// Compatibility exports for callers/tests. Production receives these values
+// from the editable handoff rule on every turn.
+export const FULL_NAME_REQUEST_MESSAGE = DEFAULT_HUMAN_HANDOFF_RULE_CONFIG.fullNamePrompt;
+export const LAST_NAME_REQUEST_MESSAGE = DEFAULT_HUMAN_HANDOFF_RULE_CONFIG.lastNamePrompt;
 
 export type HumanHandoffReason = 'QUOTATION_COMPLETED' | 'DIRECT_HUMAN_REQUEST';
 export type HumanHandoffNameState = {
@@ -45,7 +49,9 @@ export function advanceHumanHandoffName(input: {
   existingCustomerName?: string | null;
   message?: string;
   state?: HumanHandoffNameState | null;
+  prompts?: HumanHandoffRuleConfig;
 }): HumanHandoffNameResult {
+  const prompts = input.prompts || DEFAULT_HUMAN_HANDOFF_RULE_CONFIG;
   const existingFullName = validStoredFullName(input.existingCustomerName);
   if (existingFullName) return { action: 'CREATE_TASK', fullName: existingFullName, reason: input.reason, nameStatus: 'RECORDED' };
 
@@ -54,13 +60,13 @@ export function advanceHumanHandoffName(input: {
     if (existingFirstName && !PLACEHOLDER_NAMES.has(existingFirstName) && isValidNamePart(existingFirstName)) {
       return {
         action: 'ASK_NAME',
-        replyText: LAST_NAME_REQUEST_MESSAGE,
+        replyText: prompts.lastNamePrompt,
         state: { pending: true, reason: input.reason, nameStatus: 'AWAITING_LAST_NAME', givenName: existingFirstName },
       };
     }
     return {
       action: 'ASK_NAME',
-      replyText: FULL_NAME_REQUEST_MESSAGE,
+      replyText: prompts.fullNamePrompt,
       state: { pending: true, reason: input.reason, nameStatus: 'AWAITING_FULL_NAME' },
     };
   }
@@ -81,7 +87,7 @@ export function advanceHumanHandoffName(input: {
   if (parts.length === 1 && isValidNamePart(parts[0])) {
     return {
       action: 'ASK_NAME',
-      replyText: LAST_NAME_REQUEST_MESSAGE,
+      replyText: prompts.lastNamePrompt,
       state: { pending: true, reason: input.state.reason, nameStatus: 'AWAITING_LAST_NAME', givenName: parts[0] },
     };
   }
@@ -94,6 +100,7 @@ export function resolveHumanHandoffNameRule(input: {
   existingCustomerName?: string | null;
   message?: string;
   state?: HumanHandoffNameState | null;
+  prompts?: HumanHandoffRuleConfig;
 }): HumanHandoffNameResult {
   if (input.ruleActive) return advanceHumanHandoffName(input);
   const fullName = validStoredFullName(input.existingCustomerName);

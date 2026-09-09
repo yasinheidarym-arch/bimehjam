@@ -12,7 +12,6 @@ import cors from 'cors';
 import { createServer as createViteServer } from 'vite';
 import { initialKnowledgeBase } from './src/data/knowledgeBase';
 import { processGoftinoMessageWithAI } from './server/aiService';
-import { processGoftinoWebhook } from './server/services/goftinoService';
 import { handleGoftinoWebhook } from './server/controllers/webhookController';
 import { createGoftinoV1Router } from './server/goftinoApi';
 import apiV1Router from './server/routes/index';
@@ -130,9 +129,6 @@ async function startServer() {
         }
       }
     };
-
-    // Store in DB via Service Layer
-    await processGoftinoWebhook(mockPayload);
 
     const startTime = Date.now();
     const aiResult = await processGoftinoMessageWithAI(

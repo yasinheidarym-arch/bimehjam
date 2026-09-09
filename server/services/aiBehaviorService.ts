@@ -1,9 +1,13 @@
 import prisma from '../db/client';
 import {
   FULL_NAME_HANDOFF_RULE_CATEGORY,
+  DEFAULT_HUMAN_HANDOFF_RULE_CONFIG,
   FULL_NAME_HANDOFF_RULE_DIRECTIVE,
   FULL_NAME_HANDOFF_RULE_ID,
   FULL_NAME_HANDOFF_RULE_TITLE,
+  LEGACY_FULL_NAME_HANDOFF_RULE_DIRECTIVE,
+  parseHumanHandoffRule,
+  serializeHumanHandoffRule,
 } from '../../shared/humanHandoffRule';
 import {
   LEGACY_QUOTATION_RULE_TITLE,
@@ -28,10 +32,15 @@ import {
 } from '../../shared/quotationResponseEngine';
 import {
   DEFAULT_QUOTATION_COMPLETION_PROMPT,
+  DEFAULT_QUOTATION_COMPLETION_CONFIG,
+  parseQuotationCompletionRule,
+  QUOTATION_COMPLETION_RULE_DIRECTIVE,
   QUOTATION_COMPLETION_RULE_CATEGORY,
   QUOTATION_COMPLETION_RULE_ID,
   QUOTATION_COMPLETION_RULE_TITLE,
+  serializeQuotationCompletionRule,
 } from '../../shared/quotationCompletionRule';
+import { parseAiBehaviorRuleEnvelope, serializeAiBehaviorRuleEnvelope, type AiBehaviorRuleScope } from '../../shared/aiBehaviorRuntime';
 
 export interface AiBehaviorRuleItem {
   id: string;
@@ -41,6 +50,8 @@ export interface AiBehaviorRuleItem {
   status: 'ACTIVE' | 'INACTIVE';
   category?: string;
   enforcementLevel?: string;
+  scope?: AiBehaviorRuleScope;
+  conflictKey?: string;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -93,15 +104,10 @@ async function ensureSeedRules() {
     }).catch(async (error: { code?: string }) => {
       if (error.code !== 'P2002') throw error;
     });
-  } else if (
-    existingSystemRule.title !== FULL_NAME_HANDOFF_RULE_TITLE ||
-    existingSystemRule.directive !== FULL_NAME_HANDOFF_RULE_DIRECTIVE ||
-    existingSystemRule.category !== FULL_NAME_HANDOFF_RULE_CATEGORY
-  ) {
-    await prisma.aiRule.update({
-      where: { id: existingSystemRule.id },
-      data: { title: FULL_NAME_HANDOFF_RULE_TITLE, directive: FULL_NAME_HANDOFF_RULE_DIRECTIVE, category: FULL_NAME_HANDOFF_RULE_CATEGORY, enforcementLevel: 'STRICT' },
-    });
+  } else if (existingSystemRule.directive === LEGACY_FULL_NAME_HANDOFF_RULE_DIRECTIVE) {
+    // Idempotent data-shape migration of the untouched legacy default only.
+    // Manager-customized directives are never overwritten.
+    await prisma.aiRule.update({ where: { id: existingSystemRule.id }, data: { directive: FULL_NAME_HANDOFF_RULE_DIRECTIVE } });
   }
 
   const purchaseLinkRule = await prisma.aiRule.findFirst({
@@ -116,12 +122,6 @@ async function ensureSeedRules() {
       ],
     },
   });
-  const parsedPurchaseLinkRule = purchaseLinkRule
-    ? parseQuotationRoutingTemplates(purchaseLinkRule.directive)
-    : null;
-  const normalizedPurchaseLinkDirective = parsedPurchaseLinkRule
-    ? serializeQuotationRoutingTemplates(parsedPurchaseLinkRule)
-    : PURCHASE_LINK_RULE_DIRECTIVE;
   if (!purchaseLinkRule) {
     await prisma.aiRule.create({
       data: {
@@ -135,22 +135,6 @@ async function ensureSeedRules() {
       },
     }).catch(async (error: { code?: string }) => {
       if (error.code !== 'P2002') throw error;
-    });
-  } else if (
-    purchaseLinkRule.title !== PURCHASE_LINK_RULE_TITLE ||
-    purchaseLinkRule.category !== PURCHASE_LINK_RULE_CATEGORY ||
-    purchaseLinkRule.directive !== normalizedPurchaseLinkDirective
-  ) {
-    await prisma.aiRule.update({
-      where: { id: purchaseLinkRule.id },
-      data: {
-        title: PURCHASE_LINK_RULE_TITLE,
-        directive: normalizedPurchaseLinkDirective,
-        sortOrder: PURCHASE_LINK_RULE_SORT_ORDER,
-        status: [LEGACY_QUOTATION_RULE_TITLE, LEGACY_PURCHASE_LINK_RULE_TITLE].includes(purchaseLinkRule.title) ? 'ACTIVE' : purchaseLinkRule.status,
-        category: PURCHASE_LINK_RULE_CATEGORY,
-        enforcementLevel: 'STRICT',
-      },
     });
   }
 
@@ -176,10 +160,12 @@ async function ensureSeedRules() {
     await prisma.aiRule.create({ data: {
       id: QUOTATION_COMPLETION_RULE_ID,
       title: QUOTATION_COMPLETION_RULE_TITLE,
-      directive: DEFAULT_QUOTATION_COMPLETION_PROMPT,
+      directive: QUOTATION_COMPLETION_RULE_DIRECTIVE,
       sortOrder: (aggregate._max.sortOrder || 0) + 1,
       status: 'ACTIVE', category: QUOTATION_COMPLETION_RULE_CATEGORY, enforcementLevel: 'STRICT',
     }}).catch((error: { code?: string }) => { if (error.code !== 'P2002') throw error; });
+  } else if (completionRule.directive === DEFAULT_QUOTATION_COMPLETION_PROMPT) {
+    await prisma.aiRule.update({ where: { id: completionRule.id }, data: { directive: QUOTATION_COMPLETION_RULE_DIRECTIVE } });
   }
 }
 
@@ -188,38 +174,47 @@ export async function ensureSystemAiBehaviorRules(): Promise<void> {
 }
 
 export async function isFullNameHandoffRuleActive(): Promise<boolean> {
-  await ensureSeedRules();
   const rule = await prisma.aiRule.findFirst({ where: { category: FULL_NAME_HANDOFF_RULE_CATEGORY }, select: { status: true } });
   return rule?.status === 'ACTIVE';
+}
+
+export async function getHumanHandoffRuleConfig() {
+  const rule = await prisma.aiRule.findFirst({ where: { category: FULL_NAME_HANDOFF_RULE_CATEGORY } });
+  return rule?.status === 'ACTIVE'
+    ? (parseHumanHandoffRule(rule.directive) || DEFAULT_HUMAN_HANDOFF_RULE_CONFIG)
+    : DEFAULT_HUMAN_HANDOFF_RULE_CONFIG;
 }
 
 /**
  * Get all AI Behavior Rules (active & inactive) sorted by sortOrder asc
  */
 export async function getAllBehaviorRules(): Promise<AiBehaviorRuleItem[]> {
-  await ensureSeedRules();
   const rules = await prisma.aiRule.findMany({
     orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
   });
 
-  return rules.map((r) => ({
-    id: r.id,
-    title: r.title,
-    directive: r.directive,
-    sortOrder: r.sortOrder,
-    status: r.status === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE',
-    category: r.category,
-    enforcementLevel: r.enforcementLevel,
-    createdAt: r.createdAt,
-    updatedAt: r.updatedAt,
-  }));
+  return rules.map((r) => {
+    const envelope = parseAiBehaviorRuleEnvelope(r.directive);
+    return {
+      id: r.id,
+      title: r.title,
+      directive: envelope?.instruction || r.directive,
+      sortOrder: r.sortOrder,
+      status: r.status === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE',
+      category: r.category,
+      enforcementLevel: r.enforcementLevel,
+      scope: envelope?.scope,
+      conflictKey: envelope?.conflictKey,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    };
+  });
 }
 
 /**
  * Format enabled behavior rules into single prompt string for Layer 2 AI Injection
  */
 export async function getFormattedAiBehaviorPrompt(): Promise<string> {
-  await ensureSeedRules();
   const activeRules = await prisma.aiRule.findMany({
     where: { status: 'ACTIVE', category: { notIn: [PURCHASE_LINK_RULE_CATEGORY, QUOTATION_RESPONSE_ENGINE_CATEGORY, QUOTATION_COMPLETION_RULE_CATEGORY] } },
     orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
@@ -229,7 +224,7 @@ export async function getFormattedAiBehaviorPrompt(): Promise<string> {
     return '=== قوانین رفتار هوش مصنوعی (AI Behavior Rules) ===\n• پاسخ‌های محترمانه، کوتاه و دقیق با زبان فارسی ارائه دهید.';
   }
 
-  const ruleLines = activeRules.map((r, idx) => `${idx + 1}. [${r.title}]: ${r.directive}`);
+  const ruleLines = activeRules.map((r, idx) => `${idx + 1}. [${r.title}]: ${parseAiBehaviorRuleEnvelope(r.directive)?.instruction || r.directive}`);
   return `=== قوانین رفتار هوش مصنوعی (AI Behavior Rules) ===\n${ruleLines.join('\n')}`;
 }
 
@@ -241,6 +236,8 @@ export async function createBehaviorRule(data: {
   directive: string;
   sortOrder?: number;
   status?: 'ACTIVE' | 'INACTIVE';
+  scope?: AiBehaviorRuleScope;
+  conflictKey?: string;
 }): Promise<AiBehaviorRuleItem> {
   const count = await prisma.aiRule.count();
   const sortOrder = data.sortOrder ?? count + 1;
@@ -248,7 +245,9 @@ export async function createBehaviorRule(data: {
   const created = await prisma.aiRule.create({
     data: {
       title: data.title.trim(),
-      directive: data.directive.trim(),
+      directive: data.scope || data.conflictKey
+        ? serializeAiBehaviorRuleEnvelope({ version: 1, instruction: data.directive, scope: data.scope, conflictKey: data.conflictKey })
+        : data.directive.trim(),
       sortOrder: sortOrder,
       status: data.status || 'ACTIVE',
       category: 'CUSTOM',
@@ -259,7 +258,7 @@ export async function createBehaviorRule(data: {
   return {
     id: created.id,
     title: created.title,
-    directive: created.directive,
+    directive: parseAiBehaviorRuleEnvelope(created.directive)?.instruction || created.directive,
     sortOrder: created.sortOrder,
     status: created.status === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE',
     createdAt: created.createdAt,
@@ -277,12 +276,20 @@ export async function updateBehaviorRule(
     directive: string;
     sortOrder: number;
     status: 'ACTIVE' | 'INACTIVE';
+    scope: AiBehaviorRuleScope;
+    conflictKey: string;
   }>
 ): Promise<AiBehaviorRuleItem> {
   const updateData: any = {};
   const existing = await prisma.aiRule.findUnique({ where: { id } });
   if (!existing) throw new Error('قانون رفتار یافت نشد.');
   if (existing.category === FULL_NAME_HANDOFF_RULE_CATEGORY) {
+    if (data.directive !== undefined) {
+      const config = parseHumanHandoffRule(data.directive);
+      if (!config) throw new Error('تنظیمات دریافت مشخصات و ارجاع نامعتبر است.');
+      updateData.directive = serializeHumanHandoffRule(config);
+    }
+    if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
     if (data.status !== undefined) updateData.status = data.status;
   } else if (existing.category === PURCHASE_LINK_RULE_CATEGORY) {
     if (data.directive !== undefined) {
@@ -292,7 +299,11 @@ export async function updateBehaviorRule(
     if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
     if (data.status !== undefined) updateData.status = data.status;
   } else if (existing.category === QUOTATION_COMPLETION_RULE_CATEGORY) {
-    if (data.directive !== undefined) updateData.directive = data.directive.trim() || DEFAULT_QUOTATION_COMPLETION_PROMPT;
+    if (data.directive !== undefined) {
+      const config = parseQuotationCompletionRule(data.directive);
+      if (!config) throw new Error('تنظیمات مرحله پایانی استعلام نامعتبر است.');
+      updateData.directive = serializeQuotationCompletionRule(config);
+    }
     if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
     if (data.status !== undefined) updateData.status = data.status;
   } else if (existing.category === QUOTATION_RESPONSE_ENGINE_CATEGORY) {
@@ -305,7 +316,15 @@ export async function updateBehaviorRule(
     if (data.status !== undefined) updateData.status = data.status;
   } else {
   if (data.title !== undefined) updateData.title = data.title.trim();
-  if (data.directive !== undefined) updateData.directive = data.directive.trim();
+  if (data.directive !== undefined || data.scope !== undefined || data.conflictKey !== undefined) {
+    const envelope = parseAiBehaviorRuleEnvelope(existing.directive);
+    const instruction = data.directive !== undefined ? data.directive.trim() : envelope?.instruction || existing.directive;
+    const scope = data.scope !== undefined ? data.scope : envelope?.scope;
+    const conflictKey = data.conflictKey !== undefined ? data.conflictKey : envelope?.conflictKey;
+    updateData.directive = scope || conflictKey
+      ? serializeAiBehaviorRuleEnvelope({ version: 1, instruction, scope, conflictKey })
+      : instruction;
+  }
   if (data.sortOrder !== undefined) updateData.sortOrder = data.sortOrder;
   if (data.status !== undefined) updateData.status = data.status;
   }
@@ -318,18 +337,19 @@ export async function updateBehaviorRule(
   return {
     id: updated.id,
     title: updated.title,
-    directive: updated.directive,
+    directive: parseAiBehaviorRuleEnvelope(updated.directive)?.instruction || updated.directive,
     sortOrder: updated.sortOrder,
     status: updated.status === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE',
     category: updated.category,
     enforcementLevel: updated.enforcementLevel,
+    scope: parseAiBehaviorRuleEnvelope(updated.directive)?.scope,
+    conflictKey: parseAiBehaviorRuleEnvelope(updated.directive)?.conflictKey,
     createdAt: updated.createdAt,
     updatedAt: updated.updatedAt,
   };
 }
 
 export async function getQuotationRoutingRule() {
-  await ensureSeedRules();
   const rule = await prisma.aiRule.findFirst({ where: { category: PURCHASE_LINK_RULE_CATEGORY } });
   if (!rule) return null;
   const templates = parseQuotationRoutingTemplates(rule.directive);
@@ -344,15 +364,16 @@ export async function getQuotationRoutingRule() {
 }
 
 export async function getQuotationCompletionPrompt(): Promise<string> {
-  await ensureSeedRules();
   const rule = await prisma.aiRule.findFirst({ where: { category: QUOTATION_COMPLETION_RULE_CATEGORY } });
-  return rule?.status === 'ACTIVE' && rule.directive.trim()
-    ? rule.directive.trim()
-    : DEFAULT_QUOTATION_COMPLETION_PROMPT;
+  return rule?.status === 'ACTIVE' ? (parseQuotationCompletionRule(rule.directive)?.choicePrompt || DEFAULT_QUOTATION_COMPLETION_PROMPT) : DEFAULT_QUOTATION_COMPLETION_PROMPT;
+}
+
+export async function getQuotationCompletionConfig() {
+  const rule = await prisma.aiRule.findFirst({ where: { category: QUOTATION_COMPLETION_RULE_CATEGORY } });
+  return rule?.status === 'ACTIVE' ? (parseQuotationCompletionRule(rule.directive) || DEFAULT_QUOTATION_COMPLETION_CONFIG) : DEFAULT_QUOTATION_COMPLETION_CONFIG;
 }
 
 export async function getQuotationFinalizationRuleContext() {
-  await ensureSeedRules();
   const rules = await prisma.aiRule.findMany({
     where: { category: { in: [FULL_NAME_HANDOFF_RULE_CATEGORY, QUOTATION_COMPLETION_RULE_CATEGORY] } },
     orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
@@ -369,7 +390,6 @@ export async function getQuotationFinalizationRuleContext() {
 }
 
 export async function getQuotationResponseEngineRule() {
-  await ensureSeedRules();
   const rule = await prisma.aiRule.findFirst({ where: { category: QUOTATION_RESPONSE_ENGINE_CATEGORY } });
   if (!rule) return null;
   const config = parseQuotationResponseEngineConfig(rule.directive);
@@ -406,12 +426,14 @@ export async function deleteBehaviorRule(id: string): Promise<boolean> {
  * Reorder behavior rules by array of IDs
  */
 export async function reorderBehaviorRules(orderedIds: string[]): Promise<boolean> {
-  for (let index = 0; index < orderedIds.length; index++) {
-    const id = orderedIds[index];
-    await prisma.aiRule.update({
-      where: { id },
-      data: { sortOrder: index + 1 },
-    });
-  }
+  const ids = [...new Set(orderedIds)];
+  await prisma.$transaction(async (tx) => {
+    for (let index = 0; index < ids.length; index++) {
+      await tx.aiRule.update({ where: { id: ids[index] }, data: { sortOrder: -(index + 1) } });
+    }
+    for (let index = 0; index < ids.length; index++) {
+      await tx.aiRule.update({ where: { id: ids[index] }, data: { sortOrder: index + 1 } });
+    }
+  });
   return true;
 }
