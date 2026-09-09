@@ -111,7 +111,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       appliedRules: Array<{ title: string; enforcement: string; directive: string }>;
       details?: any;
     };
-  }>>([ 
+  }>>([
     {
       id: 'msg-welcome-1',
       sender: 'ai',
