@@ -45,6 +45,7 @@ import {
 } from '../../shared/currentPageProductSuggestion';
 import {
   applyProductIntentClassification,
+  inferredProductConfirmedByCustomer,
   invalidateStaleProductState,
   PRODUCT_INTENT_ROUTING_RULE_CATEGORY,
   readProductIntentRoutingState,
@@ -282,6 +283,11 @@ export async function processBrainLayer(params: {
   const intentFamily = conversationIntentFamily(detectedIntent);
 
   const previousProductRoutingState = readProductIntentRoutingState(existingCollectedData.productIntentRouting);
+  const inferredConfirmation = inferredProductConfirmedByCustomer(
+    previousProductRoutingState,
+    isCurrentPageProductSuggestionAccepted(userMessageContent),
+  );
+  const productConfirmationAccepted = Boolean(suggestionAccepted || inferredConfirmation);
   const routingCandidatesRaw = await prisma.insuranceProduct.findMany({
     where: {
       status: 'ACTIVE',
@@ -326,18 +332,20 @@ export async function processBrainLayer(params: {
     newActiveProductId: productRoutingResult.selectedProductId,
     appliedRuleIds: [],
   };
-  if (suggestionAccepted && existingPageSuggestion) {
+  if (productConfirmationAccepted) {
+    const confirmedProductId = existingPageSuggestion?.productId || inferredConfirmation?.productId || null;
+    const confirmedProductName = existingPageSuggestion?.productName || inferredConfirmation?.productName || '';
     const accepted: ProductIntentClassification = {
-      decision: 'SELECT_PRODUCT', selectedProductId: existingPageSuggestion.productId, confidence: 1,
-      explicitCorrection: false, confirmation: 'EXPLICIT', intentSummary: existingPageSuggestion.productName,
-      reason: 'Customer explicitly accepted the pending current-page product suggestion.', clarificationQuestion: null,
+      decision: 'SELECT_PRODUCT', selectedProductId: confirmedProductId, confidence: 1,
+      explicitCorrection: false, confirmation: 'EXPLICIT', intentSummary: confirmedProductName,
+      reason: 'Customer explicitly accepted the pending product confirmation.', clarificationQuestion: null,
     };
     productRoutingResult = applyProductIntentClassification({
       classification: accepted, candidates: routingCandidates, previous: previousProductRoutingState,
       legacyActiveProductId: conversation.currentProductId || null,
       originPageProduct: currentPageProduct ? { id: currentPageProduct.id, name: currentPageProduct.name } : null,
     });
-    productRoutingAudit = { ...productRoutingAudit, ...accepted, newActiveProductId: productRoutingResult.selectedProductId, source: 'PAGE_SUGGESTION_CONFIRMATION' };
+    productRoutingAudit = { ...productRoutingAudit, ...accepted, newActiveProductId: productRoutingResult.selectedProductId, source: 'PRODUCT_CONFIRMATION' };
   } else if (intentFamily !== 'GREETING' && (intentFamily === 'SALES_QUOTE' || Boolean(previousActiveProductId) || existingPageSuggestion?.status === 'AWAITING_CONFIRMATION')) {
     try {
       const semanticProduct = await classifyProductIntentWithRuntime({
@@ -381,7 +389,7 @@ export async function processBrainLayer(params: {
       ? (await prisma.quotationQuestion.findMany({ where: { productId: previousActiveProductId }, select: { fieldName: true } })).map(item => item.fieldName)
       : [];
     existingCollectedData = invalidateStaleProductState(existingCollectedData, previousQuestionFields);
-    if (productRoutingAudit.source !== 'PAGE_SUGGESTION_CONFIRMATION') {
+    if (productRoutingAudit.source !== 'PRODUCT_CONFIRMATION') {
       existingPageSuggestion = null;
       suggestionAccepted = false;
       suggestionRejected = false;
@@ -407,19 +415,19 @@ export async function processBrainLayer(params: {
     existingCollectedData,
   });
 
-  if (intentFamily !== 'SALES_QUOTE' && !conversation.currentProductId) {
+  if (intentFamily !== 'SALES_QUOTE' && !productConfirmationAccepted && !conversation.currentProductId) {
     // Product knowledge may answer an informational question, but its
     // questionnaire must not leak into the response/prompt as a next step.
     extractedKnowledge.quotationWorkflow = null;
   }
 
   // Product retrieval now follows the already-resolved conversation intent.
-  const productPurchaseRequested = semanticIntentResolved
+  const productPurchaseRequested = productConfirmationAccepted || (semanticIntentResolved
     ? detectedIntent === 'Insurance Quotation'
     : intentFamily === 'GREETING' ? false : hasRecentProductPurchaseIntent(
         userMessageContent,
         messageHistory.filter((message) => message.senderType === 'CUSTOMER').map((message) => message.content),
-      );
+      ));
   const intent = extractedKnowledge.matchedProduct && productPurchaseRequested
     ? 'Insurance Quotation'
     : detectedIntent;
@@ -596,7 +604,7 @@ export async function processBrainLayer(params: {
     extractedKnowledge.matchedProduct &&
     detectedProductConfirmed &&
     extractedKnowledge.matchedProduct.purchaseUrl &&
-    (['OFFER_PURCHASE_ROUTE', 'REQUEST_LINK_AGAIN'].includes(semanticRoutingDecision || '') || (!semanticRoutingAvailable && shouldOfferProductPurchaseLink({
+    (productConfirmationAccepted || ['OFFER_PURCHASE_ROUTE', 'REQUEST_LINK_AGAIN'].includes(semanticRoutingDecision || '') || (!semanticRoutingAvailable && shouldOfferProductPurchaseLink({
       intent,
       productId: extractedKnowledge.matchedProduct.id,
       purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,

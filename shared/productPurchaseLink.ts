@@ -6,6 +6,8 @@ export const LEGACY_QUOTATION_RULE_TITLE = 'استعلام قیمت آنلاین
 export const PURCHASE_LINK_RULE_SORT_ORDER = 0;
 export const LEGACY_PURCHASE_LINK_RULE_TITLE = 'پیشنهاد لینک خرید پیش از شروع استعلام';
 export const LEGACY_PURCHASE_LINK_RULE_CATEGORY = 'SYSTEM_PURCHASE_LINK_BEFORE_QUOTATION';
+export const LEGACY_SAME_PAGE_RESPONSE = 'فرم استعلام آنلاین {{productName}} در همین صفحه در دسترس است و می‌توانید خودتان آن را تکمیل کنید.\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.';
+export const LEGACY_DIFFERENT_PAGE_RESPONSE = 'برای استعلام آنلاین {{productName}} از لینک زیر استفاده کنید:\n{{purchaseUrl}}\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.';
 
 export type QuotationRoutingTemplates = {
   version: 1;
@@ -36,8 +38,8 @@ export const DEFAULT_QUOTATION_ROUTING_TEMPLATES: QuotationRoutingTemplates = {
     'فقط برای تماس با کارشناس اطلاعاتم را بگیرید',
     'خودم فرم را پر نمی‌کنم، با من تماس بگیرید',
   ],
-  samePageResponse: 'فرم استعلام آنلاین {{productName}} در همین صفحه در دسترس است و می‌توانید خودتان آن را تکمیل کنید.\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.',
-  differentPageResponse: 'برای استعلام آنلاین {{productName}} از لینک زیر استفاده کنید:\n{{purchaseUrl}}\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.',
+  samePageResponse: 'بله، انجام می‌دیم. اگر مایل باشید می‌تونید فرم استعلام آنلاین همین صفحه رو تکمیل کنید و قیمت بگیرید. اگر ترجیح می‌دید، من همینجا چند سؤال ازتون می‌پرسم و درخواستتون رو برای کارشناس می‌فرستم.',
+  differentPageResponse: 'بله، انجام می‌دیم. اگر مایل باشید می‌تونید فرم استعلام آنلاین رو تکمیل کنید و قیمت بگیرید:\n{{purchaseUrl}}\nاگر ترجیح می‌دید، من همینجا چند سؤال ازتون می‌پرسم و درخواستتون رو برای کارشناس می‌فرستم.',
   awaitingChoiceResponse: 'اگر می‌خواهید استعلام را در چت انجام دهیم، بگویید «خودتان استعلام کنید»؛ در غیر این صورت می‌توانید فرم آنلاین را تکمیل کنید.',
   chatStartResponse: 'حتماً؛ سؤال‌های استعلام را یکی‌یکی می‌پرسم.',
   pageProductSuggestionResponse: 'منظورتان {{productName}} است؟',

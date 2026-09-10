@@ -10,9 +10,12 @@ import {
   serializeHumanHandoffRule,
 } from '../../shared/humanHandoffRule';
 import {
+  DEFAULT_QUOTATION_ROUTING_TEMPLATES,
+  LEGACY_DIFFERENT_PAGE_RESPONSE,
   LEGACY_QUOTATION_RULE_TITLE,
   LEGACY_PURCHASE_LINK_RULE_CATEGORY,
   LEGACY_PURCHASE_LINK_RULE_TITLE,
+  LEGACY_SAME_PAGE_RESPONSE,
   parseQuotationRoutingTemplates,
   PURCHASE_LINK_RULE_CATEGORY,
   PURCHASE_LINK_RULE_DIRECTIVE,
@@ -150,10 +153,23 @@ async function ensureSeedRules() {
     if (parsedRouting) {
       try {
         const raw = JSON.parse(purchaseLinkRule.directive) as Record<string, unknown>;
+        const normalized = { ...parsedRouting };
+        let requiresUpdate = false;
+        if (raw.samePageResponse === LEGACY_SAME_PAGE_RESPONSE) {
+          normalized.samePageResponse = DEFAULT_QUOTATION_ROUTING_TEMPLATES.samePageResponse;
+          requiresUpdate = true;
+        }
+        if (raw.differentPageResponse === LEGACY_DIFFERENT_PAGE_RESPONSE) {
+          normalized.differentPageResponse = DEFAULT_QUOTATION_ROUTING_TEMPLATES.differentPageResponse;
+          requiresUpdate = true;
+        }
         if (!Object.prototype.hasOwnProperty.call(raw, 'assistedLeadQuestionLimit') || !Object.prototype.hasOwnProperty.call(raw, 'assistedLeadExamples')) {
-          // Preserve every manager-authored response while adding only the new
-          // conversion-mode controls to the existing rule.
-          await prisma.aiRule.update({ where: { id: purchaseLinkRule.id }, data: { directive: serializeQuotationRoutingTemplates(parsedRouting) } });
+          requiresUpdate = true;
+        }
+        if (requiresUpdate) {
+          // Preserve manager-authored text while adding new controls and
+          // refreshing only response text that still equals the old default.
+          await prisma.aiRule.update({ where: { id: purchaseLinkRule.id }, data: { directive: serializeQuotationRoutingTemplates(normalized) } });
         }
       } catch {
         // Invalid legacy content remains visible for the manager to repair.

@@ -36,10 +36,9 @@ const productPurchaseLinkReply = (url: string) => renderQuotationRoutingTemplate
 test('building managers price request offers its valid URL only once', () => {
   const input = { intent: 'Insurance Quotation', productId, purchaseUrl, message: 'قیمت بیمه مسئولیت مدیران ساختمان' };
   assert.equal(shouldOfferProductPurchaseLink(input), true);
-  assert.equal(
-    productPurchaseLinkReply(purchaseUrl),
-    `برای استعلام آنلاین بیمه مسئولیت مدیر ساختمان از لینک زیر استفاده کنید:\n${purchaseUrl}\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.`,
-  );
+  assert.match(productPurchaseLinkReply(purchaseUrl), new RegExp(purchaseUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(productPurchaseLinkReply(purchaseUrl), /فرم استعلام آنلاین/);
+  assert.match(productPurchaseLinkReply(purchaseUrl), /همینجا چند سؤال/);
   assert.doesNotMatch(productPurchaseLinkReply(purchaseUrl), /نوع کاربری ساختمان/);
   assert.equal(shouldOfferProductPurchaseLink({ ...input, offeredProductIds: [productId] }), false);
 });

@@ -62,6 +62,14 @@ export type ProductIntentRoutingState = {
   updatedAt: string;
 };
 
+export function inferredProductConfirmedByCustomer(
+  state: ProductIntentRoutingState | null,
+  positiveConfirmation: boolean,
+): { productId: string; productName: string } | null {
+  if (!positiveConfirmation || state?.status !== 'INFERRED' || !state.activeProductId || !state.activeProductName) return null;
+  return { productId: state.activeProductId, productName: state.activeProductName };
+}
+
 export type ProductIntentRoutingDecision =
   | 'KEEP_ACTIVE'
   | 'SELECT_PRODUCT'

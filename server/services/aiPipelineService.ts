@@ -26,8 +26,9 @@ import {
   startQuotationSubmission,
 } from './quotationSubmissionFlow';
 import { classifyQuotationTerminalIntentWithAi } from './quotationClassifierService';
-import { classifyConversationIntentWithRuntime, classifyQuotationDeliveryChoiceWithRuntime } from './aiBehaviorRuntime';
+import { classifyConversationIntentWithRuntime, classifyQuotationDeliveryChoiceWithRuntime, isSimpleGreeting } from './aiBehaviorRuntime';
 import { buildQuotationAudit } from './quotationAudit';
+import { coalesceConsecutiveGreetingMessages, GREETING_COALESCE_WINDOW_MS } from '../../shared/conversationGreetingCoalescing';
 import {
   finalizeQuotationCompletion,
 } from './quotationCompletionService';
@@ -325,14 +326,47 @@ type AiPipelineParams = {
   userMessageContent: string;
   aiCategory?: string;
   effectiveAiMode?: AiMode;
+  coalescedSourceMessageIds?: string[];
 };
+
+async function coalesceGreetingPipelineTurn(params: AiPipelineParams): Promise<AiPipelineParams> {
+  if (!isSimpleGreeting(params.userMessageContent)) return params;
+  const trigger = await prisma.message.findUnique({ where: { id: params.messageId }, select: { createdAt: true } });
+  if (!trigger) return params;
+
+  await new Promise(resolve => setTimeout(resolve, GREETING_COALESCE_WINDOW_MS));
+  const messages = await prisma.message.findMany({
+    where: {
+      conversationId: params.conversationId,
+      senderType: 'CUSTOMER',
+      createdAt: {
+        gte: trigger.createdAt,
+        lte: new Date(trigger.createdAt.getTime() + GREETING_COALESCE_WINDOW_MS),
+      },
+    },
+    select: { id: true, content: true, createdAt: true },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  });
+  const coalesced = coalesceConsecutiveGreetingMessages(params.messageId, messages.map(message => ({
+    ...message,
+    greetingOnly: isSimpleGreeting(message.content),
+  })));
+  return coalesced ? {
+    ...params,
+    messageId: coalesced.messageId,
+    userMessageContent: coalesced.userMessageContent,
+    coalescedSourceMessageIds: coalesced.sourceMessageIds,
+  } : params;
+}
+
 export async function runAiPipelineForMessage(params: AiPipelineParams) {
   return withConversationTurn(params.conversationId, async () => {
+    const effectiveParams = await coalesceGreetingPipelineTurn(params);
     const alreadyHandled = await prisma.message.findFirst({
-      where: { conversationId: params.conversationId, senderType: 'AI', metadata: { contains: `"sourceMessageId":${JSON.stringify(params.messageId)}` } },
+      where: { conversationId: params.conversationId, senderType: 'AI', metadata: { contains: effectiveParams.messageId } },
       select: { id: true },
     });
-    if (!alreadyHandled) return runAiPipelineTurn(params);
+    if (!alreadyHandled) return runAiPipelineTurn(effectiveParams);
   });
 }
 async function runAiPipelineTurn(params: AiPipelineParams) {
@@ -344,6 +378,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
     userMessageContent,
     aiCategory = 'OTHER',
     effectiveAiMode,
+    coalescedSourceMessageIds = [params.messageId],
   } = params;
 
   // 0. Check AI Mode (OFF, TEST_MODE, ACTIVE)
@@ -1124,6 +1159,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
       isTestMode: isTestModeActive,
       metadata: JSON.stringify({
         sourceMessageId: messageId,
+        coalescedSourceMessageIds,
         isTestMode: isTestModeActive,
         notice: isTestModeActive ? 'این پاسخ فقط برای بررسی مدیر ایجاد شده و برای مشتری ارسال نشده است.' : '',
         modelUsed: brainResult.modelUsed,

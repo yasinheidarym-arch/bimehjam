@@ -33,8 +33,8 @@ test('same product page points to the form on the current page without repeating
   const reply = renderQuotationRoutingTemplate(DEFAULT_QUOTATION_ROUTING_TEMPLATES.samePageResponse, {
     productName: 'بیمه مسئولیت مدیر ساختمان', purchaseUrl, currentPageUrl: `${purchaseUrl}/`,
   });
-  assert.match(reply, /فرم استعلام آنلاین بیمه مسئولیت مدیر ساختمان در همین صفحه/);
-  assert.match(reply, /سؤال‌های استعلام را یکی‌یکی/);
+  assert.match(reply, /فرم استعلام آنلاین همین صفحه/);
+  assert.match(reply, /همینجا چند سؤال/);
   assert.doesNotMatch(reply, /https?:\/\//);
 });
 

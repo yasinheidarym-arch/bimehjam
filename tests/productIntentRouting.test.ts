@@ -5,6 +5,7 @@ import {
   invalidateStaleProductState,
   type ProductIntentClassification,
   type ProductIntentRoutingState,
+  inferredProductConfirmedByCustomer,
 } from '../shared/productIntentRouting';
 import {
   DEFAULT_QUOTATION_ROUTING_TEMPLATES,
@@ -132,6 +133,10 @@ test('D: explicit confirmation promotes the suggested construction product', () 
   });
   assert.equal(confirmed.state.status, 'CONFIRMED');
   assert.equal(confirmed.state.confirmedProductId, construction.id);
+  assert.deepEqual(inferredProductConfirmedByCustomer(inferred.state, true), {
+    productId: construction.id,
+    productName: construction.name,
+  });
 });
 
 test('G: previously collected valid data prefills its real field and skips only that question', async () => {
