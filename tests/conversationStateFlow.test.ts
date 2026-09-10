@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { coalesceConsecutiveGreetingMessages } from '../shared/conversationGreetingCoalescing';
+import { advanceConversationOpeningState } from '../shared/conversationOpeningState';
 import { inferredProductConfirmedByCustomer, type ProductIntentRoutingState } from '../shared/productIntentRouting';
 import {
   DEFAULT_QUOTATION_ROUTING_TEMPLATES,
@@ -9,6 +10,7 @@ import {
   quotationQuestionLimitForConversionMode,
   renderQuotationRoutingTemplate,
 } from '../shared/productPurchaseLink';
+import { isSimpleGreeting } from '../server/services/aiBehaviorRuntime';
 
 const at = (milliseconds: number) => new Date(Date.UTC(2026, 8, 10, 8, 0, 0, milliseconds));
 
@@ -31,6 +33,25 @@ test('greeting coalescing stops at a substantive customer message', () => {
   assert.deepEqual(result?.sourceMessageIds, ['m1']);
 });
 
+test('opening state suppresses consecutive semantic greetings beyond transport debounce', () => {
+  const first = advanceConversationOpeningState(null, 'GREETING', at(0));
+  assert.equal(first.duplicateGreeting, false);
+  const second = advanceConversationOpeningState(first.state, 'GREETING', new Date(at(0).getTime() + 5_000));
+  assert.equal(second.duplicateGreeting, true);
+  const third = advanceConversationOpeningState(second.state, 'GREETING', new Date(at(0).getTime() + 15_000));
+  assert.equal(third.duplicateGreeting, true);
+  assert.equal(isSimpleGreeting('خسته نباشید'), true);
+});
+
+test('a substantive message closes the greeting opening phase', () => {
+  const greeting = advanceConversationOpeningState(null, 'GREETING', at(0));
+  const substantive = advanceConversationOpeningState(greeting.state, 'SALES_QUOTE', new Date(at(0).getTime() + 2_000));
+  assert.equal(substantive.state.phase, 'ACTIVE');
+  assert.equal(substantive.state.substantiveMessageSeen, true);
+  const laterGreeting = advanceConversationOpeningState(substantive.state, 'GREETING', new Date(at(0).getTime() + 3_000));
+  assert.equal(laterGreeting.duplicateGreeting, false);
+});
+
 test('positive reply confirms the persisted inferred product instead of asking again', () => {
   const state: ProductIntentRoutingState = {
     version: 1, originPageProductId: 'construction', originPageProductName: 'بیمه مسئولیت احداث ساختمان',
@@ -51,6 +72,14 @@ test('confirmed product on its own page offers the current form without repeatin
   });
   assert.doesNotMatch(response, /https?:\/\//);
   assert.match(response, /همین صفحه/);
+});
+
+test('same-page comparison ignores protocol, www, query, hash, slash and URL encoding', () => {
+  const encoded = 'https://www.bimejam.com/%D8%A8%DB%8C%D9%85%D9%87-%D9%85%D8%B3%D8%A6%D9%88%D9%84%DB%8C%D8%AA/?utm_source=goftino#form';
+  const canonical = 'http://bimejam.com/بیمه-مسئولیت';
+  assert.equal(isDetectedProductCurrentPage({
+    productId: 'liability', currentPageProductId: null, purchaseUrl: canonical, currentPageUrl: encoded,
+  }), true);
 });
 
 test('confirmed product on another page gets its real URL and assisted quote remains full length', () => {

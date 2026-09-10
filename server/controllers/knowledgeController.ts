@@ -1580,7 +1580,8 @@ export async function testAiResponse(req: Request, res: Response) {
       data: {
         customerMessage: question,
         question,
-        aiResponse: brainResult.replyText,
+        aiResponse: brainResult.suppressAutomaticReply ? '' : brainResult.replyText,
+        responseSuppressed: Boolean(brainResult.suppressAutomaticReply),
         responseTime: responseTimeStr,
         intentDetected: brainResult.intent,
         stageDetected: brainResult.stage,

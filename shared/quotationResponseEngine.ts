@@ -16,6 +16,10 @@ export const QUOTATION_RESPONSE_STATES = [
   'START_NEW_QUOTATION',
 ] as const;
 
+export const NON_REPEATING_CLARIFICATION_STATES = [
+  'QUESTION_ABOUT_CURRENT_FIELD', 'RELATED_BUT_WRONG_CATEGORY', 'AMBIGUOUS', 'UNRELATED',
+] as const;
+
 export type QuotationResponseState = typeof QUOTATION_RESPONSE_STATES[number];
 
 export type QuotationResponseStateRule = {
@@ -44,7 +48,7 @@ export const DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG: QuotationResponseEngineCo
     VALID_ANSWER: state('{{nextQuestion}}', 'کوتاه، طبیعی و بدون بازنویسی سؤال'),
     QUESTION_ABOUT_CURRENT_FIELD: state('{{helpResponse}}', 'کارشناس حرفه‌ای، محترمانه، صمیمی و غیررسمیِ کنترل‌شده؛ خطاب همیشه جمع باشد و از عبارت‌های دستوری یا بچگانه استفاده نشود. پاسخ بدون تکرار کامل سؤال، طبیعی و محترمانه پایان یابد.'),
     ANSWER_AND_QUESTION: state('{{helpResponse}}\n\n{{nextQuestion}}', 'ابتدا پاسخ کوتاه و مستند، سپس سؤال واقعی بعدی'),
-    RELATED_BUT_WRONG_CATEGORY: state('{{relatedExplanation}}\n{{currentQuestion}}', 'محترمانه و دقیق'),
+    RELATED_BUT_WRONG_CATEGORY: state('{{relatedExplanation}}', 'محترمانه و دقیق؛ سؤال اصلی را در همان پیام تکرار نکن'),
     AMBIGUOUS: state('{{clarification}}', 'کوتاه و مشخص'),
     UNRELATED: state('{{clarification}}', 'محترمانه و بدون بن‌بست'),
     CORRECTION: state('{{nextQuestion}}', 'کوتاه و تأییدکننده'),
@@ -71,10 +75,15 @@ export function parseQuotationResponseEngineConfig(value: string): QuotationResp
       const legacyStates = parsed.states as Record<string, QuotationResponseStateRule>;
       const item = legacyStates[key] || (key === 'QUESTION_ABOUT_CURRENT_FIELD' ? legacyStates.QUESTION_ABOUT_FIELD : null) || DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG.states[key];
       if (!item || typeof item.template !== 'string' || typeof item.tone !== 'string') return null;
+      const template = key === 'QUESTION_ABOUT_CURRENT_FIELD'
+        ? '{{helpResponse}}'
+        : (NON_REPEATING_CLARIFICATION_STATES as readonly string[]).includes(key)
+          ? item.template.replace(/{{\s*currentQuestion\s*}}/g, '').replace(/\n{3,}/g, '\n\n').trim()
+          : item.template.trim();
       states[key] = {
         // Guidance is generated from grounded question context. Never expose raw
         // helpText/currentQuestion through an administrator-authored template.
-        template: key === 'QUESTION_ABOUT_CURRENT_FIELD' ? '{{helpResponse}}' : item.template.trim(),
+        template: template || DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG.states[key].template,
         tone: item.tone.trim(),
         positiveExamples: cleanLines(item.positiveExamples),
         negativeExamples: cleanLines(item.negativeExamples),

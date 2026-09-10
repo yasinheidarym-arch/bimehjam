@@ -16,6 +16,8 @@ import {
   LEGACY_PURCHASE_LINK_RULE_CATEGORY,
   LEGACY_PURCHASE_LINK_RULE_TITLE,
   LEGACY_SAME_PAGE_RESPONSE,
+  PREVIOUS_DIFFERENT_PAGE_RESPONSE,
+  PREVIOUS_SAME_PAGE_RESPONSE,
   parseQuotationRoutingTemplates,
   PURCHASE_LINK_RULE_CATEGORY,
   PURCHASE_LINK_RULE_DIRECTIVE,
@@ -49,6 +51,7 @@ import {
   PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE,
   PRODUCT_INTENT_ROUTING_RULE_ID,
   PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE_V1,
+  PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE_V2,
   PRODUCT_INTENT_ROUTING_RULE_SORT_ORDER,
   PRODUCT_INTENT_ROUTING_RULE_TITLE,
   LEGACY_BUILDING_INTENT_RULE_TITLE,
@@ -155,11 +158,11 @@ async function ensureSeedRules() {
         const raw = JSON.parse(purchaseLinkRule.directive) as Record<string, unknown>;
         const normalized = { ...parsedRouting };
         let requiresUpdate = false;
-        if (raw.samePageResponse === LEGACY_SAME_PAGE_RESPONSE) {
+        if ([LEGACY_SAME_PAGE_RESPONSE, PREVIOUS_SAME_PAGE_RESPONSE].includes(String(raw.samePageResponse || ''))) {
           normalized.samePageResponse = DEFAULT_QUOTATION_ROUTING_TEMPLATES.samePageResponse;
           requiresUpdate = true;
         }
-        if (raw.differentPageResponse === LEGACY_DIFFERENT_PAGE_RESPONSE) {
+        if ([LEGACY_DIFFERENT_PAGE_RESPONSE, PREVIOUS_DIFFERENT_PAGE_RESPONSE].includes(String(raw.differentPageResponse || ''))) {
           normalized.differentPageResponse = DEFAULT_QUOTATION_ROUTING_TEMPLATES.differentPageResponse;
           requiresUpdate = true;
         }
@@ -203,7 +206,7 @@ async function ensureSeedRules() {
       category: PRODUCT_INTENT_ROUTING_RULE_CATEGORY,
       enforcementLevel: 'STRICT',
     } });
-  } else if (productIntentRule.directive === PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE_V1) {
+  } else if ([PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE_V1, PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE_V2].includes(productIntentRule.directive)) {
     // Upgrade only the untouched system v1 default. Manager edits remain authoritative.
     await prisma.aiRule.update({ where: { id: productIntentRule.id }, data: { directive: PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE } });
   }
@@ -220,6 +223,14 @@ async function ensureSeedRules() {
       sortOrder: (aggregate._max.sortOrder || 0) + 1,
       status: 'ACTIVE', category: QUOTATION_RESPONSE_ENGINE_CATEGORY, enforcementLevel: 'STRICT',
     }}).catch((error: { code?: string }) => { if (error.code !== 'P2002') throw error; });
+  } else {
+    const normalized = parseQuotationResponseEngineConfig(responseEngineRule.directive);
+    if (normalized) {
+      const serialized = serializeQuotationResponseEngineConfig(normalized);
+      if (serialized !== responseEngineRule.directive) {
+        await prisma.aiRule.update({ where: { id: responseEngineRule.id }, data: { directive: serialized } });
+      }
+    }
   }
 
   const completionRule = await prisma.aiRule.findFirst({

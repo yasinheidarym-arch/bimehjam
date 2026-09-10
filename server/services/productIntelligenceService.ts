@@ -1,4 +1,5 @@
 import prisma from '../db/client';
+import { normalizeComparablePagePath } from '../../shared/productPurchaseLink';
 
 export interface ProductMapSeedItem {
   product_name: string;
@@ -337,29 +338,7 @@ export async function seedProductMapData() {
  * Normalizes input URL/Path to match DB entries
  */
 export function normalizeUrlPath(urlOrPath: string): string {
-  if (!urlOrPath) return '';
-  let clean = urlOrPath.trim();
-  // Remove protocol and host if full URL
-  if (clean.includes('://')) {
-    try {
-      const parsed = new URL(clean);
-      clean = parsed.pathname;
-    } catch {
-      clean = clean.replace(/^https?:\/\/[^\/]+/, '');
-    }
-  }
-
-  // Ensure leading slash
-  if (!clean.startsWith('/')) {
-    clean = '/' + clean;
-  }
-
-  // Remove trailing slash if longer than 1 char
-  if (clean.length > 1 && clean.endsWith('/')) {
-    clean = clean.slice(0, -1);
-  }
-
-  return clean;
+  return normalizeComparablePagePath(urlOrPath) || '';
 }
 
 /**

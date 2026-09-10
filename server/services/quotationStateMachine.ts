@@ -2,7 +2,7 @@ import { answerPortion, quotationQuestionReply, sortQuotationQuestions, type Quo
 import { quotationQuestionHelp } from './quotationQuestionHelp';
 import { normalizeQuotationOptionText as normalize, numbersIn, isPlainQuotationNumber, quotationQuestionOptions, resolveQuotationOptionSelection } from './quotationOptionMatchingService';
 import { isAmbiguousQuotationMoney, resolveQuotationMoney } from './quotationMoney';
-import { DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG, QUOTATION_RESPONSE_STATES, type QuotationResponseEngineConfig, type QuotationResponseState } from '../../shared/quotationResponseEngine';
+import { DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG, NON_REPEATING_CLARIFICATION_STATES, QUOTATION_RESPONSE_STATES, type QuotationResponseEngineConfig, type QuotationResponseState } from '../../shared/quotationResponseEngine';
 import { resolveQuotationGuidance, type QuotationGuidanceSource } from './quotationInterruption';
 import { quotationBehaviorContext } from './aiBehaviorRuntime';
 
@@ -224,7 +224,10 @@ export async function advanceQuotationTurn(input: { sessionId: string; sessionSt
   const relatedExplanation = safeClassifierText(classification.relatedExplanation) || (current ? (relatedQuestion ? `این پاسخ به «${relatedQuestion.title}» مربوط است، نه «${current.title}».` : genericClarification(current, 'RELATED_BUT_WRONG_CATEGORY', attemptCount, input.message)) : '');
   const configuredTemplate = config.states[classification.status]?.template || '{{clarification}}';
   const template = classification.status === 'QUESTION_ABOUT_CURRENT_FIELD' ? '{{helpResponse}}' : configuredTemplate;
-  const responseText = fillTemplate(template, { currentQuestion: current ? quotationQuestionReply(current) : '', nextQuestion: next ? quotationQuestionReply(next) : '', helpText: '', helpResponse, clarification, relatedExplanation, fieldName: current?.fieldName || '', options: current ? quotationQuestionOptions(current).map(option => option.value).join('، ') : '' });
+  const currentQuestionForResponse = (NON_REPEATING_CLARIFICATION_STATES as readonly string[]).includes(classification.status)
+    ? ''
+    : current ? quotationQuestionReply(current) : '';
+  const responseText = fillTemplate(template, { currentQuestion: currentQuestionForResponse, nextQuestion: next ? quotationQuestionReply(next) : '', helpText: '', helpResponse, clarification, relatedExplanation, fieldName: current?.fieldName || '', options: current ? quotationQuestionOptions(current).map(option => option.value).join('، ') : '' });
   if (!decisions.length) decisions.push({ status: classification.status, fieldName: current?.fieldName || null, confidence: classification.confidence, reason: classification.reason, outcome: ['QUESTION_ABOUT_CURRENT_FIELD', 'RELATED_BUT_WRONG_CATEGORY', 'UNRELATED', 'REQUEST_HUMAN', 'CANCEL_OR_PAUSE', 'START_NEW_QUOTATION'].includes(classification.status) ? 'INTERRUPTION' : 'CLARIFY' });
   const interruption = ['QUESTION_ABOUT_CURRENT_FIELD', 'ANSWER_AND_QUESTION', 'RELATED_BUT_WRONG_CATEGORY', 'UNRELATED', 'REQUEST_HUMAN', 'CANCEL_OR_PAUSE', 'START_NEW_QUOTATION'].includes(classification.status);
   const ambiguity: QuotationTurnState['ambiguity'] = classification.status === 'QUESTION_ABOUT_CURRENT_FIELD' ? 'HELP' : ['AMBIGUOUS', 'RELATED_BUT_WRONG_CATEGORY', 'UNRELATED'].includes(classification.status) ? 'CLARIFY' : 'NONE';

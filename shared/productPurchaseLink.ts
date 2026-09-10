@@ -8,6 +8,8 @@ export const LEGACY_PURCHASE_LINK_RULE_TITLE = 'پیشنهاد لینک خرید
 export const LEGACY_PURCHASE_LINK_RULE_CATEGORY = 'SYSTEM_PURCHASE_LINK_BEFORE_QUOTATION';
 export const LEGACY_SAME_PAGE_RESPONSE = 'فرم استعلام آنلاین {{productName}} در همین صفحه در دسترس است و می‌توانید خودتان آن را تکمیل کنید.\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.';
 export const LEGACY_DIFFERENT_PAGE_RESPONSE = 'برای استعلام آنلاین {{productName}} از لینک زیر استفاده کنید:\n{{purchaseUrl}}\nاگر بخواهید، در همین چت هم سؤال‌های استعلام را یکی‌یکی از شما می‌پرسم.';
+export const PREVIOUS_SAME_PAGE_RESPONSE = 'بله، انجام می‌دیم. اگر مایل باشید می‌تونید فرم استعلام آنلاین همین صفحه رو تکمیل کنید و قیمت بگیرید. اگر ترجیح می‌دید، من همینجا چند سؤال ازتون می‌پرسم و درخواستتون رو برای کارشناس می‌فرستم.';
+export const PREVIOUS_DIFFERENT_PAGE_RESPONSE = 'بله، انجام می‌دیم. اگر مایل باشید می‌تونید فرم استعلام آنلاین رو تکمیل کنید و قیمت بگیرید:\n{{purchaseUrl}}\nاگر ترجیح می‌دید، من همینجا چند سؤال ازتون می‌پرسم و درخواستتون رو برای کارشناس می‌فرستم.';
 
 export type QuotationRoutingTemplates = {
   version: 1;
@@ -38,8 +40,8 @@ export const DEFAULT_QUOTATION_ROUTING_TEMPLATES: QuotationRoutingTemplates = {
     'فقط برای تماس با کارشناس اطلاعاتم را بگیرید',
     'خودم فرم را پر نمی‌کنم، با من تماس بگیرید',
   ],
-  samePageResponse: 'بله، انجام می‌دیم. اگر مایل باشید می‌تونید فرم استعلام آنلاین همین صفحه رو تکمیل کنید و قیمت بگیرید. اگر ترجیح می‌دید، من همینجا چند سؤال ازتون می‌پرسم و درخواستتون رو برای کارشناس می‌فرستم.',
-  differentPageResponse: 'بله، انجام می‌دیم. اگر مایل باشید می‌تونید فرم استعلام آنلاین رو تکمیل کنید و قیمت بگیرید:\n{{purchaseUrl}}\nاگر ترجیح می‌دید، من همینجا چند سؤال ازتون می‌پرسم و درخواستتون رو برای کارشناس می‌فرستم.',
+  samePageResponse: 'اگر مایل باشید می‌تونید فرم استعلام آنلاین همین صفحه رو تکمیل کنید و قیمت بگیرید. اگر ترجیح می‌دید، من همینجا چند سؤال کوتاه ازتون می‌پرسم و درخواستتون رو برای کارشناس می‌فرستم.',
+  differentPageResponse: 'اگر مایل باشید می‌تونید فرم استعلام آنلاین رو تکمیل کنید و قیمت بگیرید:\n{{purchaseUrl}}\nاگر ترجیح می‌دید، من همینجا چند سؤال کوتاه ازتون می‌پرسم و درخواستتون رو برای کارشناس می‌فرستم.',
   awaitingChoiceResponse: 'اگر می‌خواهید استعلام را در چت انجام دهیم، بگویید «خودتان استعلام کنید»؛ در غیر این صورت می‌توانید فرم آنلاین را تکمیل کنید.',
   chatStartResponse: 'حتماً؛ سؤال‌های استعلام را یکی‌یکی می‌پرسم.',
   pageProductSuggestionResponse: 'منظورتان {{productName}} است؟',
@@ -123,12 +125,34 @@ export function normalizeProductPurchaseUrl(value: unknown): string | null {
   }
 }
 
+export function normalizeComparablePagePath(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  let pathname = value.trim();
+  try {
+    pathname = new URL(pathname).pathname;
+  } catch {
+    pathname = pathname.split(/[?#]/, 1)[0];
+  }
+  pathname = pathname.replace(/\\/g, '/');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const decoded = decodeURIComponent(pathname);
+      if (decoded === pathname) break;
+      pathname = decoded;
+    } catch { break; }
+  }
+  pathname = pathname.normalize('NFC').replace(/\/{2,}/g, '/');
+  if (!pathname.startsWith('/')) pathname = `/${pathname}`;
+  return (pathname.replace(/\/+$/, '') || '/').toLowerCase();
+}
+
 export function normalizeComparablePageUrl(value: unknown): string | null {
   const normalized = normalizeProductPurchaseUrl(value);
   if (!normalized) return null;
   const parsed = new URL(normalized);
-  const pathname = decodeURIComponent(parsed.pathname).replace(/\/+$/, '') || '/';
-  return `${parsed.hostname.toLowerCase()}${pathname.toLowerCase()}`;
+  const hostname = parsed.hostname.toLowerCase().replace(/^www\./, '');
+  const pathname = normalizeComparablePagePath(parsed.pathname);
+  return pathname ? `${hostname}${pathname}` : null;
 }
 
 export function isDetectedProductCurrentPage(input: {

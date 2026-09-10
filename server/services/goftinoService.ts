@@ -94,9 +94,9 @@ export function extractCurrentPageUrl(payload: GoftinoWebhookPayload): string | 
   const client = data?.client && typeof data.client === 'object' ? data.client as Record<string, unknown> : null;
   const topLevel = payload as Record<string, unknown>;
   return [
-    data?.currentPageUrl, data?.current_page_url, data?.pageUrl, data?.page_url, data?.url,
-    client?.currentPageUrl, client?.pageUrl, client?.page_url, client?.url,
-    topLevel.currentPageUrl, topLevel.current_page_url, topLevel.pageUrl, topLevel.page_url, topLevel.url,
+    data?.currentPageUrl, data?.current_page_url, data?.pageUrl, data?.page_url, data?.currentUrl, data?.current_url, data?.lastUrl, data?.last_url, data?.url,
+    client?.currentPageUrl, client?.current_page_url, client?.pageUrl, client?.page_url, client?.currentUrl, client?.current_url, client?.lastUrl, client?.last_url, client?.url,
+    topLevel.currentPageUrl, topLevel.current_page_url, topLevel.pageUrl, topLevel.page_url, topLevel.currentUrl, topLevel.current_url, topLevel.lastUrl, topLevel.last_url, topLevel.url,
   ].find((value): value is string => typeof value === 'string' && /^https?:\/\//i.test(value.trim())) || null;
 }
 

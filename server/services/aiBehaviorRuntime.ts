@@ -244,7 +244,7 @@ export function conversationIntentFamily(intent: string): ConversationIntentFami
 }
 
 export function isSimpleGreeting(message: string): boolean {
-  return /^(سلام|درود|وقت\s*(بخیر|خوش)|صبح\s*بخیر|عصر\s*بخیر|شب\s*بخیر)[\s،,.!؟?]*$/i.test(String(message || '').replace(/‌/g, ' ').trim());
+  return /^(سلام|درود|وقت\s*(بخیر|خوش)|صبح\s*بخیر|عصر\s*بخیر|شب\s*بخیر|خسته\s*نباشید)[\s،,.!؟?]*$/i.test(String(message || '').replace(/‌/g, ' ').trim());
 }
 
 export function simpleGreetingReply(message: string): string | null {
@@ -262,7 +262,7 @@ export async function classifyConversationIntentWithRuntime(input: {
 }) {
   return runAiBehaviorStructuredModel<{ intent: typeof CONVERSATION_INTENTS[number]; confidence: number; reason: string }>({
     context: input.context,
-    taskContract: 'فقط intent معنایی آخرین پیام مشتری را با توجه به تاریخچه کوتاه و context طبقه‌بندی کن. Greeting برای سلام/احوالپرسیِ بدون درخواست؛ Informational برای سؤال یا راهنمایی بدون قصد خرید؛ Insurance Quotation فقط برای خرید، قیمت، استعلام یا صدور؛ Support/Follow-up/Claim برای پشتیبانی، پیگیری، خسارت یا خدمات. متن پاسخ یا عملیات تولید نکن.',
+    taskContract: 'فقط intent معنایی آخرین پیام مشتری را با توجه به تاریخچه کوتاه و context طبقه‌بندی کن. Greeting برای سلام، احوالپرسی، تعارف یا معرفی کوتاهِ بدون درخواست؛ Informational برای سؤال یا راهنمایی بدون قصد خرید؛ Insurance Quotation فقط برای خرید، قیمت، استعلام یا صدور؛ Support/Follow-up/Claim برای پشتیبانی، پیگیری، خسارت یا خدمات. متن پاسخ یا عملیات تولید نکن.',
     schemaName: 'conversation_intent',
     schema: {
       type: 'object', additionalProperties: false,

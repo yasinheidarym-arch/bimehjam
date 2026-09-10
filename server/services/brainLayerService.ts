@@ -51,10 +51,12 @@ import {
   readProductIntentRoutingState,
   type ProductIntentClassification,
 } from '../../shared/productIntentRouting';
+import { advanceConversationOpeningState, readConversationOpeningState } from '../../shared/conversationOpeningState';
 
 
 export interface BrainResult {
   deferHumanHandoff?: boolean;
+  suppressAutomaticReply?: boolean;
   intent: string;
   stage: string;
   missingInfo: string;
@@ -281,6 +283,10 @@ export async function processBrainLayer(params: {
     // The narrow fallback distinguishes greeting, quote intent and general inquiry.
   }
   const intentFamily = conversationIntentFamily(detectedIntent);
+  const openingTransition = advanceConversationOpeningState(
+    readConversationOpeningState(existingCollectedData.conversationOpeningState),
+    intentFamily,
+  );
 
   const previousProductRoutingState = readProductIntentRoutingState(existingCollectedData.productIntentRouting);
   const inferredConfirmation = inferredProductConfirmedByCustomer(
@@ -1057,6 +1063,7 @@ export async function processBrainLayer(params: {
     ...(extractedKnowledge.quotationWorkflow?.answeredFields || {}),
     ...(!quotationState ? newlyExtractedData : {}),
     productIntentRouting: productRoutingResult.state,
+    conversationOpeningState: openingTransition.state,
     ...(quotationState ? { conversionMode: quotationState.conversionMode } : {}),
     ...(quotationTurn ? { quotationTurnState: quotationTurn.state } : {}),
     ...(purchaseLinkOffer
@@ -1078,6 +1085,7 @@ export async function processBrainLayer(params: {
   };
 
   return {
+    suppressAutomaticReply: openingTransition.duplicateGreeting,
     intent,
     stage,
     missingInfo,

@@ -14,7 +14,7 @@ export const PRODUCT_INTENT_ROUTING_INSTRUCTION_V1 = [
   'هیچ شناسه یا محصولی خارج از candidateهای واقعی backend انتخاب نکن.',
 ].join('\n');
 
-export const PRODUCT_INTENT_ROUTING_INSTRUCTION = [
+export const PRODUCT_INTENT_ROUTING_INSTRUCTION_V2 = [
   'پیش از کشف یا انتخاب محصول، intent مکالمه را تشخیص بده.',
   'Greeting ساده فقط پاسخ خوش‌آمد طبیعی می‌گیرد و نباید سؤال فروش، نوع بیمه یا محصول ایجاد کند.',
   'INFORMATIONAL فقط با دانش مجاز پاسخ داده می‌شود و Sales/Quote Flow را شروع نمی‌کند.',
@@ -31,10 +31,23 @@ export const PRODUCT_INTENT_ROUTING_INSTRUCTION = [
   'هیچ شناسه یا محصولی خارج از candidateهای واقعی backend انتخاب نکن.',
 ].join('\n');
 
+export const PRODUCT_INTENT_ROUTING_INSTRUCTION = [
+  PRODUCT_INTENT_ROUTING_INSTRUCTION_V2,
+  'تا زمانی که مکالمه در مرحله آغازین است، greeting یا تعارف کوتاه بعدی نباید خوش‌آمدگویی کامل دیگری تولید کند؛ با اولین پیام دارای intent واقعی، مرحله آغازین پایان می‌یابد.',
+].join('\n');
+
 export const PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE_V1 = JSON.stringify({
   kind: 'AI_BEHAVIOR_RULE',
   version: 1,
   instruction: PRODUCT_INTENT_ROUTING_INSTRUCTION_V1,
+  scope: { channels: ['GOFTINO'], messageTypes: ['CUSTOMER_MESSAGE'], userRoles: ['CUSTOMER'] },
+  conflictKey: PRODUCT_INTENT_ROUTING_RULE_CATEGORY,
+}, null, 2);
+
+export const PRODUCT_INTENT_ROUTING_RULE_DIRECTIVE_V2 = JSON.stringify({
+  kind: 'AI_BEHAVIOR_RULE',
+  version: 1,
+  instruction: PRODUCT_INTENT_ROUTING_INSTRUCTION_V2,
   scope: { channels: ['GOFTINO'], messageTypes: ['CUSTOMER_MESSAGE'], userRoles: ['CUSTOMER'] },
   conflictKey: PRODUCT_INTENT_ROUTING_RULE_CATEGORY,
 }, null, 2);

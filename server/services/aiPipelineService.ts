@@ -29,6 +29,7 @@ import { classifyQuotationTerminalIntentWithAi } from './quotationClassifierServ
 import { classifyConversationIntentWithRuntime, classifyQuotationDeliveryChoiceWithRuntime, isSimpleGreeting } from './aiBehaviorRuntime';
 import { buildQuotationAudit } from './quotationAudit';
 import { coalesceConsecutiveGreetingMessages, GREETING_COALESCE_WINDOW_MS } from '../../shared/conversationGreetingCoalescing';
+import { advanceConversationOpeningState, readConversationOpeningState } from '../../shared/conversationOpeningState';
 import {
   finalizeQuotationCompletion,
 } from './quotationCompletionService';
@@ -622,6 +623,25 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
     scheduleGoftinoTyping();
 
     const existingCollectedData = parseConversationCollectedData(conversation.collectedData);
+    if (isSimpleGreeting(userMessageContent)) {
+      const openingTransition = advanceConversationOpeningState(
+        readConversationOpeningState(existingCollectedData.conversationOpeningState),
+        'GREETING',
+      );
+      if (openingTransition.duplicateGreeting) {
+        await prisma.conversation.update({
+          where: { id: conversation.id },
+          data: { collectedData: JSON.stringify({ ...existingCollectedData, conversationOpeningState: openingTransition.state }) },
+        });
+        await createAiLog({
+          conversationId, customerId, messageId,
+          step: 'Conversation Opening State', status: 'INFO',
+          details: 'ادامهٔ کوتاه greeting در مرحلهٔ آغازین ادغام شد؛ مدل فراخوانی نشد و پاسخ تکراری ارسال نشد.',
+          durationMs: Date.now() - brainStart,
+        });
+        return;
+      }
+    }
     let customerRequestedHuman = false;
     try {
       const semanticIntent = await classifyConversationIntentWithRuntime({
@@ -909,6 +929,20 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         })(),
         messageId,
       });
+
+      if (brainResult.suppressAutomaticReply) {
+        await prisma.conversation.update({
+          where: { id: conversation.id },
+          data: { collectedData: JSON.stringify(brainResult.collectedData || existingCollectedData) },
+        });
+        await createAiLog({
+          conversationId, customerId, messageId,
+          step: 'Conversation Opening State', status: 'INFO',
+          details: 'پیام صرفاً ادامهٔ greeting آغاز مکالمه بود؛ پاسخ خودکار تکراری تولید یا ارسال نشد.',
+          durationMs: Date.now() - brainStart,
+        });
+        return;
+      }
 
       if (brainResult.quotationState?.isCompleted && brainResult.task?.create && !terminalSubmission && quotationCompletionConfig && humanHandoffConfig) {
         const answeredFields = brainResult.extractedKnowledge.quotationWorkflow?.answeredFields || {};

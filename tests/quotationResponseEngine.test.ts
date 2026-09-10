@@ -35,6 +35,29 @@ test('matrix: all non-saving states preserve current field and use the selected 
   }
 });
 
+test('clarification keeps the active field without repeating the full question, then valid answer advances', async () => {
+  const config = JSON.parse(JSON.stringify(DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG));
+  config.states.AMBIGUOUS.template = '{{clarification}}\n\n{{currentQuestion}}';
+  const activeEngine = { active: true, title: 'قانون پنل', priority: 80, config };
+  const first = await advanceQuotationTurn({
+    sessionId: 'clarify', questions: form, answers: { floors: '3', usage: 'مجتمع مسکونی' },
+    message: 'معمولیه', engine: activeEngine,
+    model: classify({ status: 'AMBIGUOUS', clarification: 'منظورتان کدام‌یک از تجهیزات ایمنی موجود است؟' }),
+  });
+  assert.match(first.responseText, /کدام.یک از تجهیزات ایمنی/);
+  assert.doesNotMatch(first.responseText, /تجهیزات ایمنی دارید/);
+  assert.equal(first.state.currentQuestion?.fieldName, 'safety');
+  assert.deepEqual(first.updates, {});
+
+  const second = await advanceQuotationTurn({
+    sessionId: 'clarify', questions: form, answers: first.state.answers, previous: first.state,
+    message: 'کپسول آتش‌نشانی', engine: activeEngine,
+    model: classify({ status: 'VALID_ANSWER', assignments: [assignment('safety', 'کپسول آتش‌نشانی', 'کپسول آتش‌نشانی', 'option-1')] }),
+  });
+  assert.deepEqual(second.updates, { safety: 'کپسول آتش‌نشانی' });
+  assert.equal(second.state.currentQuestion?.fieldName, 'guard');
+});
+
 test('manager-edited response template and priority are the runtime source of truth', async () => {
   const config = JSON.parse(JSON.stringify(DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG));
   config.states.AMBIGUOUS.template = 'نیاز به روشن‌سازی برای {{fieldName}}: {{options}}';

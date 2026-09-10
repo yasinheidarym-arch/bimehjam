@@ -950,6 +950,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       if (data) {
         const nextSimulationState = data.simulationState || data.details?.simulationState;
         if (nextSimulationState && typeof nextSimulationState === 'object') setChatSimulationState(nextSimulationState);
+        if (data.responseSuppressed) return;
         const aiMsgId = 'ai-' + Date.now();
         const newAiMsg = {
           id: aiMsgId,
