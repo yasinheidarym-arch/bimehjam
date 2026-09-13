@@ -4,12 +4,17 @@ import {
   finalizeQuotationCompletionCore,
   QUOTATION_CALL_SUCCESS,
   QUOTATION_CHAT_SUCCESS,
+  QUOTATION_OPERATOR_TASK_TYPE,
   quotationTaskDescription,
   runQuotationCompletionOnce,
   type QuotationCompletionDependencies,
   type QuotationCompletionInput,
 } from '../server/services/quotationCompletionService';
-import { handleTerminalQuotationSubmission, type QuotationSubmissionState } from '../server/services/quotationSubmissionFlow';
+import {
+  completeQuotationSubmissionState,
+  handleTerminalQuotationSubmission,
+  type QuotationSubmissionState,
+} from '../server/services/quotationSubmissionFlow';
 import { resolveQuotationOptionSelection } from '../server/services/quotationOptionMatchingService';
 import { numberedQuestionOrder, uniqueQuestionOrder } from '../shared/quotationQuestionOrder';
 import { buildConversationQuotationPresentation } from '../server/services/conversationQuotationPresentation';
@@ -67,8 +72,49 @@ test('chat route creates the quotation-review task and returns chat-specific tex
   const result = await finalizeQuotationCompletionCore({ ...input, route: 'CHAT' }, h.deps);
   assert.equal(result.ok, true);
   assert.equal(result.replyText, QUOTATION_CHAT_SUCCESS);
-  assert.match(String(h.taskData?.title), /بررسی و آماده‌سازی قیمت/);
-  assert.equal(h.taskData?.type, 'Prepare Quotation');
+  assert.match(String(h.taskData?.title), /بررسی و اعلام قیمت در چت/);
+  assert.equal(h.taskData?.type, QUOTATION_OPERATOR_TASK_TYPE);
+});
+
+test('callback and chat share the same operational task pipeline and only delivery mode differs', async () => {
+  const callback = harness();
+  const chat = harness();
+  const callbackResult = await finalizeQuotationCompletionCore(input, callback.deps);
+  const chatResult = await finalizeQuotationCompletionCore({ ...input, route: 'CHAT' }, chat.deps);
+  assert.equal(callbackResult.ok, true);
+  assert.equal(chatResult.ok, true);
+  assert.equal(callback.taskData?.type, QUOTATION_OPERATOR_TASK_TYPE);
+  assert.equal(chat.taskData?.type, QUOTATION_OPERATOR_TASK_TYPE);
+  assert.equal(callback.calls.leads, 1);
+  assert.equal(callback.calls.tasks, 1);
+  assert.equal(callback.calls.sms, 1);
+  assert.equal(chat.calls.leads, 1);
+  assert.equal(chat.calls.tasks, 1);
+  assert.equal(chat.calls.sms, 1);
+});
+
+test('successful chat submission enters the waiting-for-chat-quote state', () => {
+  const state = completeQuotationSubmissionState(
+    { ...failedSubmission, pending: true, status: 'PROCESSING', deliveryChoice: 'CHAT' },
+    'CHAT',
+    failedSubmission.idempotencyKey!,
+    { ok: true, taskId: 'task-1', leadId: 'lead-1', smsStatus: 'sent' },
+  );
+  assert.equal(state.status, 'SUBMITTED');
+  assert.equal(state.fulfillmentStatus, 'WAITING_FOR_CHAT_QUOTE');
+  assert.equal(state.pending, false);
+});
+
+test('failed chat submission keeps a failed state and never claims fulfillment', () => {
+  const state = completeQuotationSubmissionState(
+    { ...failedSubmission, pending: true, status: 'PROCESSING', deliveryChoice: 'CHAT' },
+    'CHAT',
+    failedSubmission.idempotencyKey!,
+    { ok: false, smsStatus: 'not-queued', error: 'TASK_OR_LEAD_FAILED' },
+  );
+  assert.equal(state.status, 'FAILED');
+  assert.equal(state.fulfillmentStatus, undefined);
+  assert.equal(state.failureReason, 'TASK_OR_LEAD_FAILED');
 });
 
 test('task failure never returns a promise and does not loop into another creation', async () => {
@@ -76,6 +122,14 @@ test('task failure never returns a promise and does not loop into another creati
   const result = await finalizeQuotationCompletionCore(input, h.deps);
   assert.equal(result.ok, false);
   assert.equal(h.calls.tasks, 0);
+  assert.equal('replyText' in result, false);
+});
+
+test('chat task failure returns no success text and preserves failure handling', async () => {
+  const h = harness({ failTask: true });
+  const result = await finalizeQuotationCompletionCore({ ...input, route: 'CHAT' }, h.deps);
+  assert.equal(result.ok, false);
+  assert.equal(result.smsStatus, 'not-queued');
   assert.equal('replyText' in result, false);
 });
 
@@ -144,6 +198,19 @@ test('concurrent retries share one completion operation', async () => {
   const results = await Promise.all([operation(), operation(), operation()]);
   assert.deepEqual(results, ['done', 'done', 'done']);
   assert.equal(operations, 1);
+});
+
+test('repeated concurrent chat submission creates one Task and one SMS dispatch', async () => {
+  const h = harness();
+  const operation = () => runQuotationCompletionOnce(
+    'conversation-chat:session-chat',
+    () => finalizeQuotationCompletionCore({ ...input, route: 'CHAT' }, h.deps),
+  );
+  const results = await Promise.all([operation(), operation()]);
+  assert.equal(results.every((result) => result.ok), true);
+  assert.equal(h.calls.leads, 1);
+  assert.equal(h.calls.tasks, 1);
+  assert.equal(h.calls.sms, 1);
 });
 
 test('operator task description uses Persian labels and never raw field names or JSON', () => {

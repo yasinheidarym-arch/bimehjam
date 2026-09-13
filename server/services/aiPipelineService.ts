@@ -20,6 +20,7 @@ import {
 } from '../../shared/productPurchaseLink';
 import {
   advanceQuotationSubmission,
+  completeQuotationSubmissionState,
   handleTerminalQuotationSubmission,
   quotationDeliveryChoice,
   QuotationSubmissionState,
@@ -781,16 +782,12 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
               quoteResponseSlaMinutes,
             ),
           });
-          const finalState: QuotationSubmissionState = {
-            ...decision.state,
-            pending: false,
-            status: outcome.ok ? 'SUBMITTED' : 'FAILED',
+          const finalState = completeQuotationSubmissionState(
+            decision.state,
+            decision.route,
             idempotencyKey,
-            taskId: outcome.taskId,
-            leadId: outcome.leadId,
-            smsStatus: outcome.smsStatus,
-            failureReason: outcome.ok ? undefined : outcome.error,
-          };
+            outcome,
+          );
           brainResult = humanHandoffResult({
             replyText: outcome.ok ? outcome.replyText : quotationCompletionConfig.failure,
             reason: 'QUOTATION_COMPLETED',

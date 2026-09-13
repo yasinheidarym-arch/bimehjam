@@ -6,6 +6,7 @@ import { DEFAULT_QUOTATION_COMPLETION_CONFIG, type QuotationCompletionRuleConfig
 export type QuotationSubmissionStep = 'FULL_NAME' | 'LAST_NAME' | 'MOBILE' | 'CITY' | 'DELIVERY_CHOICE' | 'CONFIRM';
 export type QuotationSubmissionStatus = 'COLLECTING_PROFILE' | 'AWAITING_DELIVERY_CHOICE' | 'PROCESSING' | 'SUBMITTED' | 'FAILED' | 'AWAITING_CONFIRMATION' | 'NOT_SUBMITTED';
 export type QuotationDeliveryChoice = 'CALL' | 'CHAT';
+export type QuotationFulfillmentStatus = 'WAITING_FOR_CALLBACK' | 'WAITING_FOR_CHAT_QUOTE';
 
 export type QuotationSubmissionAnswer = {
   order: number;
@@ -26,6 +27,7 @@ export type QuotationSubmissionState = {
   givenName?: string;
   choicePrompt: string;
   deliveryChoice?: QuotationDeliveryChoice;
+  fulfillmentStatus?: QuotationFulfillmentStatus;
   idempotencyKey?: string;
   taskId?: string;
   leadId?: string;
@@ -44,6 +46,34 @@ export type QuotationTerminalDecision =
   | { action: 'RELEASE'; state: QuotationSubmissionState }
   | { action: 'REPLY'; replyText: string; state: QuotationSubmissionState }
   | { action: 'RETRY'; route: QuotationDeliveryChoice; state: QuotationSubmissionState };
+
+export function completeQuotationSubmissionState(
+  state: QuotationSubmissionState,
+  route: QuotationDeliveryChoice,
+  idempotencyKey: string,
+  outcome: {
+    ok: boolean;
+    taskId?: string;
+    leadId?: string;
+    smsStatus?: string;
+    error?: string;
+  },
+): QuotationSubmissionState {
+  return {
+    ...state,
+    pending: false,
+    status: outcome.ok ? 'SUBMITTED' : 'FAILED',
+    deliveryChoice: route,
+    ...(outcome.ok ? {
+      fulfillmentStatus: route === 'CALL' ? 'WAITING_FOR_CALLBACK' : 'WAITING_FOR_CHAT_QUOTE',
+    } : {}),
+    idempotencyKey,
+    taskId: outcome.taskId,
+    leadId: outcome.leadId,
+    smsStatus: outcome.smsStatus,
+    failureReason: outcome.ok ? undefined : outcome.error,
+  };
+}
 
 function normalizeDigits(value: string): string {
   const fa = '۰۱۲۳۴۵۶۷۸۹';

@@ -7,6 +7,7 @@ import type { QuotationDeliveryChoice, QuotationSubmissionAnswer } from './quota
 export const QUOTATION_CALL_SUCCESS = 'حتماً، درخواست تماس با کارشناس ثبت شد.';
 export const QUOTATION_CHAT_SUCCESS = 'حتماً، کارشناس قیمت را بررسی می‌کند و همین‌جا در چت با شما در ارتباط خواهد بود.';
 export const QUOTATION_COMPLETION_FAILURE = 'در تکمیل ثبت درخواست و اعلان به کارشناس مشکلی پیش آمد. فعلاً نمی‌توانم زمان تماس یا اعلام قیمت را تأیید کنم؛ اطلاعات شما محفوظ است.';
+export const QUOTATION_OPERATOR_TASK_TYPE = 'Call Customer';
 
 type CompletionTask = CreatedTaskForSms;
 type CompletionLead = { id: string };
@@ -31,6 +32,12 @@ export type QuotationCompletionDependencies = {
   persistBusinessRecords: (input: QuotationCompletionInput, selected: { title: string; type: string }, assignee: { id: string; name: string } | null) => Promise<{ lead: CompletionLead; task: CompletionTask }>;
   dispatchSms: (task: CompletionTask) => Promise<SmsDispatchResult>;
   findDelivery: (eventKey: string) => Promise<Delivery>;
+  logFailure?: (details: {
+    conversationId: string;
+    sessionId: string;
+    deliveryMode: QuotationDeliveryChoice;
+    errorType: string;
+  }) => void;
 };
 
 function insuranceType(category: string | null | undefined, productName: string): string {
@@ -59,13 +66,20 @@ export function quotationTaskDescription(input: Pick<QuotationCompletionInput, '
 }
 
 function taskDefinition(route: QuotationDeliveryChoice, productName: string) {
-  return route === 'CALL'
-    ? { title: 'تماس برای قیمت‌دهی - ' + productName, type: 'Call Customer' }
-    : { title: 'بررسی و آماده‌سازی قیمت - ' + productName, type: 'Prepare Quotation' };
+  return {
+    title: route === 'CALL'
+      ? 'تماس برای قیمت‌دهی - ' + productName
+      : 'بررسی و اعلام قیمت در چت - ' + productName,
+    type: QUOTATION_OPERATOR_TASK_TYPE,
+  };
 }
 
 function taskTitles(productName: string) {
-  return [taskDefinition('CALL', productName).title, taskDefinition('CHAT', productName).title];
+  return [
+    taskDefinition('CALL', productName).title,
+    taskDefinition('CHAT', productName).title,
+    'بررسی و آماده‌سازی قیمت - ' + productName,
+  ];
 }
 
 export async function finalizeQuotationCompletionCore(
@@ -86,7 +100,13 @@ export async function finalizeQuotationCompletionCore(
       smsStatus: smsResult,
       replyText: input.successReply || (input.route === 'CALL' ? QUOTATION_CALL_SUCCESS : QUOTATION_CHAT_SUCCESS),
     };
-  } catch {
+  } catch (error) {
+    deps.logFailure?.({
+      conversationId: input.conversationId,
+      sessionId: input.sessionId,
+      deliveryMode: input.route,
+      errorType: error instanceof Error ? error.name : 'UnknownError',
+    });
     return { ok: false as const, error: 'TASK_OR_LEAD_FAILED', smsStatus: 'not-queued' };
   }
 }
@@ -96,7 +116,10 @@ const productionDependencies: QuotationCompletionDependencies = {
   persistBusinessRecords: async (input, selected, assignee) => {
     await assertActiveTaskType(selected.type);
     return prisma.$transaction(async (tx) => {
-      const notes = quotationTaskDescription(input);
+      const notes = [
+        'نحوه اعلام نتیجه: ' + (input.route === 'CALL' ? 'تماس کارشناس' : 'اعلام قیمت در همین چت'),
+        quotationTaskDescription(input),
+      ].join('\n');
       const leadData = {
         customerId: input.customerId, conversationId: input.conversationId,
         insuranceType: insuranceType(input.productCategory, input.productName),
@@ -125,6 +148,7 @@ const productionDependencies: QuotationCompletionDependencies = {
   },
   dispatchSms: async (task) => dispatchTaskCreatedSms(task as never),
   findDelivery: (eventKey) => prisma.fastNotifySmsDelivery.findUnique({ where: { eventKey }, select: { status: true } }),
+  logFailure: (details) => console.error('[quotation-completion] business record persistence failed', details),
 };
 
 const completionLocks = new Map<string, Promise<unknown>>();
