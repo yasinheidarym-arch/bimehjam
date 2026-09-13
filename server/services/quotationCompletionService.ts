@@ -4,8 +4,8 @@ import { assertActiveTaskType } from './taskTypeCatalogService';
 import type { CreatedTaskForSms, SmsDispatchResult } from './fastNotifySmsCore';
 import type { QuotationDeliveryChoice, QuotationSubmissionAnswer } from './quotationSubmissionFlow';
 
-export const QUOTATION_CALL_SUCCESS = 'اوکی، کارشناس حداکثر تا ۵ دقیقهٔ دیگر با شما تماس می‌گیرد.';
-export const QUOTATION_CHAT_SUCCESS = 'اوکی، کارشناس قیمت را بررسی می‌کند و به‌محض آماده‌شدن همین‌جا به شما اعلام می‌کنیم.';
+export const QUOTATION_CALL_SUCCESS = 'حتماً، درخواست تماس با کارشناس ثبت شد.';
+export const QUOTATION_CHAT_SUCCESS = 'حتماً، کارشناس قیمت را بررسی می‌کند و همین‌جا در چت با شما در ارتباط خواهد بود.';
 export const QUOTATION_COMPLETION_FAILURE = 'در تکمیل ثبت درخواست و اعلان به کارشناس مشکلی پیش آمد. فعلاً نمی‌توانم زمان تماس یا اعلام قیمت را تأیید کنم؛ اطلاعات شما محفوظ است.';
 
 type CompletionTask = CreatedTaskForSms;

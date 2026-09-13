@@ -266,3 +266,12 @@ export async function updateSystemSetting(key: string, value: string, descriptio
   });
 }
 
+export async function getQuoteResponseSlaMinutes(): Promise<number | null> {
+  const setting = await prisma.systemSetting.findUnique({
+    where: { key: 'quote_response_sla_minutes' },
+    select: { value: true },
+  });
+  const value = Number(setting?.value);
+  return Number.isInteger(value) && value > 0 && value <= 1440 ? value : null;
+}
+

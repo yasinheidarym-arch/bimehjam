@@ -214,6 +214,8 @@ export default function App() {
     ])) as AiSchedule['weekly'],
   });
   const [effectiveAiMode, setEffectiveAiMode] = useState<AiMode>('TEST_MODE');
+  const [quoteResponseSlaMinutes, setQuoteResponseSlaMinutes] = useState('');
+  const [quoteSlaSaving, setQuoteSlaSaving] = useState(false);
 
   // Fetch initial data from backend Express server
   useEffect(() => {
@@ -221,7 +223,35 @@ export default function App() {
     fetchKnowledgeBase();
     fetchRawWebhookLogs();
     fetchAiMode();
+    fetchQuoteResponseSla();
   }, []);
+
+  const fetchQuoteResponseSla = async () => {
+    try {
+      const res: any = await settingService.getSettings();
+      setQuoteResponseSlaMinutes(String(res?.data?.quote_response_sla_minutes || ''));
+    } catch (err) {
+      console.warn('Failed to fetch quotation response SLA:', err);
+    }
+  };
+
+  const handleSaveQuoteResponseSla = async () => {
+    const normalized = quoteResponseSlaMinutes.trim();
+    const minutes = Number(normalized);
+    if (normalized && (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440)) {
+      setAiModeMessage('زمان پاسخ باید عددی بین ۱ تا ۱۴۴۰ دقیقه باشد.');
+      return;
+    }
+    setQuoteSlaSaving(true);
+    try {
+      await settingService.updateSetting('quote_response_sla_minutes', normalized, 'زمان هدف پاسخ کارشناس به درخواست قیمت، بر حسب دقیقه');
+      setAiModeMessage(normalized ? 'زمان هدف پاسخ استعلام ذخیره شد.' : 'زمان تضمینی پاسخ غیرفعال شد.');
+    } catch (err: any) {
+      setAiModeMessage(err.message || 'ذخیره زمان هدف پاسخ ناموفق بود.');
+    } finally {
+      setQuoteSlaSaving(false);
+    }
+  };
 
   const fetchAiMode = async () => {
     try {
@@ -785,6 +815,27 @@ export default function App() {
                   <div className="flex items-center justify-between gap-3">
                     <span className={`text-xs font-black ${effectiveAiMode === 'OFF' ? 'text-slate-600' : effectiveAiMode === 'TEST_MODE' ? 'text-amber-700' : 'text-emerald-700'}`}>{effectiveAiStatusLabel(effectiveAiMode)}</span>
                     <button type="button" disabled={aiModeLoading} onClick={handleSaveAiSchedule} className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">ذخیره زمان‌بندی</button>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4 space-y-3">
+                  <div>
+                    <h5 className="text-xs font-black text-slate-800">زمان هدف پاسخ کارشناس به استعلام</h5>
+                    <p className="mt-1 text-[11px] text-slate-500">در صورت ثبت عدد، فقط پس از ثبت موفق درخواست در پیام مشتری استفاده می‌شود. خالی‌بودن یعنی هیچ زمان تضمینی اعلام نشود.</p>
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                    <label className="flex-1 text-[11px] font-bold text-slate-700">زمان به دقیقه
+                      <input
+                        type="number"
+                        min="1"
+                        max="1440"
+                        value={quoteResponseSlaMinutes}
+                        onChange={(event) => setQuoteResponseSlaMinutes(event.target.value)}
+                        placeholder="مثلاً ۵"
+                        className="mt-1 block w-full rounded-xl border border-slate-200 px-3 py-2 text-xs"
+                      />
+                    </label>
+                    <button type="button" disabled={quoteSlaSaving} onClick={handleSaveQuoteResponseSla} className="rounded-xl bg-slate-800 px-4 py-2 text-xs font-bold text-white disabled:opacity-50">ذخیره زمان پاسخ</button>
                   </div>
                 </div>
 

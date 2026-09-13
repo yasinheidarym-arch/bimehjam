@@ -52,6 +52,7 @@ import {
   type ProductIntentClassification,
 } from '../../shared/productIntentRouting';
 import { advanceConversationOpeningState, readConversationOpeningState } from '../../shared/conversationOpeningState';
+import { productDetectionAliases, uniqueProductDetectionMatch } from './productDetectionAliases';
 
 
 export interface BrainResult {
@@ -314,6 +315,7 @@ export async function processBrainLayer(params: {
     categoryName: product.categoryRef?.name || null,
     subCategoryName: product.subCategoryRef?.name || null,
     description: (product.description || '').slice(0, 500),
+    aliases: productDetectionAliases(product.description),
     pageTitles: product.urlMaps.map(item => item.pageTitle).filter(Boolean).slice(0, 12),
     purchaseUrlAvailable: Boolean(product.purchaseUrl),
   }));
@@ -338,7 +340,24 @@ export async function processBrainLayer(params: {
     newActiveProductId: productRoutingResult.selectedProductId,
     appliedRuleIds: [],
   };
-  if (productConfirmationAccepted) {
+  const directProductMatch = intentFamily === 'GREETING'
+    ? null
+    : uniqueProductDetectionMatch(userMessageContent, routingCandidatesRaw);
+  if (directProductMatch) {
+    const directSelection: ProductIntentClassification = {
+      decision: 'SELECT_PRODUCT', selectedProductId: directProductMatch.id, confidence: 1,
+      explicitCorrection: Boolean(previousActiveProductId && previousActiveProductId !== directProductMatch.id),
+      confirmation: 'EXPLICIT', intentSummary: directProductMatch.name,
+      reason: 'Latest customer message matched one unique administrator-managed product name or alias.',
+      clarificationQuestion: null,
+    };
+    productRoutingResult = applyProductIntentClassification({
+      classification: directSelection, candidates: routingCandidates, previous: previousProductRoutingState,
+      legacyActiveProductId: conversation.currentProductId || null,
+      originPageProduct: currentPageProduct ? { id: currentPageProduct.id, name: currentPageProduct.name } : null,
+    });
+    productRoutingAudit = { ...productRoutingAudit, ...directSelection, newActiveProductId: directProductMatch.id, source: 'ADMIN_PRODUCT_ALIAS' };
+  } else if (productConfirmationAccepted) {
     const confirmedProductId = existingPageSuggestion?.productId || inferredConfirmation?.productId || null;
     const confirmedProductName = existingPageSuggestion?.productName || inferredConfirmation?.productName || '';
     const accepted: ProductIntentClassification = {
@@ -415,7 +434,9 @@ export async function processBrainLayer(params: {
       categoryId: allowedCategoryId || null,
       productId: intentFamily === 'GREETING'
         ? null
-        : productRoutingResult.selectedProductId || (suggestionAccepted ? existingPageSuggestion?.productId || null : null),
+        : productRoutingResult.state.status === 'CONFIRMED'
+          ? productRoutingResult.state.confirmedProductId
+          : (suggestionAccepted ? existingPageSuggestion?.productId || null : null),
       restrictToCategory: Boolean(restrictKnowledgeScope),
     },
     existingCollectedData,

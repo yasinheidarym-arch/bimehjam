@@ -236,6 +236,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     categoryId: '',
     subCategoryId: '',
     description: '',
+    detectionAliases: '',
     coverage: '',
     purchaseConditions: '',
     purchaseUrl: '',
@@ -595,6 +596,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       categoryId: '',
       subCategoryId: '',
       description: '',
+      detectionAliases: '',
       coverage: '',
       purchaseConditions: '',
       purchaseUrl: '',
@@ -638,6 +640,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
         categoryId: product.categoryId || product.categoryRef?.id || '',
         subCategoryId: product.subCategoryId || product.subCategoryRef?.id || '',
         description: product.description || '',
+        detectionAliases: Array.isArray(product.detectionAliases) ? product.detectionAliases.join('، ') : '',
         coverage: product.coverage || '',
         purchaseConditions: product.purchaseConditions || '',
         purchaseUrl: product.purchaseUrl || '',
@@ -2227,9 +2230,9 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       {/* CATEGORY MODAL */}
       {showCategoryModal && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden max-h-[calc(100dvh-2rem)] flex flex-col">
 
-            <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+            <div className="p-4 sm:p-5 border-b border-slate-200 flex items-center justify-between shrink-0">
               <div>
                 <h3 className="text-sm font-bold text-slate-800">
                   {editingCategory ? 'ویرایش دسته بیمه' : 'افزودن دسته بیمه'}
@@ -2251,7 +2254,8 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
               </button>
             </div>
 
-            <form onSubmit={handleSaveCategory} className="p-5 space-y-4">
+            <form onSubmit={handleSaveCategory} className="min-h-0 flex flex-1 flex-col">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-5 space-y-4">
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-2">
@@ -2385,7 +2389,9 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
 
               </div>
 
-              <div className="flex gap-2 pt-2">
+              </div>
+
+              <div className="flex gap-2 border-t border-slate-200 bg-white p-4 sm:p-5 shrink-0">
                 <button
                   type="submit"
                   className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700"
@@ -2702,6 +2708,22 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                         ))}
                     </select>
                   </div>
+                </div>
+
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">
+                    نام‌ها و عبارت‌های جایگزین برای تشخیص محصول:
+                  </label>
+                  <p className="text-[11px] text-slate-500 mb-2">
+                    عبارت‌ها را با ویرگول جدا کنید؛ این موارد همان محصول را بدون سؤال تأییدی اضافه مشخص می‌کنند.
+                  </p>
+                  <textarea
+                    rows={3}
+                    value={productForm.detectionAliases}
+                    onChange={(e) => setProductForm({ ...productForm, detectionAliases: e.target.value })}
+                    placeholder="مثلاً: احداث ساختمان، مسئولیت کارکنان پروژه ساختمانی"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 resize-y"
+                  />
                 </div>
 
                 <div>
@@ -3764,6 +3786,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
               ) : behaviorForm.completionConfig ? (
                 <div className="space-y-3 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
                   <p className="text-[11px] text-emerald-800">تمام متن‌های مرحلهٔ پایانی از همین قانون خوانده می‌شوند و پس از ذخیره، بدون deploy روی پیام بعدی اثر دارند.</p>
+                  <p className="text-[11px] text-emerald-700">متغیرهای مجاز زمان پاسخ: <code>{'{{slaText}}'}</code> و <code>{'{{slaMinutes}}'}</code>. مقدار آن‌ها از تنظیم مدیریتی زمان هدف پاسخ خوانده می‌شود.</p>
                   {([
                     ['choicePrompt', 'پرسش انتخاب تماس یا اعلام قیمت در چت'],
                     ['callSuccess', 'پیام پس از ثبت موفق مسیر تماس'],

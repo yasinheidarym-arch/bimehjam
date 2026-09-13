@@ -39,12 +39,16 @@ export function resolveGoftinoCategoryId(
   return categories.find((category) => candidates.includes(category.slug.toLowerCase()))?.id || null;
 }
 
-export function composeScopedKnowledge(categoryArticles: string[], productArticle?: string | null) {
+export function composeScopedKnowledge(categoryArticles: string[], productArticle?: string | null, globalArticles: string[] = []) {
   const category = categoryArticles.filter((article) => article.trim());
+  const global = globalArticles.filter((article) => article.trim());
   const product = productArticle?.trim() || '';
   return {
-    sections: [...category, ...(product ? [product] : [])],
-    hasRelevantKnowledge: category.length > 0 || Boolean(product),
+    sections: [...global, ...category, ...(product ? [product] : [])],
+    global,
+    category,
+    product,
+    hasRelevantKnowledge: global.length > 0 || category.length > 0 || Boolean(product),
     productOverridesCategory: Boolean(product),
   };
 }

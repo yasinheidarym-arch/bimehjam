@@ -2,7 +2,7 @@ import { withConversationTurn } from './conversationTurnQueue';
 import prisma from '../db/client';
 import axios from 'axios';
 import { processBrainLayer } from './brainLayerService';
-import { getEffectiveAiMode } from './settingService';
+import { getEffectiveAiMode, getQuoteResponseSlaMinutes } from './settingService';
 import { createSystemTask } from './taskService';
 import { resolveGoftinoAiPolicy } from './goftinoAiPolicyService';
 import { goftinoAiResponseMode } from './goftinoAiPolicyDecision';
@@ -33,6 +33,7 @@ import { advanceConversationOpeningState, readConversationOpeningState } from '.
 import {
   finalizeQuotationCompletion,
 } from './quotationCompletionService';
+import { renderQuotationCompletionSuccess } from '../../shared/quotationCompletionRule';
 
 function customerGoftinoTopicId(metadata?: string | null): string | null {
   if (!metadata) return null;
@@ -670,11 +671,14 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
     const pendingHandoff = existingCollectedData.humanHandoff?.pending === true
       ? existingCollectedData.humanHandoff as HumanHandoffNameState
       : null;
-    const fullNameHandoffRuleActive = await isFullNameHandoffRuleActive();
-    const humanHandoffConfig = await getHumanHandoffRuleConfig();
-    const quotationCompletionConfig = await getQuotationCompletionConfig();
+    const [fullNameHandoffRuleActive, humanHandoffConfig, quotationCompletionConfig, quotationFinalizationRules, quoteResponseSlaMinutes] = await Promise.all([
+      isFullNameHandoffRuleActive(),
+      getHumanHandoffRuleConfig(),
+      getQuotationCompletionConfig(),
+      getQuotationFinalizationRuleContext(),
+      getQuoteResponseSlaMinutes(),
+    ]);
     const quotationCompletionPrompt = quotationCompletionConfig?.choicePrompt || '';
-    const quotationFinalizationRules = await getQuotationFinalizationRuleContext();
 
     let terminalSubmission = existingCollectedData.quotationSubmission
       && ['SUBMITTED', 'FAILED'].includes(existingCollectedData.quotationSubmission.status)
@@ -772,7 +776,10 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
             preferredAssignedUserId: conversation.assignedUserId,
             profile,
             answers: decision.state.answers,
-            successReply: decision.route === 'CALL' ? quotationCompletionConfig.callSuccess : quotationCompletionConfig.chatSuccess,
+            successReply: renderQuotationCompletionSuccess(
+              decision.route === 'CALL' ? quotationCompletionConfig.callSuccess : quotationCompletionConfig.chatSuccess,
+              quoteResponseSlaMinutes,
+            ),
           });
           const finalState: QuotationSubmissionState = {
             ...decision.state,

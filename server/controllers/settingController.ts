@@ -133,6 +133,13 @@ export async function updateSettingController(req: Request, res: Response) {
     if (!key || typeof value === 'undefined') {
       return res.status(400).json({ success: false, error: 'key و value الزامی هستند.' });
     }
+    if (key === 'quote_response_sla_minutes') {
+      const normalized = String(value).trim();
+      const minutes = Number(normalized);
+      if (normalized && (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440)) {
+        return res.status(400).json({ success: false, error: 'زمان پاسخ باید عددی بین ۱ تا ۱۴۴۰ دقیقه باشد.' });
+      }
+    }
 
     const updated = await updateSystemSetting(key, String(value), description);
     return res.json({
@@ -193,7 +200,6 @@ export async function updateAiResponsePolicyController(
     if (typeof enabled !== 'boolean') {
       return res.status(400).json({ success: false, error: 'وضعیت روشن/خاموش باید مشخص باشد.' });
     }
-
     const updated = await setGoftinoAiPolicyEnabled(id, enabled);
 
 

@@ -27,6 +27,7 @@ import {
   isValidOptionalProductPurchaseUrl,
   normalizeProductPurchaseUrl,
 } from '../../shared/productPurchaseLink';
+import { productDescriptionWithoutAliases, productDetectionAliases, withProductDetectionAliases } from '../services/productDetectionAliases';
 
 async function attachCategoryKnowledge<T extends { id: string }>(categories: T[]) {
   const scopes = categories.map((category) => categoryKnowledgeScope(category.id));
@@ -756,7 +757,12 @@ export async function getProducts(req: Request, res: Response) {
       orderBy: { updatedAt: 'desc' },
     });
 
-    return res.status(200).json({ success: true, count: products.length, data: products });
+    const data = products.map(product => ({
+      ...product,
+      description: productDescriptionWithoutAliases(product.description),
+      detectionAliases: productDetectionAliases(product.description),
+    }));
+    return res.status(200).json({ success: true, count: data.length, data });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
   }
@@ -784,6 +790,7 @@ export async function createProduct(req: Request, res: Response) {
       commonQuestions,
       aiKnowledgeArticle,
       aiRules,
+      detectionAliases,
     } = req.body;
 
     if (!name || !categoryId) {
@@ -809,7 +816,7 @@ export async function createProduct(req: Request, res: Response) {
         category,
         categoryId,
         subCategoryId: subCategoryId || null,
-        description: description || '',
+        description: withProductDetectionAliases(description || '', detectionAliases),
         status: status || 'ACTIVE',
         introduction,
         coverage,
@@ -835,7 +842,7 @@ export async function createProduct(req: Request, res: Response) {
 export async function updateProduct(req: Request, res: Response) {
   try {
     const { id } = req.params;
-    const body = req.body;
+    const { detectionAliases, ...body } = req.body;
 
     if (!isValidOptionalProductPurchaseUrl(body.purchaseUrl)) {
       return res.status(400).json({
@@ -844,17 +851,27 @@ export async function updateProduct(req: Request, res: Response) {
       });
     }
 
+    const existing = detectionAliases !== undefined
+      ? await prisma.insuranceProduct.findUnique({ where: { id }, select: { description: true } })
+      : null;
     const updated = await prisma.insuranceProduct.update({
       where: { id },
       data: {
         ...body,
+        ...(detectionAliases !== undefined
+          ? { description: withProductDetectionAliases(body.description ?? existing?.description ?? '', detectionAliases) }
+          : {}),
         ...(body.purchaseUrl !== undefined
           ? { purchaseUrl: normalizeProductPurchaseUrl(body.purchaseUrl) }
           : {}),
       },
     });
 
-    return res.status(200).json({ success: true, data: updated });
+    return res.status(200).json({ success: true, data: {
+      ...updated,
+      description: productDescriptionWithoutAliases(updated.description),
+      detectionAliases: productDetectionAliases(updated.description),
+    } });
   } catch (error: any) {
     return res.status(500).json({ success: false, error: error.message });
   }

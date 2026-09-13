@@ -17,7 +17,9 @@ import {
   LEGACY_PURCHASE_LINK_RULE_TITLE,
   LEGACY_SAME_PAGE_RESPONSE,
   PREVIOUS_DIFFERENT_PAGE_RESPONSE,
+  PREVIOUS_DIFFERENT_PAGE_RESPONSE_V3,
   PREVIOUS_SAME_PAGE_RESPONSE,
+  PREVIOUS_SAME_PAGE_RESPONSE_V3,
   parseQuotationRoutingTemplates,
   PURCHASE_LINK_RULE_CATEGORY,
   PURCHASE_LINK_RULE_DIRECTIVE,
@@ -37,6 +39,8 @@ import {
 } from '../../shared/quotationResponseEngine';
 import {
   DEFAULT_QUOTATION_COMPLETION_PROMPT,
+  LEGACY_QUOTATION_CALL_SUCCESS,
+  LEGACY_QUOTATION_CHAT_SUCCESS,
   DEFAULT_QUOTATION_COMPLETION_CONFIG,
   parseQuotationCompletionRule,
   QUOTATION_COMPLETION_RULE_DIRECTIVE,
@@ -158,11 +162,11 @@ async function ensureSeedRules() {
         const raw = JSON.parse(purchaseLinkRule.directive) as Record<string, unknown>;
         const normalized = { ...parsedRouting };
         let requiresUpdate = false;
-        if ([LEGACY_SAME_PAGE_RESPONSE, PREVIOUS_SAME_PAGE_RESPONSE].includes(String(raw.samePageResponse || ''))) {
+        if ([LEGACY_SAME_PAGE_RESPONSE, PREVIOUS_SAME_PAGE_RESPONSE, PREVIOUS_SAME_PAGE_RESPONSE_V3].includes(String(raw.samePageResponse || ''))) {
           normalized.samePageResponse = DEFAULT_QUOTATION_ROUTING_TEMPLATES.samePageResponse;
           requiresUpdate = true;
         }
-        if ([LEGACY_DIFFERENT_PAGE_RESPONSE, PREVIOUS_DIFFERENT_PAGE_RESPONSE].includes(String(raw.differentPageResponse || ''))) {
+        if ([LEGACY_DIFFERENT_PAGE_RESPONSE, PREVIOUS_DIFFERENT_PAGE_RESPONSE, PREVIOUS_DIFFERENT_PAGE_RESPONSE_V3].includes(String(raw.differentPageResponse || ''))) {
           normalized.differentPageResponse = DEFAULT_QUOTATION_ROUTING_TEMPLATES.differentPageResponse;
           requiresUpdate = true;
         }
@@ -247,6 +251,15 @@ async function ensureSeedRules() {
     }}).catch((error: { code?: string }) => { if (error.code !== 'P2002') throw error; });
   } else if (completionRule.directive === DEFAULT_QUOTATION_COMPLETION_PROMPT) {
     await prisma.aiRule.update({ where: { id: completionRule.id }, data: { directive: QUOTATION_COMPLETION_RULE_DIRECTIVE } });
+  } else {
+    const parsed = parseQuotationCompletionRule(completionRule.directive);
+    if (parsed && (parsed.callSuccess === LEGACY_QUOTATION_CALL_SUCCESS || parsed.chatSuccess === LEGACY_QUOTATION_CHAT_SUCCESS)) {
+      await prisma.aiRule.update({ where: { id: completionRule.id }, data: { directive: serializeQuotationCompletionRule({
+        ...parsed,
+        ...(parsed.callSuccess === LEGACY_QUOTATION_CALL_SUCCESS ? { callSuccess: DEFAULT_QUOTATION_COMPLETION_CONFIG.callSuccess } : {}),
+        ...(parsed.chatSuccess === LEGACY_QUOTATION_CHAT_SUCCESS ? { chatSuccess: DEFAULT_QUOTATION_COMPLETION_CONFIG.chatSuccess } : {}),
+      }) } });
+    }
   }
 }
 

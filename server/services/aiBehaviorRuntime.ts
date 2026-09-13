@@ -305,6 +305,7 @@ export type ProductRoutingCandidate = {
   categoryName: string | null;
   subCategoryName: string | null;
   description: string;
+  aliases: string[];
   pageTitles: string[];
   purchaseUrlAvailable: boolean;
 };

@@ -530,12 +530,14 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
   const categoryScope = matchedCategoryRaw
     ? categoryKnowledgeScope(matchedCategoryRaw.id)
     : null;
-  const relevantArticles = categoryScope
+  const scopedArticles = categoryScope
     ? await prisma.knowledgeArticle.findMany({
-        where: { status: 'PUBLISHED', category: categoryScope },
+        where: { status: 'PUBLISHED', category: { in: [categoryScope, 'GENERAL', 'عمومی'] } },
         orderBy: { updatedAt: 'desc' },
       })
     : [];
+  const relevantArticles = scopedArticles.filter(article => article.category === categoryScope);
+  const globalArticles = scopedArticles.filter(article => article.category === 'GENERAL' || article.category === 'عمومی');
 
   // Global rules always apply. Category rules are appended after them so they
   // can provide more specific direction for the selected category.
@@ -866,9 +868,12 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
   const scopedKnowledge = composeScopedKnowledge(
     relevantArticles.map((article) => `📚 دانش دسته اصلی «${matchedCategoryRaw?.name}»:\n• ${article.title}\n${article.content}`),
     matchedProduct?.aiKnowledgeArticle || '',
+    globalArticles.map((article) => `📖 دانش عمومی:\n• ${article.title}\n${article.content}`),
   );
 
-  if (relevantArticles.length > 0) knowledgeParts.push(...scopedKnowledge.sections.slice(0, relevantArticles.length));
+  // More specific sections appear later and explicitly override broader ones:
+  // confirmed product > category > global.
+  knowledgeParts.push(...scopedKnowledge.global, ...scopedKnowledge.category);
 
   if (matchedProduct) {
     knowledgeParts.push(
@@ -934,7 +939,7 @@ ${matchedProduct.aiRules.trim()}`
     matchedSubCategory: matchedSubCategoryRaw?.name || null,
 
     relevantFaqs,
-    relevantArticles: relevantArticles.map((article) => ({
+    relevantArticles: [...globalArticles, ...relevantArticles].map((article) => ({
       id: article.id,
       title: article.title,
       content: article.content,

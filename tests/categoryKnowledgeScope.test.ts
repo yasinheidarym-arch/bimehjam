@@ -24,9 +24,16 @@ test('category knowledge scope is stable and id-based', () => {
 });
 
 test('category knowledge is used before product knowledge and product is marked as the override', () => {
-  const result = composeScopedKnowledge(['دانش مسئولیت'], 'دانش مدیران ساختمان');
-  assert.deepEqual(result.sections, ['دانش مسئولیت', 'دانش مدیران ساختمان']);
+  const result = composeScopedKnowledge(['دانش مسئولیت'], 'دانش مدیران ساختمان', ['دانش عمومی']);
+  assert.deepEqual(result.sections, ['دانش عمومی', 'دانش مسئولیت', 'دانش مدیران ساختمان']);
   assert.equal(result.productOverridesCategory, true);
+});
+
+test('category context remains usable before a product is confirmed', () => {
+  const result = composeScopedKnowledge(['دانش معتبر دسته مسئولیت'], null, ['دانش عمومی']);
+  assert.deepEqual(result.sections, ['دانش عمومی', 'دانش معتبر دسته مسئولیت']);
+  assert.equal(result.productOverridesCategory, false);
+  assert.equal(result.hasRelevantKnowledge, true);
 });
 
 test('missing category and product content requires clarification instead of a guessed answer', () => {

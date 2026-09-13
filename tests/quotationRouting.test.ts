@@ -19,6 +19,7 @@ import {
   advanceQuotationSubmission,
   startQuotationSubmission,
 } from '../server/services/quotationSubmissionFlow.ts';
+import { renderQuotationCompletionSuccess } from '../shared/quotationCompletionRule.ts';
 
 const productId = 'building-managers';
 const purchaseUrl = 'https://bimejam.com/liability-insurance/building-managers';
@@ -131,4 +132,24 @@ test('completed answers collect profile and ask for delivery route without a con
   const chat = advanceQuotationSubmission(decision.state, 'قیمت را همین‌جا در چت اعلام کنید');
   assert.equal(chat.action, 'ROUTE');
   if (chat.action === 'ROUTE') assert.equal(chat.route, 'CHAT');
+});
+
+test('exact chat and callback choices deterministically select their existing routes', () => {
+  const base = startQuotationSubmission({
+    sessionId: 'delivery', productId, productName: 'بیمه مسئولیت مدیر ساختمان', answers: [],
+    existingProfile: { fullName: 'کاربر آزمایشی', mobile: '09120000000', city: 'تهران' },
+    choicePrompt: 'تماس یا اعلام قیمت در چت؟',
+  });
+  const chat = advanceQuotationSubmission(base.state, 'در همین چت اعلام شه');
+  assert.equal(chat.action, 'ROUTE');
+  if (chat.action === 'ROUTE') assert.equal(chat.route, 'CHAT');
+  const call = advanceQuotationSubmission(base.state, 'کارشناس با من تماس بگیره');
+  assert.equal(call.action, 'ROUTE');
+  if (call.action === 'ROUTE') assert.equal(call.route, 'CALL');
+});
+
+test('administrator SLA changes final wording without changing code', () => {
+  const template = 'قیمت بررسی می‌شود{{slaText}} و در چت اعلام خواهد شد.';
+  assert.match(renderQuotationCompletionSuccess(template, 12), /۱۲ دقیقه/);
+  assert.doesNotMatch(renderQuotationCompletionSuccess(template, null), /دقیقه/);
 });
