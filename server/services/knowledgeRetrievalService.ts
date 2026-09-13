@@ -1,6 +1,6 @@
 import prisma from '../db/client';
 import { categoryKnowledgeScope, composeScopedKnowledge } from './categoryKnowledgeScope';
-import { productDetectionTerms } from './productDetectionAliases';
+import { selectConfirmedProductCandidate } from './productTaxonomyValidation';
 
 export function stripUnverifiedOperationalClaims(value: string): string {
   return String(value || '')
@@ -608,10 +608,9 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
   console.log("===============================================");
 
   // ---------------------------------------------------------
-  // 2.5 Fetch products
-  //
-  // Prefer categoryId/subCategoryId.
-  // Keep legacy category fallback for existing seeded data.
+  // 2.5 Fetch a product only from the authoritative confirmed-product state.
+  // Category and sub-category matches are discovery context; they must never
+  // activate product knowledge, rules, purchase URLs or quote questions.
   // ---------------------------------------------------------
   let productWhere: any = {
     status: 'ACTIVE',
@@ -622,115 +621,28 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
     // Preserve the Goftino allowlist boundary while keeping an active
     // quotation session independent from fragile text/subcategory rematching.
     if (matchedCategoryRaw) productWhere.categoryId = matchedCategoryRaw.id;
-  } else if (matchedSubCategoryRaw) {
-    productWhere.categoryId = matchedSubCategoryRaw.categoryId;
-
-    productWhere.subCategoryId = matchedSubCategoryRaw.id;
-  } else if (matchedCategoryRaw) {
-    productWhere.categoryId = matchedCategoryRaw.id;
-  } else if (categoryFilter) {
-    // Temporary backward compatibility for legacy products.
-    productWhere.category = categoryFilter;
   }
 
-  const products = await prisma.insuranceProduct.findMany({
-    where: productWhere,
-    include: {
-      quotationQuestions: {
-        orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
-      },
-      categoryRef: true,
-      subCategoryRef: true,
-    },
-  });
+  const products = params.customerContext?.productId
+    ? await prisma.insuranceProduct.findMany({
+        where: productWhere,
+        include: {
+          quotationQuestions: {
+            orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+          },
+          categoryRef: true,
+          subCategoryRef: true,
+        },
+      })
+    : [];
 
-  let matchedProductRaw: any = null;
+  const confirmedProductCandidate = params.customerContext?.productId
+    ? products.find(product => product.id === params.customerContext?.productId) || null
+    : null;
+  const matchedProductRaw = selectConfirmedProductCandidate(params.customerContext?.productId, products);
 
-  if (products.length > 0) {
-    // customerContext.productId is no longer the page or a stale conversational
-    // hint. It is a backend-validated product-routing decision, so it is the
-    // authoritative candidate for this turn and must not be re-ranked by old
-    // transcript words.
-    if (params.customerContext?.productId) {
-      matchedProductRaw = products.find(product => product.id === params.customerContext?.productId) || null;
-    }
-    const scoredProducts = products.map((product) => {
-      const productName = normalizeForMatch(product.name);
-      const productWords = tokenize(productName);
-      const detectionTerms = productDetectionTerms(product.name, product.description).map(normalizeForMatch);
-
-      let score = 0;
-      const latestDirectMatch = detectionTerms.some(term => term && normalizedLatestMessage.includes(term));
-      const contextDirectMatch = detectionTerms.some(term => term && normalizedConversationContext.includes(term));
-
-      // Exact product name match is strongest.
-      if (latestDirectMatch) {
-        score += 60;
-      } else if (contextDirectMatch) {
-        score += 20;
-      }
-
-      for (const word of productWords) {
-        if (normalizedLatestMessage.includes(word)) {
-          score += word.length >= 5 ? 4 : 2;
-        } else if (normalizedConversationContext.includes(word)) {
-          score += word.length >= 5 ? 2 : 1;
-        }
-      }
-
-      // Dynamic category/sub-category agreement.
-      if (
-        matchedCategoryRaw &&
-        product.categoryId === matchedCategoryRaw.id
-      ) {
-        score += 3;
-      }
-
-      if (
-        matchedSubCategoryRaw &&
-        product.subCategoryId === matchedSubCategoryRaw.id
-      ) {
-        score += 5;
-      }
-
-      return { product, score, directMatch: latestDirectMatch || contextDirectMatch };
-    });
-
-    console.log("========== PRODUCT MATCH DEBUG ==========");
-    console.log("NORMALIZED CONTEXT:", normalizedContext);
-    console.log(
-      "PRODUCT SCORES:",
-      JSON.stringify(
-        scoredProducts.map((item: any) => ({
-          id: item.product.id,
-          name: item.product.name,
-          categoryId: item.product.categoryId,
-          subCategoryId: item.product.subCategoryId,
-          score: item.score,
-        })),
-        null,
-        2
-      )
-    );
-    console.log("=========================================");
-
-    const best = scoredProducts
-      .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score)[0];
-
-    // Product is activated only when subcategory is identified.
-    // Category alone is not enough to load product knowledge or quotation workflow.
-    if (matchedProductRaw) {
-      // Already selected from the validated routing context above.
-    } else if (best && params.customerContext?.productId && best.product.id === params.customerContext.productId) {
-      matchedProductRaw = best.product;
-    } else if (best && (matchedSubCategoryRaw || best.directMatch)) {
-      matchedProductRaw = best.product;
-    } else if (best && !matchedSubCategoryRaw) {
-      console.log("PRODUCT MATCH BLOCKED: category detected but subcategory is missing");
-      console.log("Candidate product:", best.product.name);
-      matchedProductRaw = null;
-    }
+  if (confirmedProductCandidate && !matchedProductRaw) {
+    console.warn('CONFIRMED PRODUCT BLOCKED: product has no valid sub-category assignment', confirmedProductCandidate.id);
   }
 
   let matchedProduct = null;

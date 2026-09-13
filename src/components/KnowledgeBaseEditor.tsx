@@ -557,6 +557,10 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
   // --- Handlers for Products ---
   const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!productForm.categoryId || !productForm.subCategoryId) {
+      window.alert('برای ذخیره محصول، دسته‌بندی اصلی و زیر‌دسته را انتخاب کنید.');
+      return;
+    }
     if (!isValidOptionalProductPurchaseUrl(productForm.purchaseUrl)) {
       window.alert('لینک خرید محصول باید یک آدرس معتبر با http یا https باشد.');
       return;
@@ -2690,6 +2694,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                       }
                       disabled={!productForm.categoryId}
                       className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500 disabled:bg-slate-50 disabled:text-slate-400"
+                      required
                     >
                       <option value="">
                         {productForm.categoryId
@@ -2707,6 +2712,11 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                           </option>
                         ))}
                     </select>
+                    {productForm.categoryId && !productForm.subCategoryId && (
+                      <p className="mt-1 text-[11px] text-rose-600">
+                        انتخاب زیر‌دسته برای هر محصول الزامی است.
+                      </p>
+                    )}
                   </div>
                 </div>
 
@@ -2800,7 +2810,8 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                   </button>
                   <button
                     type="submit"
-                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold"
+                    disabled={!productForm.categoryId || !productForm.subCategoryId}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
                     ذخیره مشخصات محصول
                   </button>

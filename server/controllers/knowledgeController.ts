@@ -28,6 +28,7 @@ import {
   normalizeProductPurchaseUrl,
 } from '../../shared/productPurchaseLink';
 import { productDescriptionWithoutAliases, productDetectionAliases, withProductDetectionAliases } from '../services/productDetectionAliases';
+import { validateProductTaxonomyAssignment } from '../services/productTaxonomyValidation';
 
 async function attachCategoryKnowledge<T extends { id: string }>(categories: T[]) {
   const scopes = categories.map((category) => categoryKnowledgeScope(category.id));
@@ -793,11 +794,16 @@ export async function createProduct(req: Request, res: Response) {
       detectionAliases,
     } = req.body;
 
-    if (!name || !categoryId) {
+    if (!name) {
       return res.status(400).json({
         success: false,
-        error: 'نام محصول و دسته‌بندی اصلی الزامی است.',
+        error: 'نام محصول الزامی است.',
       });
+    }
+
+    const taxonomy = await validateProductTaxonomyAssignment(prisma, categoryId, subCategoryId);
+    if (taxonomy.valid === false) {
+      return res.status(400).json({ success: false, error: taxonomy.error });
     }
 
     if (!isValidOptionalProductPurchaseUrl(purchaseUrl)) {
@@ -814,8 +820,8 @@ export async function createProduct(req: Request, res: Response) {
         name,
         slug: createdSlug,
         category,
-        categoryId,
-        subCategoryId: subCategoryId || null,
+        categoryId: taxonomy.categoryId,
+        subCategoryId: taxonomy.subCategoryId,
         description: withProductDetectionAliases(description || '', detectionAliases),
         status: status || 'ACTIVE',
         introduction,
@@ -851,15 +857,31 @@ export async function updateProduct(req: Request, res: Response) {
       });
     }
 
-    const existing = detectionAliases !== undefined
-      ? await prisma.insuranceProduct.findUnique({ where: { id }, select: { description: true } })
-      : null;
+    const existing = await prisma.insuranceProduct.findUnique({
+      where: { id },
+      select: { description: true, categoryId: true, subCategoryId: true },
+    });
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'محصول پیدا نشد.' });
+    }
+
+    const taxonomy = await validateProductTaxonomyAssignment(
+      prisma,
+      body.categoryId !== undefined ? body.categoryId : existing.categoryId,
+      body.subCategoryId !== undefined ? body.subCategoryId : existing.subCategoryId,
+    );
+    if (taxonomy.valid === false) {
+      return res.status(400).json({ success: false, error: taxonomy.error });
+    }
+
     const updated = await prisma.insuranceProduct.update({
       where: { id },
       data: {
         ...body,
+        categoryId: taxonomy.categoryId,
+        subCategoryId: taxonomy.subCategoryId,
         ...(detectionAliases !== undefined
-          ? { description: withProductDetectionAliases(body.description ?? existing?.description ?? '', detectionAliases) }
+          ? { description: withProductDetectionAliases(body.description ?? existing.description ?? '', detectionAliases) }
           : {}),
         ...(body.purchaseUrl !== undefined
           ? { purchaseUrl: normalizeProductPurchaseUrl(body.purchaseUrl) }
