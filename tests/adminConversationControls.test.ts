@@ -30,3 +30,18 @@ test('product form blocks canonical conflicts and links to the existing product 
   assert.match(editor, /ویرایش محصول موجود/);
   assert.match(editor, /Boolean\(productIdentityConflict\)/);
 });
+
+test('product name is read-only derived and occupied subcategories are disabled', () => {
+  assert.match(editor, /نام canonical محصول/);
+  assert.match(editor, /buildCanonicalProductName/);
+  assert.match(editor, /disabled=\{occupiedByAnotherProduct && !isCurrentSubCategory\}/);
+  assert.match(editor, /متصل به/);
+  assert.doesNotMatch(editor, /onChange=\{\(e\) => setProductForm\(\{ \.\.\.productForm, name: e\.target\.value \}\)\}/);
+});
+
+test('category API returns real active product relations for subcategory counts', () => {
+  const controller = readFileSync(new URL('../server/controllers/knowledgeController.ts', import.meta.url), 'utf8');
+  assert.match(controller, /subCategories:\s*\{\s*include:\s*\{\s*products:\s*\{\s*where:\s*\{ status: 'ACTIVE' \}/s);
+  assert.match(controller, /name: canonicalName/);
+  assert.match(controller, /category: taxonomy\.categoryName/);
+});

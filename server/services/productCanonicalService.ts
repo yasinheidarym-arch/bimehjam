@@ -1,7 +1,4 @@
-import {
-  type CanonicalProductInput,
-  findCanonicalProductConflict,
-} from '../../shared/productCanonicalIdentity';
+import { type CanonicalProductInput, findCanonicalProductConflict } from '../../shared/productCanonicalIdentity';
 import { productDetectionAliases } from './productDetectionAliases';
 
 type ProductIdentityLookup = {

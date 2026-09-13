@@ -9,14 +9,14 @@ function taxonomyDb(input: { categoryExists?: boolean; subCategory?: { id: strin
   return {
     insuranceCategory: {
       async findUnique() {
-        return input.categoryExists === false ? null : { id: 'category-1' };
+        return input.categoryExists === false ? null : { id: 'category-1', name: 'دسته اصلی' };
       },
     },
     insuranceSubCategory: {
       async findUnique() {
         return input.subCategory === undefined
-          ? { id: 'subcategory-1', categoryId: 'category-1' }
-          : input.subCategory;
+          ? { id: 'subcategory-1', name: 'زیر‌دسته', categoryId: 'category-1' }
+          : input.subCategory ? { ...input.subCategory, name: 'زیر‌دسته' } : null;
       },
     },
   };
@@ -30,7 +30,13 @@ test('backend rejects product creation without a subcategory', async () => {
 
 test('backend accepts a product with a valid subcategory belonging to its category', async () => {
   const result = await validateProductTaxonomyAssignment(taxonomyDb({}), 'category-1', 'subcategory-1');
-  assert.deepEqual(result, { valid: true, categoryId: 'category-1', subCategoryId: 'subcategory-1' });
+  assert.deepEqual(result, {
+    valid: true,
+    categoryId: 'category-1',
+    categoryName: 'دسته اصلی',
+    subCategoryId: 'subcategory-1',
+    subCategoryName: 'زیر‌دسته',
+  });
 });
 
 test('backend rejects a subcategory from another category', async () => {

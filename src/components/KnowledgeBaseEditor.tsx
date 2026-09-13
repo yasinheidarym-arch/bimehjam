@@ -82,9 +82,11 @@ import {
   type QuotationCompletionRuleConfig,
 } from '../../shared/quotationCompletionRule';
 import {
+  buildCanonicalProductName,
   findCanonicalProductConflict,
   parseProductAliasInput,
   PRODUCT_ALREADY_EXISTS_MESSAGE,
+  SUBCATEGORY_PRODUCT_EXISTS_MESSAGE,
 } from '../../shared/productCanonicalIdentity';
 
 type ModuleTab = 'categories' | 'products' | 'faqs' | 'ai-behavior';
@@ -236,7 +238,6 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
   });
 
   const [productForm, setProductForm] = useState({
-    name: '',
     category: '',
     categoryId: '',
     subCategoryId: '',
@@ -251,11 +252,20 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     status: 'ACTIVE',
   });
 
-  const productIdentityConflict = productForm.name.trim()
+  const selectedProductCategory = insuranceCategories.find(category => category.id === productForm.categoryId) || null;
+  const selectedProductSubCategory = selectedProductCategory?.subCategories?.find(
+    (subCategory: any) => subCategory.id === productForm.subCategoryId,
+  ) || null;
+  const canonicalProductNamePreview = buildCanonicalProductName(
+    selectedProductCategory?.name,
+    selectedProductSubCategory?.name,
+  );
+
+  const productIdentityConflict = canonicalProductNamePreview
     ? findCanonicalProductConflict({
         id: editingItem?.id || null,
-        name: productForm.name,
-        slug: editingItem?.slug || productForm.name.toLowerCase().replace(/\s+/g, '-'),
+        name: canonicalProductNamePreview,
+        slug: editingItem?.slug || canonicalProductNamePreview.toLowerCase().replace(/\s+/g, '-'),
         subCategoryId: productForm.subCategoryId,
         aliases: parseProductAliasInput(productForm.detectionAliases),
         status: productForm.status,
@@ -580,8 +590,14 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       window.alert('برای ذخیره محصول، دسته‌بندی اصلی و زیر‌دسته را انتخاب کنید.');
       return;
     }
+    if (!canonicalProductNamePreview) {
+      window.alert('نام canonical محصول از دسته‌بندی و زیر‌دسته قابل تولید نیست.');
+      return;
+    }
     if (productIdentityConflict) {
-      window.alert(PRODUCT_ALREADY_EXISTS_MESSAGE);
+      window.alert(productIdentityConflict.reason === 'SUBCATEGORY_OCCUPIED'
+        ? SUBCATEGORY_PRODUCT_EXISTS_MESSAGE
+        : PRODUCT_ALREADY_EXISTS_MESSAGE);
       return;
     }
     if (!isValidOptionalProductPurchaseUrl(productForm.purchaseUrl)) {
@@ -590,11 +606,12 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     }
     try {
       if (editingItem) {
-        await knowledgeService.updateProduct(editingItem.id, productForm);
+        await knowledgeService.updateProduct(editingItem.id, { ...productForm, name: canonicalProductNamePreview });
       } else {
         await knowledgeService.createProduct({
           ...productForm,
-          slug: productForm.name.toLowerCase().replace(/\s+/g, '-'),
+          name: canonicalProductNamePreview,
+          slug: canonicalProductNamePreview.toLowerCase().replace(/\s+/g, '-'),
         });
       }
       setShowProductModal(false);
@@ -619,7 +636,6 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
 
   const resetProductForm = () => {
     setProductForm({
-      name: '',
       category: '',
       categoryId: '',
       subCategoryId: '',
@@ -663,7 +679,6 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     setProductModalTab(tab);
     if (product) {
       setProductForm({
-        name: product.name || '',
         category: product.category || '',
         categoryId: product.categoryId || product.categoryRef?.id || '',
         subCategoryId: product.subCategoryId || product.subCategoryRef?.id || '',
@@ -2611,7 +2626,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
                 <h3 className="font-bold text-slate-900 text-sm">
-                  {editingItem ? `مدیریت محصول: ${productForm.name || editingItem.name}` : 'ایجاد محصول بیمه‌ای جدید'}
+                  {editingItem ? `مدیریت محصول: ${canonicalProductNamePreview || editingItem.name}` : 'ایجاد محصول بیمه‌ای جدید'}
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
                   مدیریت مشخصات محصول و سوالات استعلام قیمت هوشمند از یک مرکز یکپارچه
@@ -2659,18 +2674,6 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
             {productModalTab === 'info' && (
               <form onSubmit={handleSaveProduct} className="space-y-3 text-xs">
                 <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="font-bold text-slate-700 block mb-1">نام محصول بیمه‌ای:</label>
-                    <input
-                      type="text"
-                      required
-                      value={productForm.name}
-                      onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
-                      placeholder="مثلاً: بیمه مسئولیت مدیران ساختمان"
-                      className="w-full px-3 py-2 rounded-xl border border-slate-200 focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
-
                   <div>
                     <label className="font-bold text-slate-700 block mb-1">
                       دسته‌بندی اصلی:
@@ -2730,11 +2733,25 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                         .find((c) => c.id === productForm.categoryId)
                         ?.subCategories
                         ?.filter((sub: any) => sub.status === 'ACTIVE')
-                        .map((sub: any) => (
-                          <option key={sub.id} value={sub.id}>
-                            {sub.name}
-                          </option>
-                        ))}
+                        .map((sub: any) => {
+                          const connectedProducts = (sub.products || []).filter(
+                            (product: any) => product.status === 'ACTIVE',
+                          );
+                          const occupiedByAnotherProduct = connectedProducts.some(
+                            (product: any) => product.id !== editingItem?.id,
+                          );
+                          const isCurrentSubCategory = editingItem?.subCategoryId === sub.id;
+                          const connectedName = connectedProducts[0]?.name;
+                          return (
+                            <option
+                              key={sub.id}
+                              value={sub.id}
+                              disabled={occupiedByAnotherProduct && !isCurrentSubCategory}
+                            >
+                              {sub.name}{connectedName ? ` — متصل به ${connectedName}` : ''}
+                            </option>
+                          );
+                        })}
                     </select>
                     {productForm.categoryId && !productForm.subCategoryId && (
                       <p className="mt-1 text-[11px] text-rose-600">
@@ -2742,6 +2759,13 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                       </p>
                     )}
                   </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <span className="block text-[11px] font-bold text-slate-600">نام canonical محصول:</span>
+                  <span className="mt-1 block text-sm font-bold text-slate-900">
+                    {canonicalProductNamePreview || 'پس از انتخاب دسته‌بندی و زیر‌دسته ساخته می‌شود'}
+                  </span>
                 </div>
 
                 <div>
@@ -2762,7 +2786,11 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
 
                 {productIdentityConflict && (
                   <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-amber-900">
-                    <p className="font-bold">{PRODUCT_ALREADY_EXISTS_MESSAGE}</p>
+                    <p className="font-bold">
+                      {productIdentityConflict.reason === 'SUBCATEGORY_OCCUPIED'
+                        ? SUBCATEGORY_PRODUCT_EXISTS_MESSAGE
+                        : PRODUCT_ALREADY_EXISTS_MESSAGE}
+                    </p>
                     <p className="mt-1 text-[11px]">
                       محصول موجود: {productIdentityConflict.existingProduct.name}
                     </p>

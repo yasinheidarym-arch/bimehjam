@@ -1,14 +1,14 @@
 type TaxonomyLookup = {
   insuranceCategory: {
-    findUnique(args: { where: { id: string }; select: { id: true } }): Promise<{ id: string } | null>;
+    findUnique(args: { where: { id: string }; select: { id: true; name: true } }): Promise<{ id: string; name: string } | null>;
   };
   insuranceSubCategory: {
-    findUnique(args: { where: { id: string }; select: { id: true; categoryId: true } }): Promise<{ id: string; categoryId: string } | null>;
+    findUnique(args: { where: { id: string }; select: { id: true; name: true; categoryId: true } }): Promise<{ id: string; name: string; categoryId: string } | null>;
   };
 };
 
 export type ProductTaxonomyValidation =
-  | { valid: true; categoryId: string; subCategoryId: string }
+  | { valid: true; categoryId: string; categoryName: string; subCategoryId: string; subCategoryName: string }
   | { valid: false; error: string };
 
 export function selectConfirmedProductCandidate<T extends { id: string; subCategoryId?: string | null }>(
@@ -33,8 +33,8 @@ export async function validateProductTaxonomyAssignment(
   }
 
   const [category, subCategory] = await Promise.all([
-    db.insuranceCategory.findUnique({ where: { id: normalizedCategoryId }, select: { id: true } }),
-    db.insuranceSubCategory.findUnique({ where: { id: normalizedSubCategoryId }, select: { id: true, categoryId: true } }),
+    db.insuranceCategory.findUnique({ where: { id: normalizedCategoryId }, select: { id: true, name: true } }),
+    db.insuranceSubCategory.findUnique({ where: { id: normalizedSubCategoryId }, select: { id: true, name: true, categoryId: true } }),
   ]);
 
   if (!category) {
@@ -44,5 +44,11 @@ export async function validateProductTaxonomyAssignment(
     return { valid: false, error: 'زیر‌دسته انتخاب‌شده معتبر نیست یا به دسته‌بندی اصلی انتخاب‌شده تعلق ندارد.' };
   }
 
-  return { valid: true, categoryId: category.id, subCategoryId: subCategory.id };
+  return {
+    valid: true,
+    categoryId: category.id,
+    categoryName: category.name,
+    subCategoryId: subCategory.id,
+    subCategoryName: subCategory.name,
+  };
 }

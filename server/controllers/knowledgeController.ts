@@ -33,7 +33,13 @@ import {
   findCanonicalProductConflictInDatabase,
   withCanonicalProductWriteLock,
 } from '../services/productCanonicalService';
-import { parseProductAliasInput, PRODUCT_ALREADY_EXISTS_MESSAGE } from '../../shared/productCanonicalIdentity';
+import {
+  buildCanonicalProductName,
+  normalizeProductIdentity,
+  parseProductAliasInput,
+  PRODUCT_ALREADY_EXISTS_MESSAGE,
+  SUBCATEGORY_PRODUCT_EXISTS_MESSAGE,
+} from '../../shared/productCanonicalIdentity';
 
 async function attachCategoryKnowledge<T extends { id: string }>(categories: T[]) {
   const scopes = categories.map((category) => categoryKnowledgeScope(category.id));
@@ -497,6 +503,12 @@ export async function getInsuranceCategories(req: Request, res: Response) {
     const categories = await prisma.insuranceCategory.findMany({
       include: {
         subCategories: {
+          include: {
+            products: {
+              where: { status: 'ACTIVE' },
+              select: { id: true, name: true, status: true },
+            },
+          },
           orderBy: { sortOrder: 'asc' },
         },
       },
@@ -541,7 +553,15 @@ export async function createInsuranceCategory(req: Request, res: Response) {
         sortOrder: Number(sortOrder) || 0,
       },
       include: {
-        subCategories: true,
+        subCategories: {
+          include: {
+            products: {
+              where: { status: 'ACTIVE' },
+              select: { id: true, name: true, status: true },
+            },
+          },
+          orderBy: { sortOrder: 'asc' },
+        },
       },
     });
 
@@ -572,6 +592,12 @@ export async function updateInsuranceCategory(req: Request, res: Response) {
       },
       include: {
         subCategories: {
+          include: {
+            products: {
+              where: { status: 'ACTIVE' },
+              select: { id: true, name: true, status: true },
+            },
+          },
           orderBy: { sortOrder: 'asc' },
         },
       },
@@ -777,9 +803,7 @@ export async function getProducts(req: Request, res: Response) {
 export async function createProduct(req: Request, res: Response) {
   try {
     const {
-      name,
       slug,
-      category,
       categoryId,
       subCategoryId,
       description,
@@ -799,13 +823,6 @@ export async function createProduct(req: Request, res: Response) {
       detectionAliases,
     } = req.body;
 
-    if (!name) {
-      return res.status(400).json({
-        success: false,
-        error: 'نام محصول الزامی است.',
-      });
-    }
-
     const taxonomy = await validateProductTaxonomyAssignment(prisma, categoryId, subCategoryId);
     if (taxonomy.valid === false) {
       return res.status(400).json({ success: false, error: taxonomy.error });
@@ -818,11 +835,12 @@ export async function createProduct(req: Request, res: Response) {
       });
     }
 
-    const createdSlug = slug || `prod-${Date.now()}`;
+    const canonicalName = buildCanonicalProductName(taxonomy.categoryName, taxonomy.subCategoryName);
+    const createdSlug = slug || canonicalName.toLowerCase().replace(/\s+/g, '-');
 
     const creation = await withCanonicalProductWriteLock(async () => {
       const conflict = await findCanonicalProductConflictInDatabase(prisma, {
-        name,
+        name: canonicalName,
         slug: createdSlug,
         subCategoryId: taxonomy.subCategoryId,
         aliases: parseProductAliasInput(detectionAliases),
@@ -832,9 +850,9 @@ export async function createProduct(req: Request, res: Response) {
 
       const product = await prisma.insuranceProduct.create({
         data: {
-          name,
+          name: canonicalName,
           slug: createdSlug,
-          category,
+          category: taxonomy.categoryName,
           categoryId: taxonomy.categoryId,
           subCategoryId: taxonomy.subCategoryId,
           description: withProductDetectionAliases(description || '', detectionAliases),
@@ -860,7 +878,9 @@ export async function createProduct(req: Request, res: Response) {
       return res.status(409).json({
         success: false,
         code: 'PRODUCT_ALREADY_EXISTS',
-        error: PRODUCT_ALREADY_EXISTS_MESSAGE,
+        error: creation.conflict.reason === 'SUBCATEGORY_OCCUPIED'
+          ? SUBCATEGORY_PRODUCT_EXISTS_MESSAGE
+          : PRODUCT_ALREADY_EXISTS_MESSAGE,
         existingProduct: {
           id: creation.conflict.existingProduct.id,
           name: creation.conflict.existingProduct.name,
@@ -907,13 +927,22 @@ export async function updateProduct(req: Request, res: Response) {
       return res.status(400).json({ success: false, error: taxonomy.error });
     }
 
-    const finalAliases = detectionAliases !== undefined
+    const canonicalName = buildCanonicalProductName(taxonomy.categoryName, taxonomy.subCategoryName);
+    const requestedAliases = detectionAliases !== undefined
       ? parseProductAliasInput(detectionAliases)
       : productDetectionAliases(existing.description);
+    const finalAliases = parseProductAliasInput([
+      ...requestedAliases,
+      ...(normalizeProductIdentity(existing.name) !== normalizeProductIdentity(canonicalName) ? [existing.name] : []),
+    ]);
+    const storedDescription = withProductDetectionAliases(
+      body.description ?? existing.description ?? '',
+      finalAliases,
+    );
     const update = await withCanonicalProductWriteLock(async () => {
       const conflict = await findCanonicalProductConflictInDatabase(prisma, {
         id,
-        name: body.name !== undefined ? body.name : existing.name,
+        name: canonicalName,
         slug: body.slug !== undefined ? body.slug : existing.slug,
         subCategoryId: taxonomy.subCategoryId,
         aliases: finalAliases,
@@ -925,11 +954,11 @@ export async function updateProduct(req: Request, res: Response) {
         where: { id },
         data: {
           ...body,
+          name: canonicalName,
+          category: taxonomy.categoryName,
           categoryId: taxonomy.categoryId,
           subCategoryId: taxonomy.subCategoryId,
-          ...(detectionAliases !== undefined
-            ? { description: withProductDetectionAliases(body.description ?? existing.description ?? '', detectionAliases) }
-            : {}),
+          description: storedDescription,
           ...(body.purchaseUrl !== undefined
             ? { purchaseUrl: normalizeProductPurchaseUrl(body.purchaseUrl) }
             : {}),
@@ -942,7 +971,9 @@ export async function updateProduct(req: Request, res: Response) {
       return res.status(409).json({
         success: false,
         code: 'PRODUCT_ALREADY_EXISTS',
-        error: PRODUCT_ALREADY_EXISTS_MESSAGE,
+        error: update.conflict.reason === 'SUBCATEGORY_OCCUPIED'
+          ? SUBCATEGORY_PRODUCT_EXISTS_MESSAGE
+          : PRODUCT_ALREADY_EXISTS_MESSAGE,
         existingProduct: {
           id: update.conflict.existingProduct.id,
           name: update.conflict.existingProduct.name,

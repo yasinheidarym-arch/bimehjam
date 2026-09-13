@@ -1,4 +1,5 @@
 export const PRODUCT_ALREADY_EXISTS_MESSAGE = 'این محصول قبلاً تعریف شده است؛ اطلاعات آن را از بخش ویرایش همان محصول تغییر دهید.';
+export const SUBCATEGORY_PRODUCT_EXISTS_MESSAGE = 'برای این زیر‌دسته قبلاً محصول تعریف شده است. اطلاعات محصول موجود را ویرایش کنید.';
 
 export type CanonicalProductInput = {
   id?: string | null;
@@ -9,7 +10,7 @@ export type CanonicalProductInput = {
   status?: string | null;
 };
 
-export type ProductIdentityConflictReason = 'NORMALIZED_NAME' | 'SLUG' | 'ALIAS';
+export type ProductIdentityConflictReason = 'SUBCATEGORY_OCCUPIED' | 'NORMALIZED_NAME' | 'SLUG' | 'ALIAS';
 
 export type ProductIdentityConflict<T extends CanonicalProductInput = CanonicalProductInput> = {
   existingProduct: T;
@@ -37,6 +38,12 @@ export function normalizeProductSlug(value: unknown): string {
   return String(value || '').normalize('NFKC').trim().replace(/^\/+|\/+$/g, '').toLowerCase();
 }
 
+export function buildCanonicalProductName(categoryName: unknown, subCategoryName: unknown): string {
+  const category = String(categoryName || '').replace(/\s+/g, ' ').trim();
+  const subCategory = String(subCategoryName || '').replace(/\s+/g, ' ').trim();
+  return category && subCategory ? `${category} — ${subCategory}` : '';
+}
+
 export function parseProductAliasInput(value: CanonicalProductInput['aliases']): string[] {
   const items = Array.isArray(value) ? value : String(value || '').split(/[|،,\n]/);
   const seen = new Set<string>();
@@ -60,12 +67,20 @@ export function findCanonicalProductConflict<T extends CanonicalProductInput>(
   const candidateName = normalizeProductIdentity(candidate.name);
   const candidateSlug = normalizeProductSlug(candidate.slug);
   const candidateAliases = parseProductAliasInput(candidate.aliases).map(normalizeProductIdentity);
-
   for (const existing of existingProducts) {
     if (excludeProductId && existing.id === excludeProductId) continue;
     const existingName = normalizeProductIdentity(existing.name);
     const existingSlug = normalizeProductSlug(existing.slug);
     const existingAliases = parseProductAliasInput(existing.aliases).map(normalizeProductIdentity);
+
+    if (
+      active(candidate)
+      && active(existing)
+      && candidate.subCategoryId
+      && candidate.subCategoryId === existing.subCategoryId
+    ) {
+      return { existingProduct: existing, reason: 'SUBCATEGORY_OCCUPIED', conflictingValue: candidate.subCategoryId };
+    }
 
     if (candidateName && candidateName === existingName) {
       return { existingProduct: existing, reason: 'NORMALIZED_NAME', conflictingValue: candidate.name };
