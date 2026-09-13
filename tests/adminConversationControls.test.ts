@@ -21,5 +21,12 @@ test('product alias and quotation SLA controls are administrator-editable', () =
 test('product form requires a subcategory in both submit handling and controls', () => {
   assert.match(editor, /!productForm\.categoryId \|\| !productForm\.subCategoryId/);
   assert.match(editor, /انتخاب زیر‌دسته برای هر محصول الزامی است/);
-  assert.match(editor, /disabled=\{!productForm\.categoryId \|\| !productForm\.subCategoryId\}/);
+  assert.match(editor, /disabled=\{!productForm\.categoryId \|\| !productForm\.subCategoryId \|\| Boolean\(productIdentityConflict\)\}/);
+});
+
+test('product form blocks canonical conflicts and links to the existing product editor', () => {
+  assert.match(editor, /findCanonicalProductConflict/);
+  assert.match(editor, /PRODUCT_ALREADY_EXISTS_MESSAGE/);
+  assert.match(editor, /ویرایش محصول موجود/);
+  assert.match(editor, /Boolean\(productIdentityConflict\)/);
 });

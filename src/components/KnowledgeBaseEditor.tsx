@@ -81,6 +81,11 @@ import {
   serializeQuotationCompletionRule,
   type QuotationCompletionRuleConfig,
 } from '../../shared/quotationCompletionRule';
+import {
+  findCanonicalProductConflict,
+  parseProductAliasInput,
+  PRODUCT_ALREADY_EXISTS_MESSAGE,
+} from '../../shared/productCanonicalIdentity';
 
 type ModuleTab = 'categories' | 'products' | 'faqs' | 'ai-behavior';
 type ModuleLoadState = 'loading' | 'ready' | 'error';
@@ -245,6 +250,20 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
     aiRules: '',
     status: 'ACTIVE',
   });
+
+  const productIdentityConflict = productForm.name.trim()
+    ? findCanonicalProductConflict({
+        id: editingItem?.id || null,
+        name: productForm.name,
+        slug: editingItem?.slug || productForm.name.toLowerCase().replace(/\s+/g, '-'),
+        subCategoryId: productForm.subCategoryId,
+        aliases: parseProductAliasInput(productForm.detectionAliases),
+        status: productForm.status,
+      }, products.map(product => ({
+        ...product,
+        aliases: product.detectionAliases || [],
+      })), editingItem?.id)
+    : null;
 
   const [faqForm, setFaqForm] = useState({
     question: '',
@@ -561,6 +580,10 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       window.alert('برای ذخیره محصول، دسته‌بندی اصلی و زیر‌دسته را انتخاب کنید.');
       return;
     }
+    if (productIdentityConflict) {
+      window.alert(PRODUCT_ALREADY_EXISTS_MESSAGE);
+      return;
+    }
     if (!isValidOptionalProductPurchaseUrl(productForm.purchaseUrl)) {
       window.alert('لینک خرید محصول باید یک آدرس معتبر با http یا https باشد.');
       return;
@@ -578,8 +601,9 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
       setEditingItem(null);
       resetProductForm();
       await Promise.all([loadModule('products', true), loadModule('categories', true)]);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      window.alert(err?.response?.data?.error || 'ذخیره محصول انجام نشد.');
     }
   };
 
@@ -2736,6 +2760,23 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                   />
                 </div>
 
+                {productIdentityConflict && (
+                  <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-amber-900">
+                    <p className="font-bold">{PRODUCT_ALREADY_EXISTS_MESSAGE}</p>
+                    <p className="mt-1 text-[11px]">
+                      محصول موجود: {productIdentityConflict.existingProduct.name}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => void handleOpenProductModal(productIdentityConflict.existingProduct, 'info')}
+                      className="mt-2 inline-flex items-center gap-1 rounded-lg border border-amber-400 bg-white px-3 py-1.5 font-bold hover:bg-amber-100"
+                    >
+                      <Edit3 className="h-3.5 w-3.5" />
+                      ویرایش محصول موجود
+                    </button>
+                  </div>
+                )}
+
                 <div>
                   <label className="font-bold text-slate-700 block mb-1">
                     لینک خرید محصول (اختیاری):
@@ -2810,7 +2851,7 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                   </button>
                   <button
                     type="submit"
-                    disabled={!productForm.categoryId || !productForm.subCategoryId}
+                    disabled={!productForm.categoryId || !productForm.subCategoryId || Boolean(productIdentityConflict)}
                     className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold disabled:cursor-not-allowed disabled:bg-slate-300"
                   >
                     ذخیره مشخصات محصول

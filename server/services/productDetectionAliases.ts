@@ -1,14 +1,9 @@
+import { normalizeProductIdentity } from '../../shared/productCanonicalIdentity';
+
 export const PRODUCT_ALIAS_LABEL = 'نام‌های جایگزین برای تشخیص AI:';
 
 function normalizeDetectionText(value: string): string {
-  return String(value || '')
-    .replace(/[يى]/g, 'ی')
-    .replace(/ك/g, 'ک')
-    .replace(/‌/g, ' ')
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+  return normalizeProductIdentity(value);
 }
 
 export function productDetectionAliases(description: string | null | undefined): string[] {

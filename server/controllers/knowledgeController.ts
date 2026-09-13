@@ -29,6 +29,11 @@ import {
 } from '../../shared/productPurchaseLink';
 import { productDescriptionWithoutAliases, productDetectionAliases, withProductDetectionAliases } from '../services/productDetectionAliases';
 import { validateProductTaxonomyAssignment } from '../services/productTaxonomyValidation';
+import {
+  findCanonicalProductConflictInDatabase,
+  withCanonicalProductWriteLock,
+} from '../services/productCanonicalService';
+import { parseProductAliasInput, PRODUCT_ALREADY_EXISTS_MESSAGE } from '../../shared/productCanonicalIdentity';
 
 async function attachCategoryKnowledge<T extends { id: string }>(categories: T[]) {
   const scopes = categories.map((category) => categoryKnowledgeScope(category.id));
@@ -815,32 +820,60 @@ export async function createProduct(req: Request, res: Response) {
 
     const createdSlug = slug || `prod-${Date.now()}`;
 
-    const product = await prisma.insuranceProduct.create({
-      data: {
+    const creation = await withCanonicalProductWriteLock(async () => {
+      const conflict = await findCanonicalProductConflictInDatabase(prisma, {
         name,
         slug: createdSlug,
-        category,
-        categoryId: taxonomy.categoryId,
         subCategoryId: taxonomy.subCategoryId,
-        description: withProductDetectionAliases(description || '', detectionAliases),
+        aliases: parseProductAliasInput(detectionAliases),
         status: status || 'ACTIVE',
-        introduction,
-        coverage,
-        exclusions,
-        benefits,
-        requiredDocuments,
-        purchaseConditions,
-        purchaseUrl: normalizeProductPurchaseUrl(purchaseUrl),
-        renewalRules,
-        claimProcess,
-        commonQuestions,
-        aiKnowledgeArticle: aiKnowledgeArticle || null,
-        aiRules: aiRules || null,
-      },
+      });
+      if (conflict) return { conflict, product: null };
+
+      const product = await prisma.insuranceProduct.create({
+        data: {
+          name,
+          slug: createdSlug,
+          category,
+          categoryId: taxonomy.categoryId,
+          subCategoryId: taxonomy.subCategoryId,
+          description: withProductDetectionAliases(description || '', detectionAliases),
+          status: status || 'ACTIVE',
+          introduction,
+          coverage,
+          exclusions,
+          benefits,
+          requiredDocuments,
+          purchaseConditions,
+          purchaseUrl: normalizeProductPurchaseUrl(purchaseUrl),
+          renewalRules,
+          claimProcess,
+          commonQuestions,
+          aiKnowledgeArticle: aiKnowledgeArticle || null,
+          aiRules: aiRules || null,
+        },
+      });
+      return { conflict: null, product };
     });
 
-    return res.status(201).json({ success: true, data: product });
+    if (creation.conflict) {
+      return res.status(409).json({
+        success: false,
+        code: 'PRODUCT_ALREADY_EXISTS',
+        error: PRODUCT_ALREADY_EXISTS_MESSAGE,
+        existingProduct: {
+          id: creation.conflict.existingProduct.id,
+          name: creation.conflict.existingProduct.name,
+        },
+        conflictReason: creation.conflict.reason,
+      });
+    }
+
+    return res.status(201).json({ success: true, data: creation.product });
   } catch (error: any) {
+    if (error?.code === 'P2002') {
+      return res.status(409).json({ success: false, code: 'PRODUCT_ALREADY_EXISTS', error: PRODUCT_ALREADY_EXISTS_MESSAGE });
+    }
     return res.status(500).json({ success: false, error: error.message });
   }
 }
@@ -859,7 +892,7 @@ export async function updateProduct(req: Request, res: Response) {
 
     const existing = await prisma.insuranceProduct.findUnique({
       where: { id },
-      select: { description: true, categoryId: true, subCategoryId: true },
+      select: { name: true, slug: true, description: true, status: true, categoryId: true, subCategoryId: true },
     });
     if (!existing) {
       return res.status(404).json({ success: false, error: 'محصول پیدا نشد.' });
@@ -874,20 +907,51 @@ export async function updateProduct(req: Request, res: Response) {
       return res.status(400).json({ success: false, error: taxonomy.error });
     }
 
-    const updated = await prisma.insuranceProduct.update({
-      where: { id },
-      data: {
-        ...body,
-        categoryId: taxonomy.categoryId,
+    const finalAliases = detectionAliases !== undefined
+      ? parseProductAliasInput(detectionAliases)
+      : productDetectionAliases(existing.description);
+    const update = await withCanonicalProductWriteLock(async () => {
+      const conflict = await findCanonicalProductConflictInDatabase(prisma, {
+        id,
+        name: body.name !== undefined ? body.name : existing.name,
+        slug: body.slug !== undefined ? body.slug : existing.slug,
         subCategoryId: taxonomy.subCategoryId,
-        ...(detectionAliases !== undefined
-          ? { description: withProductDetectionAliases(body.description ?? existing.description ?? '', detectionAliases) }
-          : {}),
-        ...(body.purchaseUrl !== undefined
-          ? { purchaseUrl: normalizeProductPurchaseUrl(body.purchaseUrl) }
-          : {}),
-      },
+        aliases: finalAliases,
+        status: body.status !== undefined ? body.status : existing.status,
+      }, id);
+      if (conflict) return { conflict, product: null };
+
+      const product = await prisma.insuranceProduct.update({
+        where: { id },
+        data: {
+          ...body,
+          categoryId: taxonomy.categoryId,
+          subCategoryId: taxonomy.subCategoryId,
+          ...(detectionAliases !== undefined
+            ? { description: withProductDetectionAliases(body.description ?? existing.description ?? '', detectionAliases) }
+            : {}),
+          ...(body.purchaseUrl !== undefined
+            ? { purchaseUrl: normalizeProductPurchaseUrl(body.purchaseUrl) }
+            : {}),
+        },
+      });
+      return { conflict: null, product };
     });
+
+    if (update.conflict) {
+      return res.status(409).json({
+        success: false,
+        code: 'PRODUCT_ALREADY_EXISTS',
+        error: PRODUCT_ALREADY_EXISTS_MESSAGE,
+        existingProduct: {
+          id: update.conflict.existingProduct.id,
+          name: update.conflict.existingProduct.name,
+        },
+        conflictReason: update.conflict.reason,
+      });
+    }
+
+    const updated = update.product!;
 
     return res.status(200).json({ success: true, data: {
       ...updated,
@@ -895,6 +959,9 @@ export async function updateProduct(req: Request, res: Response) {
       detectionAliases: productDetectionAliases(updated.description),
     } });
   } catch (error: any) {
+    if (error?.code === 'P2002') {
+      return res.status(409).json({ success: false, code: 'PRODUCT_ALREADY_EXISTS', error: PRODUCT_ALREADY_EXISTS_MESSAGE });
+    }
     return res.status(500).json({ success: false, error: error.message });
   }
 }
