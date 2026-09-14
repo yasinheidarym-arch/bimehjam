@@ -11,7 +11,10 @@ import {
   setAiSchedule,
 } from '../services/settingService';
 import { effectiveAiStatusLabel } from '../../shared/aiSchedule';
-import { getGoftinoAiPolicyCatalog, setGoftinoAiPolicyEnabled } from '../services/goftinoAiPolicyService';
+import {
+  getGoftinoAiPolicyAdminData,
+  setGoftinoAiPolicyConfiguration,
+} from '../services/goftinoAiPolicyService';
 
 // GET /api/ai/mode
 export async function getAiModeController(req: Request, res: Response) {
@@ -160,7 +163,7 @@ export async function getAiResponsePoliciesController(
   res: Response
 ) {
   try {
-    const policies = await getGoftinoAiPolicyCatalog();
+    const policies = await getGoftinoAiPolicyAdminData();
 
     return res.json({
       success: true,
@@ -196,17 +199,23 @@ export async function updateAiResponsePolicyController(
 ) {
   try {
     const { id } = req.params;
-    const { enabled } = req.body;
-    if (typeof enabled !== 'boolean') {
-      return res.status(400).json({ success: false, error: 'وضعیت روشن/خاموش باید مشخص باشد.' });
+    const { enabled, categoryId } = req.body;
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'وضعیت روشن/خاموش نامعتبر است.' });
     }
-    const updated = await setGoftinoAiPolicyEnabled(id, enabled);
+    if (categoryId !== undefined && categoryId !== null && typeof categoryId !== 'string') {
+      return res.status(400).json({ success: false, error: 'شناسهٔ دستهٔ بیمه‌ای نامعتبر است.' });
+    }
+    if (enabled === undefined && categoryId === undefined) {
+      return res.status(400).json({ success: false, error: 'حداقل وضعیت AI یا دستهٔ بیمه‌ای باید مشخص شود.' });
+    }
+    const updated = await setGoftinoAiPolicyConfiguration(id, { enabled, categoryId });
 
 
     return res.json({
       success: true,
       data: updated,
-      message: 'وضعیت پاسخ‌گویی AI ذخیره شد.',
+      message: 'تنظیمات پاسخ‌گویی AI ذخیره شد.',
     });
 
   } catch (error: any) {

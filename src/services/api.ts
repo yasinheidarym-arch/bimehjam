@@ -204,7 +204,7 @@ export const aiPolicyService = {
 
   updatePolicy: async (
     id: string,
-    data: { enabled: boolean }
+    data: { enabled?: boolean; categoryId?: string | null }
   ) => {
     return apiClient.put(
       `/settings/ai-response-policies/${id}`,

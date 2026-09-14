@@ -97,6 +97,7 @@ router.get(
 router.put(
   '/settings/ai-response-policies/:id',
   authenticateToken,
+  requireRole(['ADMIN']),
   updateAiResponsePolicyController
 );
 

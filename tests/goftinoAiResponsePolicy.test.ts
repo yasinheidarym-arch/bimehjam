@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 import { composeScopedKnowledge } from '../server/services/categoryKnowledgeScope.ts';
 import { decideGoftinoAiPolicy, goftinoAiResponseMode } from '../server/services/goftinoAiPolicyDecision.ts';
 import { findCategoryForCatalogTopic, findGoftinoCatalogTopic, GOFTINO_TOPIC_CATALOG } from '../server/services/goftinoTopicCatalog.ts';
+import {
+  goftinoCategorySettingKey,
+  goftinoPolicyConfigurationError,
+  resolveStoredGoftinoCategoryMapping,
+} from '../shared/goftinoCategoryMapping.ts';
 
 const responsibilityPolicy = {
   goftinoTopicId: 'insurance-responsibility',
@@ -93,4 +98,65 @@ test('catalog contains exactly the ten uploaded Goftino topics', () => {
   assert.equal(GOFTINO_TOPIC_CATALOG.length, 10);
   const claims = GOFTINO_TOPIC_CATALOG.find((item) => item.id === 'claims');
   assert.deepEqual(claims?.categoryIdentityCandidates, []);
+  assert.equal(claims?.requiresInsuranceCategory, true);
+});
+
+test('stored topic mapping resolves claims to its configured category by stable ids', () => {
+  const topic = GOFTINO_TOPIC_CATALOG.find((item) => item.id === 'claims')!;
+  const category = { id: 'category-claims', slug: 'khesarat', name: 'خسارت', status: 'ACTIVE' };
+  const mapping = resolveStoredGoftinoCategoryMapping({
+    categories: [category], configuredCategoryId: category.id,
+    hasConfiguredSetting: true, legacyFallbackCategoryId: null,
+  });
+  assert.equal(mapping.source, 'SETTING');
+  assert.equal(mapping.category?.id, 'category-claims');
+  const decision = decideGoftinoAiPolicy({
+    goftinoTopicId: topic.id,
+    goftinoTopicTitle: topic.title,
+    insuranceCategoryId: mapping.category?.id || null,
+  }, true);
+  assert.equal(decision.kind, 'ALLOW');
+  if (decision.kind === 'ALLOW') assert.equal(decision.policy.insuranceCategoryId, 'category-claims');
+});
+
+test('stored mapping has priority over the legacy responsibility name fallback', () => {
+  const legacy = { id: 'legacy-category', slug: 'responsibility', name: 'مسئولیت', status: 'ACTIVE' };
+  const configured = { id: 'configured-category', slug: 'custom', name: 'دستهٔ انتخاب‌شده', status: 'ACTIVE' };
+  const mapping = resolveStoredGoftinoCategoryMapping({
+    categories: [legacy, configured], configuredCategoryId: configured.id,
+    hasConfiguredSetting: true, legacyFallbackCategoryId: legacy.id,
+  });
+  assert.equal(mapping.source, 'SETTING');
+  assert.equal(mapping.category?.id, configured.id);
+});
+
+test('missing mapping preserves legacy fallback but is not reported as a stored mapping', () => {
+  const category = { id: 'category-responsibility', slug: 'responsibility', name: 'مسئولیت', status: 'ACTIVE' };
+  const mapping = resolveStoredGoftinoCategoryMapping({
+    categories: [category], configuredCategoryId: null,
+    hasConfiguredSetting: false, legacyFallbackCategoryId: category.id,
+  });
+  assert.equal(mapping.source, 'LEGACY_FALLBACK');
+  assert.equal(mapping.category?.id, category.id);
+});
+
+test('invalid stored category never silently falls back to a name match', () => {
+  const fallback = { id: 'fallback', slug: 'responsibility', name: 'مسئولیت', status: 'ACTIVE' };
+  const mapping = resolveStoredGoftinoCategoryMapping({
+    categories: [fallback], configuredCategoryId: 'deleted-category',
+    hasConfiguredSetting: true, legacyFallbackCategoryId: fallback.id,
+  });
+  assert.equal(mapping.source, 'INVALID_SETTING');
+  assert.equal(mapping.category, null);
+});
+
+test('enabled insurance-consultation topics require a valid active category', () => {
+  const topic = GOFTINO_TOPIC_CATALOG.find((item) => item.id === 'claims')!;
+  assert.match(goftinoPolicyConfigurationError(topic.requiresInsuranceCategory, true, null) || '', /دستهٔ بیمه‌ای فعال/);
+  assert.equal(goftinoPolicyConfigurationError(topic.requiresInsuranceCategory, true, { id: 'c1', slug: 'x', name: 'دسته', status: 'ACTIVE' }), null);
+  assert.equal(goftinoPolicyConfigurationError(topic.requiresInsuranceCategory, false, null), null);
+});
+
+test('category mapping setting keys use only the stable Goftino topic id', () => {
+  assert.equal(goftinoCategorySettingKey('claims'), 'goftino_ai_category:claims');
 });

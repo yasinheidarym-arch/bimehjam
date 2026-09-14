@@ -3,70 +3,82 @@ export type GoftinoTopicCatalogEntry = {
   title: string;
   aliases: readonly string[];
   categoryIdentityCandidates: readonly string[];
+  requiresInsuranceCategory: boolean;
 };
 
-// Fixed catalog copied from the uploaded Goftino topic list. Category identities
-// are internal aliases and are never editable from the administration panel.
+// Fixed catalog copied from the uploaded Goftino topic list. Identity candidates
+// are retained only as a compatibility fallback until an administrator stores
+// an explicit category id for the stable topic id.
 export const GOFTINO_TOPIC_CATALOG: readonly GoftinoTopicCatalogEntry[] = [
   {
     id: 'insurance-responsibility',
     title: 'بخش مشاوره و خرید بیمه های مسئولیت',
     aliases: ['بخش مشاوره و خرید بیمه های مسئولیت'],
     categoryIdentityCandidates: ['responsibility', 'مسئولیت', 'بیمه مسئولیت', 'بیمه های مسئولیت'],
+    requiresInsuranceCategory: true,
   },
   {
     id: 'insurance-fire',
     title: 'بخش مشاوره و خرید بیمه های آتش سوزی',
     aliases: ['بخش مشاوره و خرید بیمه های آتش سوزی'],
     categoryIdentityCandidates: ['fire', 'property', 'آتش سوزی', 'بیمه آتش سوزی', 'بیمه های آتش سوزی', 'اموال'],
+    requiresInsuranceCategory: true,
   },
   {
     id: 'insurance-vehicle',
     title: 'بخش مشاوره و خرید بیمه های خودرو',
     aliases: ['بخش مشاوره و خرید بیمه های خودرو'],
     categoryIdentityCandidates: ['vehicle', 'auto', 'خودرو', 'بیمه خودرو', 'بیمه های خودرو'],
+    requiresInsuranceCategory: true,
   },
   {
     id: 'insurance-engineering',
     title: 'بخش مشاوره و خرید بیمه های مهندسی',
     aliases: ['بخش مشاوره و خرید بیمه های مهندسی'],
     categoryIdentityCandidates: ['engineering', 'مهندسی', 'بیمه مهندسی', 'بیمه های مهندسی'],
+    requiresInsuranceCategory: true,
   },
   {
     id: 'other-insurance',
     title: 'بخش مشاوره و خرید سایر بیمه ها',
     aliases: ['بخش مشاوره و خرید سایر بیمه ها'],
     categoryIdentityCandidates: [],
+    requiresInsuranceCategory: true,
   },
   {
     id: 'claims',
     title: 'بخش مشاوره خسارت',
     aliases: ['بخش مشاوره خسارت'],
     categoryIdentityCandidates: [],
+    requiresInsuranceCategory: true,
   },
   {
     id: 'issuance-follow-up',
     title: 'پیگیری درخواست صدور بیمه نامه',
     aliases: ['پیگیری درخواست صدور بیمه نامه'],
     categoryIdentityCandidates: [],
+    requiresInsuranceCategory: false,
   },
   {
     id: 'partnership',
     title: 'درخواست همکاری با بیمه جم',
     aliases: ['درخواست همکاری با بیمه جم'],
     categoryIdentityCandidates: [],
+    requiresInsuranceCategory: false,
   },
   {
     id: 'technical-support',
     title: 'پشتیبانی فنی سامانه بیمه جم',
     aliases: ['پشتیبانی فنی سامانه بیمه جم'],
     categoryIdentityCandidates: [],
+    requiresInsuranceCategory: false,
   },
   {
     id: 'management',
     title: 'ارتباط مستقیم با مدیریت بیمه جم',
     aliases: ['ارتباط مستقیم با مدیریت بیمه جم'],
     categoryIdentityCandidates: [],
+    requiresInsuranceCategory: false,
   },
 ];
 
