@@ -18,8 +18,10 @@ import {
   LEGACY_SAME_PAGE_RESPONSE,
   PREVIOUS_DIFFERENT_PAGE_RESPONSE,
   PREVIOUS_DIFFERENT_PAGE_RESPONSE_V3,
+  PREVIOUS_DIFFERENT_PAGE_RESPONSE_V4,
   PREVIOUS_SAME_PAGE_RESPONSE,
   PREVIOUS_SAME_PAGE_RESPONSE_V3,
+  PREVIOUS_SAME_PAGE_RESPONSE_V4,
   parseQuotationRoutingTemplates,
   PURCHASE_LINK_RULE_CATEGORY,
   PURCHASE_LINK_RULE_DIRECTIVE,
@@ -164,11 +166,11 @@ async function ensureSeedRules() {
         const raw = JSON.parse(purchaseLinkRule.directive) as Record<string, unknown>;
         const normalized = { ...parsedRouting };
         let requiresUpdate = false;
-        if ([LEGACY_SAME_PAGE_RESPONSE, PREVIOUS_SAME_PAGE_RESPONSE, PREVIOUS_SAME_PAGE_RESPONSE_V3].includes(String(raw.samePageResponse || ''))) {
+        if ([LEGACY_SAME_PAGE_RESPONSE, PREVIOUS_SAME_PAGE_RESPONSE, PREVIOUS_SAME_PAGE_RESPONSE_V3, PREVIOUS_SAME_PAGE_RESPONSE_V4].includes(String(raw.samePageResponse || ''))) {
           normalized.samePageResponse = DEFAULT_QUOTATION_ROUTING_TEMPLATES.samePageResponse;
           requiresUpdate = true;
         }
-        if ([LEGACY_DIFFERENT_PAGE_RESPONSE, PREVIOUS_DIFFERENT_PAGE_RESPONSE, PREVIOUS_DIFFERENT_PAGE_RESPONSE_V3].includes(String(raw.differentPageResponse || ''))) {
+        if ([LEGACY_DIFFERENT_PAGE_RESPONSE, PREVIOUS_DIFFERENT_PAGE_RESPONSE, PREVIOUS_DIFFERENT_PAGE_RESPONSE_V3, PREVIOUS_DIFFERENT_PAGE_RESPONSE_V4].includes(String(raw.differentPageResponse || ''))) {
           normalized.differentPageResponse = DEFAULT_QUOTATION_ROUTING_TEMPLATES.differentPageResponse;
           requiresUpdate = true;
         }
@@ -277,9 +279,20 @@ async function ensureSeedRules() {
     await prisma.aiRule.update({ where: { id: completionRule.id }, data: { directive: QUOTATION_COMPLETION_RULE_DIRECTIVE } });
   } else {
     const parsed = parseQuotationCompletionRule(completionRule.directive);
-    if (parsed && (parsed.callSuccess === LEGACY_QUOTATION_CALL_SUCCESS || parsed.chatSuccess === LEGACY_QUOTATION_CHAT_SUCCESS)) {
+    if (parsed) {
+      const raw = (() => {
+        try { return JSON.parse(completionRule.directive) as Record<string, unknown>; }
+        catch { return {}; }
+      })();
+      const needsSummaryDefaults = typeof raw.summaryPrompt !== 'string' || !raw.summaryPrompt.trim()
+        || typeof raw.summaryCorrectionPrompt !== 'string' || !raw.summaryCorrectionPrompt.trim();
+      if (!needsSummaryDefaults && parsed.callSuccess !== LEGACY_QUOTATION_CALL_SUCCESS && parsed.chatSuccess !== LEGACY_QUOTATION_CHAT_SUCCESS) return;
       await prisma.aiRule.update({ where: { id: completionRule.id }, data: { directive: serializeQuotationCompletionRule({
         ...parsed,
+        ...(needsSummaryDefaults ? {
+          summaryPrompt: DEFAULT_QUOTATION_COMPLETION_CONFIG.summaryPrompt,
+          summaryCorrectionPrompt: DEFAULT_QUOTATION_COMPLETION_CONFIG.summaryCorrectionPrompt,
+        } : {}),
         ...(parsed.callSuccess === LEGACY_QUOTATION_CALL_SUCCESS ? { callSuccess: DEFAULT_QUOTATION_COMPLETION_CONFIG.callSuccess } : {}),
         ...(parsed.chatSuccess === LEGACY_QUOTATION_CHAT_SUCCESS ? { chatSuccess: DEFAULT_QUOTATION_COMPLETION_CONFIG.chatSuccess } : {}),
       }) } });

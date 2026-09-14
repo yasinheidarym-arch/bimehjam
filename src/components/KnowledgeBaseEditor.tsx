@@ -3866,8 +3866,10 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
               ) : behaviorForm.completionConfig ? (
                 <div className="space-y-3 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
                   <p className="text-[11px] text-emerald-800">تمام متن‌های مرحلهٔ پایانی از همین قانون خوانده می‌شوند و پس از ذخیره، بدون deploy روی پیام بعدی اثر دارند.</p>
-                  <p className="text-[11px] text-emerald-700">مسیر جدید پایان استعلام فقط تماس کارشناس است. متغیرهای مجاز: <code>{'{{slaText}}'}</code>، <code>{'{{slaMinutes}}'}</code>، <code>{'{{customerTitle}}'}</code> و <code>{'{{customerLastName}}'}</code>.</p>
+                  <p className="text-[11px] text-emerald-700">پیش از ثبت نهایی، خلاصه برای تأیید مشتری نمایش داده می‌شود. متغیرهای مجاز: <code>{'{{summary}}'}</code>، <code>{'{{customerName}}'}</code>، <code>{'{{productName}}'}</code>، <code>{'{{slaText}}'}</code>، <code>{'{{slaMinutes}}'}</code>، <code>{'{{customerTitle}}'}</code> و <code>{'{{customerLastName}}'}</code>.</p>
                   {([
+                    ['summaryPrompt', 'متن خلاصه و درخواست تأیید پیش از ثبت'],
+                    ['summaryCorrectionPrompt', 'پیام درخواست اصلاح یا تأیید خلاصه'],
                     ['callSuccess', 'پیام پس از ثبت موفق مسیر تماس'],
                     ['failure', 'پیام شکست ثبت واقعی'],
                     ['failedTerminal', 'پاسخ ادامه گفتگو پس از شکست'],

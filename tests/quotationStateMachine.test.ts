@@ -181,7 +181,7 @@ test('all twenty questions complete without manufacturing or reordering question
   assert.equal(Object.keys(state!.answers).length, 20);
 });
 
-test('completion collects contact information then routes directly to callback', () => {
+test('completion collects contact information, shows a summary, and routes only after confirmation', () => {
   const choicePrompt = 'تماس کارشناس یا اعلام قیمت در چت؟';
   let decision = startQuotationSubmission({ sessionId: 'session', productId: 'product', productName: 'مدیر ساختمان', answers: [], existingProfile: {}, choicePrompt });
   assert.equal(decision.state.step, 'FULL_NAME');
@@ -192,7 +192,15 @@ test('completion collects contact information then routes directly to callback',
   assert.equal(decision.state.step, 'CITY');
   assert.equal(advanceQuotationSubmission(decision.state, 'چقدر هزینه دارد؟').state.profile.city, undefined);
   decision = advanceQuotationSubmission(decision.state, 'تهران');
-  assert.equal(decision.state.step, 'CALLBACK_READY');
+  assert.equal(decision.state.step, 'CONFIRM');
+  assert.equal(decision.state.status, 'AWAITING_CONFIRMATION');
+  assert.equal(decision.action, 'ASK');
+  assert.match(decision.replyText, /مدیر ساختمان/);
+  assert.match(decision.replyText, /آرش رضایی/);
+  const correction = advanceQuotationSubmission(decision.state, 'شهر اشتباه است');
+  assert.equal(correction.action, 'ASK');
+  assert.equal(correction.state.step, 'CONFIRM');
+  decision = advanceQuotationSubmission(decision.state, 'بله، درسته');
   assert.equal(decision.action, 'ROUTE');
   if (decision.action === 'ROUTE') assert.equal(decision.route, 'CALL');
 });

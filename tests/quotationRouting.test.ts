@@ -34,8 +34,8 @@ test('same product page points to the form on the current page without repeating
   const reply = renderQuotationRoutingTemplate(DEFAULT_QUOTATION_ROUTING_TEMPLATES.samePageResponse, {
     productName: 'بیمه مسئولیت مدیر ساختمان', purchaseUrl, currentPageUrl: `${purchaseUrl}/`,
   });
-  assert.match(reply, /فرم استعلام آنلاین همین صفحه/);
-  assert.match(reply, /همینجا چند سؤال/);
+  assert.match(reply, /فرم آنلاین همین صفحه/);
+  assert.match(reply, /همین‌جا مرحله‌به‌مرحله/);
   assert.doesNotMatch(reply, /https?:\/\//);
 });
 
@@ -75,7 +75,7 @@ test('responsibility purchase intent carries into the next product-selection tur
   const reply = renderQuotationRoutingTemplate(DEFAULT_QUOTATION_ROUTING_TEMPLATES.samePageResponse, {
     productName: 'بیمه مسئولیت مدیر ساختمان', purchaseUrl, currentPageUrl: purchaseUrl,
   });
-  assert.match(reply, /فرم استعلام/);
+  assert.match(reply, /فرم آنلاین/);
   assert.doesNotMatch(reply, /نوع کاربری|چه بیمه‌ای|چه کمکی/);
 });
 
@@ -105,7 +105,7 @@ test('choosing chat quotation asks configured questions in order and stores each
   assert.equal(quotationQuestionReply(currentRequiredQuestion(questions, answers)!), 'متراژ کل چقدر است؟');
 });
 
-test('completed answers collect profile and route new flows directly to callback', () => {
+test('completed answers collect profile, show the configured summary, and await confirmation', () => {
   const choicePrompt = 'تماس یا اعلام قیمت در چت؟';
   let decision = startQuotationSubmission({
     sessionId: 'session-1',
@@ -123,6 +123,12 @@ test('completed answers collect profile and route new flows directly to callback
   decision = advanceQuotationSubmission(decision.state, '09123456789');
   assert.match(decision.replyText, /شهر/);
   decision = advanceQuotationSubmission(decision.state, 'تهران');
+  assert.equal(decision.state.status, 'AWAITING_CONFIRMATION');
+  assert.equal(decision.action, 'ASK');
+  assert.match(decision.replyText, /نوع کاربری ساختمان: مجتمع مسکونی/);
+  assert.match(decision.replyText, /یاسین حیدری/);
+  assert.doesNotMatch(decision.replyText, /ثبت شد|ارجاع شد|کد یکتا/);
+  decision = advanceQuotationSubmission(decision.state, 'تأیید می‌کنم');
   assert.equal(decision.state.status, 'PROCESSING');
   assert.equal(decision.action, 'ROUTE');
   if (decision.action === 'ROUTE') assert.equal(decision.route, 'CALL');

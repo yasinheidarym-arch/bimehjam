@@ -33,22 +33,27 @@ test('clear prior duration can prefill its matching field only', async () => {
   assert.deepEqual(result, { policy_duration: '90' });
 });
 
-test('new quotation completion routes directly to callback after profile is complete', () => {
+test('new quotation completion waits for summary confirmation after profile is complete', () => {
   const result = startQuotationSubmission({
     sessionId: 's', productId: 'p', productName: 'محصول', answers: [], choicePrompt: 'legacy',
     existingProfile: { fullName: 'محمد شجاع', mobile: '09120000000', city: 'تهران' },
   });
-  assert.equal(result.action, 'ROUTE');
-  if (result.action === 'ROUTE') assert.equal(result.route, 'CALL');
+  assert.equal(result.action, 'ASK');
+  assert.equal(result.state.step, 'CONFIRM');
+  assert.equal(result.state.status, 'AWAITING_CONFIRMATION');
+  assert.match(result.replyText, /محمد شجاع/);
 });
 
-test('profile collection routes to callback immediately after city', () => {
+test('profile collection shows summary after city and routes only on confirmation', () => {
   const initial = startQuotationSubmission({
     sessionId: 's', productId: 'p', productName: 'محصول', answers: [], choicePrompt: 'legacy',
     existingProfile: { fullName: 'محمد شجاع', mobile: '09120000000' },
   });
   assert.equal(initial.action, 'ASK');
-  const result = advanceQuotationSubmission(initial.state, 'تهران');
+  const summary = advanceQuotationSubmission(initial.state, 'تهران');
+  assert.equal(summary.action, 'ASK');
+  assert.equal(summary.state.step, 'CONFIRM');
+  const result = advanceQuotationSubmission(summary.state, 'تایید می کنم');
   assert.equal(result.action, 'ROUTE');
   if (result.action === 'ROUTE') assert.equal(result.route, 'CALL');
 });

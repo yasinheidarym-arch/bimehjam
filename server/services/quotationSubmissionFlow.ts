@@ -1,7 +1,7 @@
 import { validStoredFullName } from './humanHandoffNameFlow';
 import { isQuotationInterruption } from './quotationStateMachine';
 import { DEFAULT_HUMAN_HANDOFF_RULE_CONFIG, type HumanHandoffRuleConfig } from '../../shared/humanHandoffRule';
-import { DEFAULT_QUOTATION_COMPLETION_CONFIG, type QuotationCompletionRuleConfig } from '../../shared/quotationCompletionRule';
+import { DEFAULT_QUOTATION_COMPLETION_CONFIG, renderQuotationSummaryTemplate, type QuotationCompletionRuleConfig } from '../../shared/quotationCompletionRule';
 
 export type QuotationSubmissionStep = 'FULL_NAME' | 'LAST_NAME' | 'MOBILE' | 'CITY' | 'CALLBACK_READY' | 'DELIVERY_CHOICE' | 'CONFIRM';
 export type QuotationSubmissionStatus = 'COLLECTING_PROFILE' | 'AWAITING_DELIVERY_CHOICE' | 'PROCESSING' | 'SUBMITTED' | 'FAILED' | 'AWAITING_CONFIRMATION' | 'NOT_SUBMITTED';
@@ -106,7 +106,16 @@ function nextMissingStep(profile: QuotationSubmissionState['profile']): Quotatio
   if (!validStoredFullName(profile.fullName)) return 'FULL_NAME';
   if (!normalizeIranMobile(profile.mobile)) return 'MOBILE';
   if (!normalizeCity(profile.city)) return 'CITY';
-  return 'CALLBACK_READY';
+  return 'CONFIRM';
+}
+
+export function isQuotationSummaryConfirmed(message: string): boolean {
+  const normalized = String(message || '').replace(/‌/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  return /^(?:بله|آره|اره|تأیید|تایید|درسته|صحیحه|اوکی|بله[،, ]+درسته|تأیید(?:\s*می)?\s*کنم|تایید(?:\s*می)?\s*کنم)[.!،؟? ]*$/u.test(normalized);
+}
+
+function summaryReply(state: QuotationSubmissionState, config: QuotationCompletionRuleConfig): string {
+  return renderQuotationSummaryTemplate(config.summaryPrompt, state);
 }
 
 function questionFor(step: QuotationSubmissionStep, prompts: HumanHandoffRuleConfig): string {
@@ -128,6 +137,7 @@ export function startQuotationSubmission(input: {
   categoryId?: string | null;
   categoryName?: string | null;
   profilePrompts?: HumanHandoffRuleConfig;
+  completionConfig?: QuotationCompletionRuleConfig;
 }): QuotationSubmissionDecision {
   const profile = {
     ...(validStoredFullName(input.existingProfile.fullName) ? { fullName: validStoredFullName(input.existingProfile.fullName)! } : {}),
@@ -137,7 +147,7 @@ export function startQuotationSubmission(input: {
   const step = nextMissingStep(profile);
   const state: QuotationSubmissionState = {
     pending: true,
-    status: step === 'CALLBACK_READY' ? 'PROCESSING' : 'COLLECTING_PROFILE',
+    status: step === 'CONFIRM' ? 'AWAITING_CONFIRMATION' : 'COLLECTING_PROFILE',
     step,
     sessionId: input.sessionId,
     productId: input.productId,
@@ -149,8 +159,9 @@ export function startQuotationSubmission(input: {
     categoryId: input.categoryId || null,
     categoryName: input.categoryName || null,
   };
-  return step === 'CALLBACK_READY'
-    ? { action: 'ROUTE', route: 'CALL', replyText: '', state: { ...state, deliveryChoice: 'CALL' } }
+  const completionConfig = input.completionConfig || DEFAULT_QUOTATION_COMPLETION_CONFIG;
+  return step === 'CONFIRM'
+    ? { action: 'ASK', replyText: summaryReply(state, completionConfig), state }
     : { action: 'ASK', replyText: questionFor(step, input.profilePrompts || DEFAULT_HUMAN_HANDOFF_RULE_CONFIG), state };
 }
 
@@ -181,15 +192,21 @@ export function quotationDeliveryChoice(message: string): QuotationDeliveryChoic
   return null;
 }
 
-export function advanceQuotationSubmission(state: QuotationSubmissionState, message: string, semanticDeliveryChoice?: QuotationDeliveryChoice | null, profilePrompts: HumanHandoffRuleConfig = DEFAULT_HUMAN_HANDOFF_RULE_CONFIG): QuotationSubmissionDecision {
+export function advanceQuotationSubmission(state: QuotationSubmissionState, message: string, semanticDeliveryChoice?: QuotationDeliveryChoice | null, profilePrompts: HumanHandoffRuleConfig = DEFAULT_HUMAN_HANDOFF_RULE_CONFIG, completionConfig: QuotationCompletionRuleConfig = DEFAULT_QUOTATION_COMPLETION_CONFIG): QuotationSubmissionDecision {
   const next: QuotationSubmissionState = {
     ...state,
     profile: { ...state.profile },
-    step: state.step === 'CONFIRM' ? 'DELIVERY_CHOICE' : state.step,
-    status: state.step === 'CONFIRM' ? 'AWAITING_DELIVERY_CHOICE' : state.status,
     choicePrompt: state.choicePrompt || 'اطلاعات لازم را دارم. ترجیح می‌دهید کارشناس با شما تماس بگیرد یا قیمت پس از بررسی همین‌جا در چت اعلام شود؟',
   };
   const normalizedResponse = message.replace(/‌/g, ' ').trim();
+  if (next.step === 'CONFIRM') {
+    if (!isQuotationSummaryConfirmed(message)) {
+      return { action: 'ASK', replyText: completionConfig.summaryCorrectionPrompt, state: next };
+    }
+    next.status = 'PROCESSING';
+    next.deliveryChoice = 'CALL';
+    return { action: 'ROUTE', route: 'CALL', replyText: '', state: next };
+  }
   if (next.step === 'DELIVERY_CHOICE') {
     // Preserve already-running historical states without offering CHAT in new flows.
     const route = semanticDeliveryChoice || quotationDeliveryChoice(message);
@@ -226,10 +243,9 @@ export function advanceQuotationSubmission(state: QuotationSubmissionState, mess
   }
 
   next.step = nextMissingStep(next.profile);
-  if (next.step === 'CALLBACK_READY') {
-    next.status = 'PROCESSING';
-    next.deliveryChoice = 'CALL';
-    return { action: 'ROUTE', route: 'CALL', replyText: '', state: next };
+  if (next.step === 'CONFIRM') {
+    next.status = 'AWAITING_CONFIRMATION';
+    return { action: 'ASK', replyText: summaryReply(next, completionConfig), state: next };
   }
   next.status = 'COLLECTING_PROFILE';
   return { action: 'ASK', replyText: questionFor(next.step, profilePrompts), state: next };

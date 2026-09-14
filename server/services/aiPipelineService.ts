@@ -749,7 +749,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
           // The deterministic parser is only a provider-unavailable fallback.
         }
       }
-      const decision = advanceQuotationSubmission(pendingQuotationSubmission, submissionMessage, semanticDeliveryChoice, humanHandoffConfig);
+      const decision = advanceQuotationSubmission(pendingQuotationSubmission, submissionMessage, semanticDeliveryChoice, humanHandoffConfig, quotationCompletionConfig);
       const profile = decision.state.profile;
       await prisma.customer.update({
         where: { id: customer.id },
@@ -975,6 +975,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
           existingProfile: { fullName: customer.name, mobile: customer.phone, city: customer.city },
           choicePrompt: quotationCompletionPrompt,
           profilePrompts: humanHandoffConfig,
+          completionConfig: quotationCompletionConfig,
           currentPageUrl: brainResult.workflowContext?.currentPageUrl || null,
           categoryId: brainResult.workflowContext?.matchedCategory?.id || null,
           categoryName: brainResult.workflowContext?.matchedCategory?.name || null,

@@ -37,8 +37,8 @@ test('building managers price request offers its valid URL only once', () => {
   const input = { intent: 'Insurance Quotation', productId, purchaseUrl, message: 'قیمت بیمه مسئولیت مدیران ساختمان' };
   assert.equal(shouldOfferProductPurchaseLink(input), true);
   assert.match(productPurchaseLinkReply(purchaseUrl), new RegExp(purchaseUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(productPurchaseLinkReply(purchaseUrl), /فرم استعلام آنلاین/);
-  assert.match(productPurchaseLinkReply(purchaseUrl), /همینجا چند سؤال/);
+  assert.match(productPurchaseLinkReply(purchaseUrl), /فرم آنلاین این بیمه/);
+  assert.match(productPurchaseLinkReply(purchaseUrl), /همین‌جا مرحله‌به‌مرحله/);
   assert.doesNotMatch(productPurchaseLinkReply(purchaseUrl), /نوع کاربری ساختمان/);
   assert.equal(shouldOfferProductPurchaseLink({ ...input, offeredProductIds: [productId] }), false);
 });

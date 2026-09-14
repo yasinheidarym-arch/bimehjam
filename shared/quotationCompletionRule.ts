@@ -7,6 +7,8 @@ export const LEGACY_QUOTATION_CHAT_SUCCESS = 'اوکی، کارشناس قیمت
 
 export type QuotationCompletionRuleConfig = {
   version: 1;
+  summaryPrompt: string;
+  summaryCorrectionPrompt: string;
   choicePrompt: string;
   callSuccess: string;
   chatSuccess: string;
@@ -18,6 +20,8 @@ export type QuotationCompletionRuleConfig = {
 
 export const DEFAULT_QUOTATION_COMPLETION_CONFIG: QuotationCompletionRuleConfig = {
   version: 1,
+  summaryPrompt: 'لطفاً خلاصه اطلاعات زیر را بررسی کنید:\n{{summary}}\n\nاگر اطلاعات درست است، تأیید بفرمایید تا درخواست ثبت شود.',
+  summaryCorrectionPrompt: 'اگر موردی نیاز به اصلاح دارد، همان مورد و مقدار درست را بفرمایید؛ در غیر این صورت صحت اطلاعات را تأیید کنید.',
   choicePrompt: DEFAULT_QUOTATION_COMPLETION_PROMPT,
   callSuccess: 'ممنونم {{customerTitle}} {{customerLastName}}. اطلاعات درخواست‌تون کامل شد و برای کارشناسان مربوطه ارسال شد. همکاران ما در اولین فرصت با شما تماس می‌گیرند تا راهنمایی‌های لازم رو ارائه بدن و قیمت بیمه رو اعلام کنند.',
   chatSuccess: 'حتماً، کارشناس قیمت را بررسی می‌کند{{slaText}} و همین‌جا در چت با شما در ارتباط خواهد بود.',
@@ -27,7 +31,7 @@ export const DEFAULT_QUOTATION_COMPLETION_CONFIG: QuotationCompletionRuleConfig 
   chatSubmitted: 'درخواست بررسی و اعلام قیمت در چت قبلاً ثبت شده است.',
 };
 
-const COMPLETION_KEYS = ['choicePrompt', 'callSuccess', 'chatSuccess', 'failure', 'failedTerminal', 'callSubmitted', 'chatSubmitted'] as const;
+const COMPLETION_KEYS = ['summaryPrompt', 'summaryCorrectionPrompt', 'choicePrompt', 'callSuccess', 'chatSuccess', 'failure', 'failedTerminal', 'callSubmitted', 'chatSubmitted'] as const;
 
 export function parseQuotationCompletionRule(value: unknown): QuotationCompletionRuleConfig | null {
   if (typeof value === 'string' && value.trim() && !value.trim().startsWith('{')) {
@@ -40,7 +44,7 @@ export function parseQuotationCompletionRule(value: unknown): QuotationCompletio
     const variablesAreSafe = COMPLETION_KEYS.every(key => {
       if (typeof result[key] !== 'string' || !result[key].trim()) return false;
       return [...result[key].matchAll(/{{\s*([^{}]+?)\s*}}/g)]
-        .every(match => ['slaText', 'slaMinutes', 'customerTitle', 'customerLastName'].includes(match[1].trim()));
+        .every(match => ['slaText', 'slaMinutes', 'customerTitle', 'customerLastName', 'summary', 'customerName', 'productName'].includes(match[1].trim()));
     });
     return variablesAreSafe ? result : null;
   } catch { return null; }
@@ -65,6 +69,25 @@ export function renderQuotationCompletionSuccess(template: string, slaMinutes: n
     .replace(/{{\s*customerLastName\s*}}/g, customerLastName)
     .replace(/\s+([.،؛])/g, '$1')
     .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+export function renderQuotationSummaryTemplate(
+  template: string,
+  input: { productName: string; answers: Array<{ fieldLabel: string; value: string }>; profile: { fullName?: string; mobile?: string; city?: string } },
+): string {
+  const lines = [
+    `محصول: ${input.productName}`,
+    ...input.answers.map(answer => `${answer.fieldLabel}: ${answer.value}`),
+    `نام و نام خانوادگی: ${input.profile.fullName || 'ثبت نشده'}`,
+    `شماره همراه: ${input.profile.mobile || 'ثبت نشده'}`,
+    `شهر یا محل مورد بیمه: ${input.profile.city || 'ثبت نشده'}`,
+  ];
+  return template
+    .replace(/{{\s*summary\s*}}/g, lines.join('\n'))
+    .replace(/{{\s*customerName\s*}}/g, input.profile.fullName || '')
+    .replace(/{{\s*productName\s*}}/g, input.productName)
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
