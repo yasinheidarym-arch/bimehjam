@@ -277,6 +277,19 @@ export function purchaseLinkAssistedLeadState(productId: string, assistedLeadQue
 
 export type ConversionMode = 'ASSISTED_LEAD' | 'ASSISTED_QUOTE';
 
+export function quotationEntryConversionMode(input: {
+  activeSession: boolean;
+  currentMode?: ConversionMode | null;
+  storedSelectionMode?: ConversionMode | null;
+  assistedQuoteRequested: boolean;
+  assistedLeadRequested: boolean;
+}): ConversionMode | null {
+  if (input.activeSession) return input.currentMode || input.storedSelectionMode || 'ASSISTED_QUOTE';
+  if (input.assistedLeadRequested) return 'ASSISTED_LEAD';
+  if (input.assistedQuoteRequested) return 'ASSISTED_QUOTE';
+  return input.storedSelectionMode || null;
+}
+
 export function quotationQuestionLimitForConversionMode(mode: ConversionMode, assistedLeadQuestionLimit: number): number | undefined {
   return mode === 'ASSISTED_LEAD' ? Math.max(3, Math.min(5, assistedLeadQuestionLimit)) : undefined;
 }

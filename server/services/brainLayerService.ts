@@ -23,6 +23,7 @@ import {
   purchaseLinkAssistedLeadState,
   purchaseLinkDecisionLogSummary,
   purchaseLinkQuotationSelectedState,
+  quotationEntryConversionMode,
   quotationQuestionLimitForConversionMode,
   renderQuotationRoutingTemplate,
   shouldOfferProductPurchaseLink,
@@ -564,6 +565,32 @@ export async function processBrainLayer(params: {
     extractedKnowledge.matchedProduct
     && productRoutingResult.state.confirmedProductId === extractedKnowledge.matchedProduct.id,
   );
+  const productConfirmedThisTurn = Boolean(
+    detectedProductConfirmed
+    && productRoutingResult.state.confirmedProductId !== previousProductRoutingState?.confirmedProductId,
+  );
+  const storedPurchaseSelectionMode = extractedKnowledge.matchedProduct
+    && existingCollectedData.purchaseLinkState?.status === 'DETAILED_QUOTATION_SELECTED'
+    && existingCollectedData.purchaseLinkState?.productId === extractedKnowledge.matchedProduct.id
+    && ['ASSISTED_QUOTE', 'ASSISTED_LEAD'].includes(existingCollectedData.purchaseLinkState?.mode)
+    ? existingCollectedData.purchaseLinkState.mode as 'ASSISTED_QUOTE' | 'ASSISTED_LEAD'
+    : null;
+  const activeQuotationSession = Boolean(
+    extractedKnowledge.matchedProduct
+    && conversation.currentProductId === extractedKnowledge.matchedProduct.id,
+  );
+  const entryConversionMode = quotationEntryConversionMode({
+    activeSession: activeQuotationSession,
+    currentMode: existingCollectedData.conversionMode,
+    storedSelectionMode: storedPurchaseSelectionMode,
+    assistedQuoteRequested: directQuotationRequested,
+    assistedLeadRequested,
+  });
+  const awaitingCustomerChoice = Boolean(
+    extractedKnowledge.matchedProduct
+    && existingCollectedData.purchaseLinkState?.status === 'AWAITING_CUSTOMER_CHOICE'
+    && existingCollectedData.purchaseLinkState?.productId === extractedKnowledge.matchedProduct.id,
+  );
 
   if (
     !deterministicReply && suggestionAccepted && existingPageSuggestion &&
@@ -631,7 +658,7 @@ export async function processBrainLayer(params: {
     extractedKnowledge.matchedProduct &&
     detectedProductConfirmed &&
     extractedKnowledge.matchedProduct.purchaseUrl &&
-    (productConfirmationAccepted || ['OFFER_PURCHASE_ROUTE', 'REQUEST_LINK_AGAIN'].includes(semanticRoutingDecision || '') || (!semanticRoutingAvailable && shouldOfferProductPurchaseLink({
+    (((productConfirmationAccepted || productConfirmedThisTurn) && !entryConversionMode) || ['OFFER_PURCHASE_ROUTE', 'REQUEST_LINK_AGAIN'].includes(semanticRoutingDecision || '') || (!semanticRoutingAvailable && shouldOfferProductPurchaseLink({
       intent,
       productId: extractedKnowledge.matchedProduct.id,
       purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
@@ -665,7 +692,8 @@ export async function processBrainLayer(params: {
     quotationRoutingRule && routingRuleActive &&
     extractedKnowledge.matchedProduct &&
     detectedProductConfirmed &&
-    (semanticRoutingDecision === 'WAIT_FOR_PRODUCT_DECISION' || semanticRoutingDecision === 'WAIT_FOR_CHOICE' || (!semanticRoutingAvailable && shouldWaitForProductPurchaseDecision({
+    !entryConversionMode && !explicitFormRequested &&
+    (awaitingCustomerChoice || semanticRoutingDecision === 'WAIT_FOR_PRODUCT_DECISION' || semanticRoutingDecision === 'WAIT_FOR_CHOICE' || (!semanticRoutingAvailable && shouldWaitForProductPurchaseDecision({
       productId: extractedKnowledge.matchedProduct.id,
       purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl,
       offeredProductIds: offeredPurchaseLinkProductIds,
@@ -693,8 +721,7 @@ export async function processBrainLayer(params: {
       { productName: extractedKnowledge.matchedProduct.name, purchaseUrl: extractedKnowledge.matchedProduct.purchaseUrl, currentPageUrl },
     );
   } else if (
-    !deterministicReply && extractedKnowledge.matchedProduct && detectedProductConfirmed &&
-    (intent === 'Insurance Quotation' || assistedLeadRequested || conversation.currentProductId === extractedKnowledge.matchedProduct.id)
+    !deterministicReply && extractedKnowledge.matchedProduct && detectedProductConfirmed && entryConversionMode
   ) {
     const product = extractedKnowledge.matchedProduct;
     const categoryGuidanceKnowledge = extractedKnowledge.relevantArticles
@@ -723,7 +750,7 @@ export async function processBrainLayer(params: {
       && Number.isInteger(existingCollectedData.purchaseLinkState?.assistedLeadQuestionLimit)
       ? Number(existingCollectedData.purchaseLinkState.assistedLeadQuestionLimit)
       : null;
-    const conversionMode: 'ASSISTED_LEAD' | 'ASSISTED_QUOTE' = assistedLeadRequested || storedAssistedLimit ? 'ASSISTED_LEAD' : 'ASSISTED_QUOTE';
+    const conversionMode: 'ASSISTED_LEAD' | 'ASSISTED_QUOTE' = entryConversionMode;
     const assistedQuestionLimit = quotationQuestionLimitForConversionMode(
       conversionMode,
       storedAssistedLimit || quotationRoutingRule?.templates.assistedLeadQuestionLimit || 5,

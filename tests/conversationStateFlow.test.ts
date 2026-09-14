@@ -6,9 +6,12 @@ import { inferredProductConfirmedByCustomer, type ProductIntentRoutingState } fr
 import {
   DEFAULT_QUOTATION_ROUTING_TEMPLATES,
   isDetectedProductCurrentPage,
+  purchaseLinkAwaitingState,
   purchaseLinkQuotationSelectedState,
+  quotationEntryConversionMode,
   quotationQuestionLimitForConversionMode,
   renderQuotationRoutingTemplate,
+  shouldOfferProductPurchaseLink,
 } from '../shared/productPurchaseLink';
 import { isSimpleGreeting } from '../server/services/aiBehaviorRuntime';
 
@@ -90,4 +93,46 @@ test('confirmed product on another page gets its real URL and assisted quote rem
   assert.match(response, new RegExp(purchaseUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   const quote = purchaseLinkQuotationSelectedState('construction');
   assert.equal(quotationQuestionLimitForConversionMode(quote.mode, 5), undefined);
+});
+
+test('a newly confirmed construction product offers its route and waits without entering assisted quote', () => {
+  const productId = 'construction-workers';
+  const purchaseUrl = 'https://bimejam.example/construction-workers';
+  assert.equal(shouldOfferProductPurchaseLink({
+    intent: 'Insurance Quotation', productId, purchaseUrl,
+    message: 'بیمه کارگران ساختمان می‌خواهم',
+  }), true);
+  assert.deepEqual(purchaseLinkAwaitingState(productId), {
+    status: 'AWAITING_CUSTOMER_CHOICE', productId,
+  });
+  assert.equal(quotationEntryConversionMode({
+    activeSession: false,
+    assistedQuoteRequested: false,
+    assistedLeadRequested: false,
+  }), null);
+});
+
+test('an explicit chat quotation choice enters assisted quote', () => {
+  assert.equal(quotationEntryConversionMode({
+    activeSession: false,
+    assistedQuoteRequested: true,
+    assistedLeadRequested: false,
+  }), 'ASSISTED_QUOTE');
+});
+
+test('an explicit callback choice enters assisted lead', () => {
+  assert.equal(quotationEntryConversionMode({
+    activeSession: false,
+    assistedQuoteRequested: false,
+    assistedLeadRequested: true,
+  }), 'ASSISTED_LEAD');
+});
+
+test('an active quotation session continues without asking for the route again', () => {
+  assert.equal(quotationEntryConversionMode({
+    activeSession: true,
+    currentMode: 'ASSISTED_QUOTE',
+    assistedQuoteRequested: false,
+    assistedLeadRequested: false,
+  }), 'ASSISTED_QUOTE');
 });
