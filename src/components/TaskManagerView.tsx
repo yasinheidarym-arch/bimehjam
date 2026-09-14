@@ -77,7 +77,10 @@ interface TaskTypeDefinition {
 }
 
 const DEFAULT_TASK_SMS_TEMPLATE = 'بیمه جم: وظیفه «{{taskType}}» برای {{customerFullName}} ثبت شد. عنوان: {{taskTitle}} | اولویت: {{priority}} | شناسه: {{taskId}} | {{taskLink}}';
-const TASK_SMS_VARIABLES = ['{{taskType}}', '{{taskTitle}}', '{{priority}}', '{{customerFullName}}', '{{taskId}}', '{{taskLink}}'];
+const TASK_SMS_VARIABLES = [
+  '{{taskType}}', '{{taskTitle}}', '{{priority}}', '{{customerFullName}}',
+  '{{customerMobile}}', '{{goftinoUserId}}', '{{insuranceName}}', '{{taskId}}', '{{taskLink}}',
+];
 
 export const TaskManagerView: React.FC = () => {
   const [tasks, setTasks] = useState<TaskItem[]>([]);
@@ -176,11 +179,14 @@ export const TaskManagerView: React.FC = () => {
     setTaskTypeTemplate(DEFAULT_TASK_SMS_TEMPLATE);
   };
 
-  const taskSmsPreview = taskTypeTemplate.replace(/{{\s*(taskType|taskTitle|priority|customerFullName|taskId|taskLink)\s*}}/g, (_match, key) => ({
+  const taskSmsPreview = taskTypeTemplate.replace(/{{\s*(taskType|taskTitle|priority|customerFullName|customerMobile|goftinoUserId|insuranceName|taskId|taskLink)\s*}}/g, (_match, key) => ({
     taskType: newTaskTypeLabel || 'تماس برای قیمت‌دهی',
     taskTitle: 'پیگیری درخواست قیمت مشتری',
     priority: 'HIGH',
     customerFullName: 'علی رضایی',
+    customerMobile: '09120000000',
+    goftinoUserId: '4144',
+    insuranceName: 'بیمه مسئولیت احداث ساختمان',
     taskId: 'TASK-123',
     taskLink: 'https://bimehjam.com/admin/tasks?taskId=TASK-123',
   }[key] || ''));

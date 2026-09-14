@@ -3,6 +3,9 @@ export const TASK_SMS_TEMPLATE_VARIABLES = [
   'taskTitle',
   'priority',
   'customerFullName',
+  'customerMobile',
+  'goftinoUserId',
+  'insuranceName',
   'taskId',
   'taskLink',
 ] as const;

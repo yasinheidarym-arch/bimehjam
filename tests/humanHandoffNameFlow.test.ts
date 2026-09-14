@@ -22,7 +22,9 @@ test('completed quotation asks for missing name, stores full name, then builds t
   const complete = advanceHumanHandoffName({ reason: 'QUOTATION_COMPLETED', state: ask.state, message: 'علی رضایی' });
   assert.deepEqual(complete, { action: 'CREATE_TASK', fullName: 'علی رضایی', reason: 'QUOTATION_COMPLETED', nameStatus: 'RECORDED' });
   const message = renderTaskSmsTemplate('{{customerFullName}} - {{taskTitle}}', {
-    taskType: 'آماده‌سازی قیمت', taskTitle: 'محاسبه قیمت', priority: 'HIGH', customerFullName: complete.fullName || 'ثبت نشده', taskId: 'task-1', taskLink: '/tasks/task-1',
+    taskType: 'آماده‌سازی قیمت', taskTitle: 'محاسبه قیمت', priority: 'HIGH', customerFullName: complete.fullName || 'ثبت نشده',
+    customerMobile: 'ثبت نشده', goftinoUserId: 'ثبت نشده', insuranceName: 'بیمه مسئولیت',
+    taskId: 'task-1', taskLink: '/tasks/task-1',
   });
   assert.equal(message, 'علی رضایی - محاسبه قیمت');
 });

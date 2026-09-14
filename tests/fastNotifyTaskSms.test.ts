@@ -21,6 +21,7 @@ function createHarness(options: {
   duplicate?: boolean;
   smsTemplate?: string;
   customerFullName?: string | null;
+  taskTypeLabel?: string;
 } = {}) {
   const requests: Array<{ url: string; init?: RequestInit }> = [];
   const deliveryUpdates: Array<Record<string, unknown>> = [];
@@ -52,9 +53,12 @@ function createHarness(options: {
       },
       deliveryUpdate: async (_id: string, data: Record<string, unknown>) => { deliveryUpdates.push(data); },
       messageContext: async () => ({
-        taskTypeLabel: 'تماس برای قیمت‌دهی',
+        taskTypeLabel: options.taskTypeLabel || 'تماس برای قیمت‌دهی',
         smsTemplate: options.smsTemplate,
         customerFullName: options.customerFullName === undefined ? 'یاسین حیدری' : options.customerFullName,
+        customerMobile: '09370000000',
+        goftinoUserId: 'goftino-user-4144',
+        insuranceName: 'بیمه مسئولیت احداث ساختمان',
         taskLink: 'https://bimehjam.com/admin/tasks?taskId=task-123',
       }),
       fetcher,
@@ -124,8 +128,47 @@ test('custom task-type SMS template renders only allowlisted variables', async (
   assert.equal(body.message, 'تماس برای قیمت‌دهی | تماس برای قیمت‌دهی | HIGH | علی رضایی | task-123 | https://bimehjam.com/admin/tasks?taskId=task-123');
   assert.throws(() => validateTaskSmsTemplate('کلید: {{FASTNOTIFY_API_KEY}}'), /متغیر غیرمجاز/);
   assert.equal(renderTaskSmsTemplate('', {
-    taskType: 'تماس', taskTitle: 'پیگیری', priority: 'HIGH', customerFullName: 'علی رضایی', taskId: '1', taskLink: '/tasks/1',
+    taskType: 'تماس', taskTitle: 'پیگیری', priority: 'HIGH', customerFullName: 'علی رضایی',
+    customerMobile: '09120000000', goftinoUserId: 'user-1', insuranceName: 'بیمه مسئولیت',
+    taskId: '1', taskLink: '/tasks/1',
   }).includes('علی رضایی'), true);
+});
+
+test('price consultation and quotation task types render the configured customer context', async () => {
+  const template = [
+    'درخواست جدید مشاوره و اعلام قیمت بیمه جم',
+    '',
+    'نام مشتری: {{customerFullName}}',
+    'شماره همراه: {{customerMobile}}',
+    'شماره کاربر گفتینو: {{goftinoUserId}}',
+    'رشته بیمه‌ای: {{insuranceName}}',
+    'شماره تسک: {{taskId}}',
+    '',
+    'لطفاً در اولین فرصت پیگیری شود.',
+  ].join('\n');
+  for (const taskType of [
+    { id: 'Call Customer', label: 'تماس برای قیمت‌دهی' },
+    { id: 'CUSTOM_quote', label: 'استعلام قیمت' },
+  ]) {
+    const harness = createHarness({ smsTemplate: template, taskTypes: [taskType.id], taskTypeLabel: taskType.label });
+    harness.dependencies.messageContext = async () => ({
+      taskTypeLabel: taskType.label,
+      smsTemplate: template,
+      customerFullName: 'یاسین حیدری',
+      customerMobile: '09370000000',
+      goftinoUserId: 'goftino-user-4144',
+      insuranceName: 'بیمه مسئولیت احداث ساختمان',
+      taskLink: 'https://bimehjam.com/admin/tasks?taskId=task-123',
+    });
+    assert.equal(await dispatchTaskCreatedSmsCore({ ...task, type: taskType.id }, harness.dependencies), 'sent');
+    const body = JSON.parse(String(harness.requests[0].init?.body));
+    assert.equal(body.message, template
+      .replace('{{customerFullName}}', 'یاسین حیدری')
+      .replace('{{customerMobile}}', '09370000000')
+      .replace('{{goftinoUserId}}', 'goftino-user-4144')
+      .replace('{{insuranceName}}', 'بیمه مسئولیت احداث ساختمان')
+      .replace('{{taskId}}', 'task-123'));
+  }
 });
 
 test('provider failure is contained after task creation', async () => {

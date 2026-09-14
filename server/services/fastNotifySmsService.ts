@@ -14,17 +14,34 @@ export async function dispatchTaskCreatedSms(task: CreatedTaskForSms): Promise<S
     deliveryCreate: (data) => prisma.fastNotifySmsDelivery.create({ data: data as never, select: { id: true } }),
     deliveryUpdate: async (id, data) => { await prisma.fastNotifySmsDelivery.update({ where: { id }, data: data as never }); },
     messageContext: async (createdTask) => {
-      const [catalog, customer] = await Promise.all([
+      const [catalog, customer, conversation] = await Promise.all([
         getTaskTypeCatalog({ includeArchived: true }),
         createdTask.customerId
-          ? prisma.customer.findUnique({ where: { id: createdTask.customerId }, select: { name: true } })
+          ? prisma.customer.findUnique({
+              where: { id: createdTask.customerId },
+              select: { name: true, phone: true, goftinoUserId: true, interestedInsuranceTypes: true },
+            })
+          : Promise.resolve(null),
+        createdTask.conversationId
+          ? prisma.conversation.findUnique({
+              where: { id: createdTask.conversationId },
+              select: { currentProductName: true },
+            })
           : Promise.resolve(null),
       ]);
       const type = catalog.find((item) => item.id === createdTask.type);
+      let interestedInsuranceType: string | null = null;
+      try {
+        const values = JSON.parse(customer?.interestedInsuranceTypes || '[]');
+        interestedInsuranceType = Array.isArray(values) && typeof values[0] === 'string' ? values[0] : null;
+      } catch { /* Legacy malformed customer metadata has a safe fallback below. */ }
       return {
         taskTypeLabel: type?.label || createdTask.type,
         smsTemplate: type?.smsTemplate,
         customerFullName: customer?.name,
+        customerMobile: customer?.phone,
+        goftinoUserId: customer?.goftinoUserId,
+        insuranceName: conversation?.currentProductName || interestedInsuranceType,
         taskLink: `https://bimehjam.com/admin/tasks?taskId=${encodeURIComponent(createdTask.id)}`,
       };
     },

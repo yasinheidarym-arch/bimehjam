@@ -14,8 +14,16 @@ function list(value?: string): string[] {
   try { const parsed = JSON.parse(value || '[]'); return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : []; } catch { return []; }
 }
 
-export type CreatedTaskForSms = { id: string; title: string; priority: string; type: string; customerId?: string | null; assignedUserId?: string | null };
-export type TaskSmsMessageContext = { taskTypeLabel: string; smsTemplate?: string | null; customerFullName?: string | null; taskLink: string };
+export type CreatedTaskForSms = { id: string; title: string; priority: string; type: string; customerId?: string | null; conversationId?: string | null; assignedUserId?: string | null };
+export type TaskSmsMessageContext = {
+  taskTypeLabel: string;
+  smsTemplate?: string | null;
+  customerFullName?: string | null;
+  customerMobile?: string | null;
+  goftinoUserId?: string | null;
+  insuranceName?: string | null;
+  taskLink: string;
+};
 export type SmsDependencies = {
   settingFindMany: () => Promise<Array<{ key: string; value: string }>>;
   userFindUnique: (id: string) => Promise<{ id: string; role: string; mobile: string | null } | null>;
@@ -61,6 +69,9 @@ export async function dispatchTaskCreatedSmsCore(task: CreatedTaskForSms, deps: 
       taskTitle: task.title,
       priority: task.priority,
       customerFullName: context.customerFullName?.trim() || 'ثبت نشده',
+      customerMobile: context.customerMobile?.trim() || 'ثبت نشده',
+      goftinoUserId: context.goftinoUserId?.trim() || 'ثبت نشده',
+      insuranceName: context.insuranceName?.trim() || 'ثبت نشده',
       taskId: task.id,
       taskLink: context.taskLink,
     });
