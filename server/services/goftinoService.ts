@@ -5,6 +5,8 @@ import { getGoftinoUserData, getGoftinoVisitedPages } from './goftinoUserService
 import { resolveGoftinoAiPolicy } from './goftinoAiPolicyService';
 import { findGoftinoCatalogTopic } from './goftinoTopicCatalog';
 import { shouldExecuteAi } from '../../shared/aiSchedule';
+import { getActiveQuotationTurnBinding } from './quotationWorkflowService';
+import { goftinoMessageType } from '../../shared/goftinoMessageType';
 
 export interface GoftinoWebhookPayload {
   event?: string;
@@ -48,6 +50,7 @@ export interface GoftinoWebhookPayload {
       text?: string;
       content?: string;
       sender?: string;
+      type?: string;
     };
   };
   [key: string]: any;
@@ -410,6 +413,8 @@ export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
   // 5. Save message into Message table
   const finalMessageId = messageId ? String(messageId) : `msg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   
+  const quotationTurnBinding = await getActiveQuotationTurnBinding(conversation.id, conversation.currentProductId);
+  const messageType = goftinoMessageType(data.type, data.message?.type, payload?.type, payload?.message?.type);
   const savedMessage = await prisma.message.create({
     data: {
       conversationId: conversation.id,
@@ -418,7 +423,8 @@ export async function processGoftinoWebhook(payload: GoftinoWebhookPayload) {
       content: content.trim(),
       messageId: finalMessageId,
       channel: 'goftino',
-      messageType: 'TEXT',
+      messageType,
+      metadata: JSON.stringify({ quotationTurnBinding }),
     },
   });
 

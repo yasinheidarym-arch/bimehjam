@@ -353,6 +353,33 @@ export async function getOrCreateQuotationSession(params: {
   return session;
 }
 
+/** Read-only identity of the real, resumable quotation turn.
+ * A selected product on Conversation is intentionally not enough. */
+export async function getActiveQuotationTurnBinding(conversationId: string, productId?: string | null) {
+  const session = await prisma.quotationSession.findFirst({
+    where: {
+      conversationId,
+      status: 'IN_PROGRESS',
+      ...(productId ? { productId } : {}),
+    },
+    orderBy: [{ updatedAt: 'desc' }, { id: 'desc' }],
+    include: {
+      workflow: { include: { questions: { orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] } } },
+    },
+  });
+  if (!session) return null;
+  let answers: Record<string, string> = {};
+  try { answers = JSON.parse(session.collectedData || '{}'); } catch { answers = {}; }
+  const currentQuestion = applicableQuotationQuestions(session.workflow?.questions || [], answers)
+    .find(question => question.required && !answers[question.fieldName]) || null;
+  return {
+    sessionId: session.id,
+    productId: session.productId,
+    questionId: currentQuestion?.id || null,
+    fieldName: currentQuestion?.fieldName || null,
+  };
+}
+
 /**
  * Smartly extract structured quotation answers from customer message using Gemini
  */

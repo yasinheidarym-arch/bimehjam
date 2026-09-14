@@ -3,7 +3,7 @@ import { isQuotationInterruption } from './quotationStateMachine';
 import { DEFAULT_HUMAN_HANDOFF_RULE_CONFIG, type HumanHandoffRuleConfig } from '../../shared/humanHandoffRule';
 import { DEFAULT_QUOTATION_COMPLETION_CONFIG, type QuotationCompletionRuleConfig } from '../../shared/quotationCompletionRule';
 
-export type QuotationSubmissionStep = 'FULL_NAME' | 'LAST_NAME' | 'MOBILE' | 'CITY' | 'DELIVERY_CHOICE' | 'CONFIRM';
+export type QuotationSubmissionStep = 'FULL_NAME' | 'LAST_NAME' | 'MOBILE' | 'CITY' | 'CALLBACK_READY' | 'DELIVERY_CHOICE' | 'CONFIRM';
 export type QuotationSubmissionStatus = 'COLLECTING_PROFILE' | 'AWAITING_DELIVERY_CHOICE' | 'PROCESSING' | 'SUBMITTED' | 'FAILED' | 'AWAITING_CONFIRMATION' | 'NOT_SUBMITTED';
 export type QuotationDeliveryChoice = 'CALL' | 'CHAT';
 export type QuotationFulfillmentStatus = 'WAITING_FOR_CALLBACK' | 'WAITING_FOR_CHAT_QUOTE';
@@ -106,7 +106,7 @@ function nextMissingStep(profile: QuotationSubmissionState['profile']): Quotatio
   if (!validStoredFullName(profile.fullName)) return 'FULL_NAME';
   if (!normalizeIranMobile(profile.mobile)) return 'MOBILE';
   if (!normalizeCity(profile.city)) return 'CITY';
-  return 'DELIVERY_CHOICE';
+  return 'CALLBACK_READY';
 }
 
 function questionFor(step: QuotationSubmissionStep, prompts: HumanHandoffRuleConfig): string {
@@ -137,7 +137,7 @@ export function startQuotationSubmission(input: {
   const step = nextMissingStep(profile);
   const state: QuotationSubmissionState = {
     pending: true,
-    status: step === 'DELIVERY_CHOICE' ? 'AWAITING_DELIVERY_CHOICE' : 'COLLECTING_PROFILE',
+    status: step === 'CALLBACK_READY' ? 'PROCESSING' : 'COLLECTING_PROFILE',
     step,
     sessionId: input.sessionId,
     productId: input.productId,
@@ -149,7 +149,9 @@ export function startQuotationSubmission(input: {
     categoryId: input.categoryId || null,
     categoryName: input.categoryName || null,
   };
-  return { action: 'ASK', replyText: step === 'DELIVERY_CHOICE' ? state.choicePrompt : questionFor(step, input.profilePrompts || DEFAULT_HUMAN_HANDOFF_RULE_CONFIG), state };
+  return step === 'CALLBACK_READY'
+    ? { action: 'ROUTE', route: 'CALL', replyText: '', state: { ...state, deliveryChoice: 'CALL' } }
+    : { action: 'ASK', replyText: questionFor(step, input.profilePrompts || DEFAULT_HUMAN_HANDOFF_RULE_CONFIG), state };
 }
 
 export function handleTerminalQuotationSubmission(
@@ -189,6 +191,7 @@ export function advanceQuotationSubmission(state: QuotationSubmissionState, mess
   };
   const normalizedResponse = message.replace(/‌/g, ' ').trim();
   if (next.step === 'DELIVERY_CHOICE') {
+    // Preserve already-running historical states without offering CHAT in new flows.
     const route = semanticDeliveryChoice || quotationDeliveryChoice(message);
     if (!route) return { action: 'ASK', replyText: next.choicePrompt, state: next };
     next.deliveryChoice = route;
@@ -223,10 +226,11 @@ export function advanceQuotationSubmission(state: QuotationSubmissionState, mess
   }
 
   next.step = nextMissingStep(next.profile);
-  next.status = next.step === 'DELIVERY_CHOICE' ? 'AWAITING_DELIVERY_CHOICE' : 'COLLECTING_PROFILE';
-  return {
-    action: 'ASK',
-    replyText: next.step === 'DELIVERY_CHOICE' ? next.choicePrompt : questionFor(next.step, profilePrompts),
-    state: next,
-  };
+  if (next.step === 'CALLBACK_READY') {
+    next.status = 'PROCESSING';
+    next.deliveryChoice = 'CALL';
+    return { action: 'ROUTE', route: 'CALL', replyText: '', state: next };
+  }
+  next.status = 'COLLECTING_PROFILE';
+  return { action: 'ASK', replyText: questionFor(next.step, profilePrompts), state: next };
 }

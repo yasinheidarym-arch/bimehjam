@@ -1,5 +1,6 @@
 import prisma from '../db/client';
 import { categoryKnowledgeScope, composeScopedKnowledge } from './categoryKnowledgeScope';
+import { hasProductGrounding } from '../../shared/productGrounding';
 import { selectConfirmedProductCandidate } from './productTaxonomyValidation';
 
 export function stripUnverifiedOperationalClaims(value: string): string {
@@ -663,6 +664,10 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
       benefits: matchedProductRaw.benefits || '',
     };
 
+    // Once a product is confirmed, broader category rules must not fill gaps
+    // in product-specific insurance advice.
+    appliedRules = appliedRules.filter(rule => rule.category !== categoryScope);
+
     // Calculate quotation workflow & next question
     const questions = matchedProductRaw.quotationQuestions || [];
     const collectedData = { ...(params.existingCollectedData || {}) };
@@ -778,9 +783,9 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
   // 6. Build Formatted Knowledge Context String
   const knowledgeParts: string[] = [];
   const scopedKnowledge = composeScopedKnowledge(
-    relevantArticles.map((article) => `📚 دانش دسته اصلی «${matchedCategoryRaw?.name}»:\n• ${article.title}\n${article.content}`),
+    matchedProduct ? [] : relevantArticles.map((article) => `📚 دانش دسته اصلی «${matchedCategoryRaw?.name}»:\n• ${article.title}\n${article.content}`),
     matchedProduct?.aiKnowledgeArticle || '',
-    globalArticles.map((article) => `📖 دانش عمومی:\n• ${article.title}\n${article.content}`),
+    matchedProduct ? [] : globalArticles.map((article) => `📖 دانش عمومی:\n• ${article.title}\n${article.content}`),
   );
 
   // More specific sections appear later and explicitly override broader ones:
@@ -824,9 +829,10 @@ ${matchedProduct.aiRules.trim()}`
   }
 
   const promptFormattedKnowledge = knowledgeParts.join('\n\n');
-  const noRelevantKnowledge =
-    !scopedKnowledge.hasRelevantKnowledge &&
-    relevantFaqs.length === 0;
+  const productKnowledgeAvailable = hasProductGrounding(matchedProduct);
+  const noRelevantKnowledge = matchedProduct
+    ? !productKnowledgeAvailable
+    : !scopedKnowledge.hasRelevantKnowledge && relevantFaqs.length === 0;
 
   // Format rules block
   const promptFormattedRules = appliedRules
@@ -838,7 +844,7 @@ ${matchedProduct.aiRules.trim()}`
     quotationWorkflow,
 
     // Product context is only available after subcategory/product identification.
-    productKnowledgeAvailable: !!matchedProduct,
+    productKnowledgeAvailable,
     noRelevantKnowledge,
 
     // If category is known but subcategory is missing,

@@ -60,6 +60,8 @@ import {
   PRODUCT_INTENT_ROUTING_RULE_TITLE,
   LEGACY_BUILDING_INTENT_RULE_TITLE,
 } from '../../shared/productIntentRouting';
+import { DEFAULT_UNSUPPORTED_MEDIA_REPLY, UNSUPPORTED_MEDIA_RULE_CATEGORY, UNSUPPORTED_MEDIA_RULE_ID, UNSUPPORTED_MEDIA_RULE_TITLE } from '../../shared/unsupportedMediaRule';
+import { DEFAULT_INSUFFICIENT_PRODUCT_KNOWLEDGE_REPLY, GROUNDING_SAFETY_RULE_CATEGORY, GROUNDING_SAFETY_RULE_ID, GROUNDING_SAFETY_RULE_TITLE } from '../../shared/groundingSafetyRule';
 
 export interface AiBehaviorRuleItem {
   id: string;
@@ -182,6 +184,28 @@ async function ensureSeedRules() {
         // Invalid legacy content remains visible for the manager to repair.
       }
     }
+  }
+  const unsupportedMediaRule = await prisma.aiRule.findFirst({ where: { OR: [
+    { id: UNSUPPORTED_MEDIA_RULE_ID }, { category: UNSUPPORTED_MEDIA_RULE_CATEGORY },
+  ] } });
+  if (!unsupportedMediaRule) {
+    const aggregate = await prisma.aiRule.aggregate({ _max: { sortOrder: true } });
+    await prisma.aiRule.create({ data: {
+      id: UNSUPPORTED_MEDIA_RULE_ID, title: UNSUPPORTED_MEDIA_RULE_TITLE,
+      directive: DEFAULT_UNSUPPORTED_MEDIA_REPLY, category: UNSUPPORTED_MEDIA_RULE_CATEGORY,
+      enforcementLevel: 'STRICT', status: 'ACTIVE', sortOrder: (aggregate._max.sortOrder || 0) + 1,
+    } }).catch((error: { code?: string }) => { if (error.code !== 'P2002') throw error; });
+  }
+  const groundingSafetyRule = await prisma.aiRule.findFirst({ where: { OR: [
+    { id: GROUNDING_SAFETY_RULE_ID }, { category: GROUNDING_SAFETY_RULE_CATEGORY },
+  ] } });
+  if (!groundingSafetyRule) {
+    const aggregate = await prisma.aiRule.aggregate({ _max: { sortOrder: true } });
+    await prisma.aiRule.create({ data: {
+      id: GROUNDING_SAFETY_RULE_ID, title: GROUNDING_SAFETY_RULE_TITLE,
+      directive: DEFAULT_INSUFFICIENT_PRODUCT_KNOWLEDGE_REPLY, category: GROUNDING_SAFETY_RULE_CATEGORY,
+      enforcementLevel: 'STRICT', status: 'ACTIVE', sortOrder: (aggregate._max.sortOrder || 0) + 1,
+    } }).catch((error: { code?: string }) => { if (error.code !== 'P2002') throw error; });
   }
 
   const productIntentRule = await prisma.aiRule.findFirst({

@@ -17,6 +17,8 @@ import {
   PRODUCT_INTENT_ROUTING_RULE_CATEGORY,
   type ProductIntentClassification,
 } from '../../shared/productIntentRouting';
+import { UNSUPPORTED_MEDIA_RULE_CATEGORY } from '../../shared/unsupportedMediaRule';
+import { GROUNDING_SAFETY_RULE_CATEGORY } from '../../shared/groundingSafetyRule';
 
 export type AiBehaviorContext = {
   channel: string;
@@ -86,6 +88,8 @@ const SYSTEM_CATEGORIES = new Set([
   QUOTATION_COMPLETION_RULE_CATEGORY,
   FULL_NAME_HANDOFF_RULE_CATEGORY,
   PRODUCT_INTENT_ROUTING_RULE_CATEGORY,
+  UNSUPPORTED_MEDIA_RULE_CATEGORY,
+  GROUNDING_SAFETY_RULE_CATEGORY,
 ]);
 
 function runtimeVersion(rule: AiBehaviorRuleRecord): string {
@@ -122,6 +126,8 @@ function implicitScope(category: string): AiBehaviorRuleScope {
   if (category === QUOTATION_COMPLETION_RULE_CATEGORY) return { quotationStates: ['AWAITING_DELIVERY_CHOICE', 'PROCESSING', 'SUBMITTED', 'FAILED'] };
   if (category === FULL_NAME_HANDOFF_RULE_CATEGORY) return { conversationStates: ['COLLECTING_PROFILE', 'HUMAN_HANDOFF'] };
   if (category === PRODUCT_INTENT_ROUTING_RULE_CATEGORY) return { channels: ['GOFTINO'], messageTypes: ['CUSTOMER_MESSAGE'], userRoles: ['CUSTOMER'] };
+  if (category === UNSUPPORTED_MEDIA_RULE_CATEGORY) return { channels: ['GOFTINO'], messageTypes: ['IMAGE'], userRoles: ['CUSTOMER'] };
+  if (category === GROUNDING_SAFETY_RULE_CATEGORY) return { channels: ['GOFTINO'], userRoles: ['CUSTOMER'] };
   if (category.startsWith(CATEGORY_KNOWLEDGE_PREFIX)) return { categoryIds: [category.slice(CATEGORY_KNOWLEDGE_PREFIX.length)] };
   // Legacy CUSTOM rules are retained for customer chat only. Unknown legacy
   // categories are deliberately not promoted to global rules.

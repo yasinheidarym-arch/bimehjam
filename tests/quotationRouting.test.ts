@@ -105,7 +105,7 @@ test('choosing chat quotation asks configured questions in order and stores each
   assert.equal(quotationQuestionReply(currentRequiredQuestion(questions, answers)!), 'متراژ کل چقدر است؟');
 });
 
-test('completed answers collect profile and ask for delivery route without a confirmation phrase', () => {
+test('completed answers collect profile and route new flows directly to callback', () => {
   const choicePrompt = 'تماس یا اعلام قیمت در چت؟';
   let decision = startQuotationSubmission({
     sessionId: 'session-1',
@@ -123,27 +123,22 @@ test('completed answers collect profile and ask for delivery route without a con
   decision = advanceQuotationSubmission(decision.state, '09123456789');
   assert.match(decision.replyText, /شهر/);
   decision = advanceQuotationSubmission(decision.state, 'تهران');
-  assert.equal(decision.state.status, 'AWAITING_DELIVERY_CHOICE');
-  assert.equal(decision.replyText, choicePrompt);
-
-  const call = advanceQuotationSubmission(decision.state, 'کارشناس با من تماس بگیرد');
-  assert.equal(call.action, 'ROUTE');
-  if (call.action === 'ROUTE') assert.equal(call.route, 'CALL');
-  const chat = advanceQuotationSubmission(decision.state, 'قیمت را همین‌جا در چت اعلام کنید');
-  assert.equal(chat.action, 'ROUTE');
-  if (chat.action === 'ROUTE') assert.equal(chat.route, 'CHAT');
+  assert.equal(decision.state.status, 'PROCESSING');
+  assert.equal(decision.action, 'ROUTE');
+  if (decision.action === 'ROUTE') assert.equal(decision.route, 'CALL');
 });
 
-test('exact chat and callback choices deterministically select their existing routes', () => {
+test('historical delivery-choice states keep their existing chat and callback routes', () => {
   const base = startQuotationSubmission({
     sessionId: 'delivery', productId, productName: 'بیمه مسئولیت مدیر ساختمان', answers: [],
     existingProfile: { fullName: 'کاربر آزمایشی', mobile: '09120000000', city: 'تهران' },
     choicePrompt: 'تماس یا اعلام قیمت در چت؟',
   });
-  const chat = advanceQuotationSubmission(base.state, 'در همین چت اعلام شه');
+  const legacyState = { ...base.state, step: 'DELIVERY_CHOICE' as const, status: 'AWAITING_DELIVERY_CHOICE' as const, deliveryChoice: undefined };
+  const chat = advanceQuotationSubmission(legacyState, 'در همین چت اعلام شه');
   assert.equal(chat.action, 'ROUTE');
   if (chat.action === 'ROUTE') assert.equal(chat.route, 'CHAT');
-  const call = advanceQuotationSubmission(base.state, 'کارشناس با من تماس بگیره');
+  const call = advanceQuotationSubmission(legacyState, 'کارشناس با من تماس بگیره');
   assert.equal(call.action, 'ROUTE');
   if (call.action === 'ROUTE') assert.equal(call.route, 'CALL');
 });

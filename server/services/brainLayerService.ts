@@ -1,11 +1,12 @@
-import { advanceQuotationTurn, canonicalQuotationPrefill, type QuotationTurnState } from './quotationStateMachine';
+import { advanceQuotationTurn, canonicalQuotationHistoryPrefill, canonicalQuotationPrefill, type QuotationTurnState } from './quotationStateMachine';
 import { classifyQuotationTurnWithAi, selectQuotationGuidanceWithAi } from './quotationClassifierService';
 import prisma from '../db/client';
 import {
   retrieveRelevantKnowledgeFromTrainingCenter,
   ExtractedKnowledgePayload,
 } from './knowledgeRetrievalService';
-import { getOrCreateQuotationSession, processSessionAnswers } from './quotationWorkflowService';
+import { getActiveQuotationTurnBinding, getOrCreateQuotationSession, processSessionAnswers } from './quotationWorkflowService';
+import { isStaleQuotationTurn, type QuotationTurnBinding } from '../../shared/quotationTurnBinding';
 import {
   isInsuranceQuotationRequest,
   isExplicitQuotationFormRequest,
@@ -54,6 +55,8 @@ import {
 } from '../../shared/productIntentRouting';
 import { advanceConversationOpeningState, readConversationOpeningState } from '../../shared/conversationOpeningState';
 import { productDetectionAliases, uniqueProductDetectionMatch } from './productDetectionAliases';
+import { DEFAULT_UNSUPPORTED_MEDIA_REPLY, UNSUPPORTED_MEDIA_RULE_CATEGORY } from '../../shared/unsupportedMediaRule';
+import { DEFAULT_INSUFFICIENT_PRODUCT_KNOWLEDGE_REPLY, GROUNDING_SAFETY_RULE_CATEGORY } from '../../shared/groundingSafetyRule';
 
 
 export interface BrainResult {
@@ -216,8 +219,10 @@ export async function processBrainLayer(params: {
   offeredPurchaseLinkProductIds?: string[];
   currentPageUrl?: string | null;
   messageId?: string;
+  messageType?: string;
+  quotationTurnBinding?: QuotationTurnBinding | null;
 }): Promise<BrainResult> {
-  const { customer, conversation, userMessageContent, messageHistory, allowedCategoryId, goftinoPolicyTitle, restrictKnowledgeScope, offeredPurchaseLinkProductIds = [], currentPageUrl: suppliedCurrentPageUrl, messageId } = params;
+  const { customer, conversation, userMessageContent, messageHistory, allowedCategoryId, goftinoPolicyTitle, restrictKnowledgeScope, offeredPurchaseLinkProductIds = [], currentPageUrl: suppliedCurrentPageUrl, messageId, quotationTurnBinding } = params;
 
   const historyText = messageHistory
     .map((m) => `${m.senderType === 'CUSTOMER' ? 'مشتری' : 'مشاور بیمه جم'}: ${m.content}`)
@@ -261,6 +266,7 @@ export async function processBrainLayer(params: {
     isCurrentPageProductSuggestionAccepted(userMessageContent);
   let suggestionRejected = existingPageSuggestion?.status === 'AWAITING_CONFIRMATION' &&
     isCurrentPageProductSuggestionRejected(userMessageContent);
+  const unsupportedImage = params.messageType === 'IMAGE';
 
   // Resolve intent before product discovery. A category or page hint must not
   // turn a greeting or informational request into a sales flow.
@@ -268,6 +274,7 @@ export async function processBrainLayer(params: {
   let detectedIntent = greetingOnly ? 'Greeting' : detectIntent(userMessageContent, historyText);
   let semanticIntentResolved = false;
   try {
+    if (unsupportedImage) throw new Error('UNSUPPORTED_MEDIA');
     const semanticIntent = await classifyConversationIntentWithRuntime({
       message: userMessageContent,
       recentMessages: messageHistory.map(message => ({ senderType: message.senderType, content: message.content })),
@@ -372,7 +379,7 @@ export async function processBrainLayer(params: {
       originPageProduct: currentPageProduct ? { id: currentPageProduct.id, name: currentPageProduct.name } : null,
     });
     productRoutingAudit = { ...productRoutingAudit, ...accepted, newActiveProductId: productRoutingResult.selectedProductId, source: 'PRODUCT_CONFIRMATION' };
-  } else if (intentFamily !== 'GREETING' && (intentFamily === 'SALES_QUOTE' || Boolean(previousActiveProductId) || existingPageSuggestion?.status === 'AWAITING_CONFIRMATION')) {
+  } else if (!unsupportedImage && intentFamily !== 'GREETING' && (intentFamily === 'SALES_QUOTE' || Boolean(previousActiveProductId) || existingPageSuggestion?.status === 'AWAITING_CONFIRMATION')) {
     try {
       const semanticProduct = await classifyProductIntentWithRuntime({
         message: userMessageContent,
@@ -463,6 +470,7 @@ export async function processBrainLayer(params: {
   let semanticRoutingAvailable = false;
   const routingRuleForClassification = await getQuotationRoutingRule();
   try {
+    if (unsupportedImage) throw new Error('UNSUPPORTED_MEDIA');
     if (intentFamily === 'GREETING' || (intentFamily !== 'SALES_QUOTE' && !conversation.currentProductId && !productRoutingResult.selectedProductId && existingPageSuggestion?.status !== 'AWAITING_CONFIRMATION')) {
       throw new Error('ROUTING_NOT_APPLICABLE');
     }
@@ -519,12 +527,14 @@ export async function processBrainLayer(params: {
     conversationState: conversation.currentProductId || (intent === 'Insurance Quotation' && extractedKnowledge.matchedProduct) ? 'QUOTATION' : 'GENERAL',
     quotationState: registrationStatus,
     currentField: extractedKnowledge.quotationWorkflow?.nextQuestion?.fieldName || null,
-    messageType: 'CUSTOMER_MESSAGE',
+    messageType: params.messageType || 'CUSTOMER_MESSAGE',
     userRole: 'CUSTOMER',
   };
   const behaviorRuntime = await resolveAiBehaviorRules(behaviorContext);
   const quotationCompletionConfig = await getQuotationCompletionConfig();
   const routingRuntimeRule = behaviorRuntime.selected.find(rule => rule.category === PURCHASE_LINK_RULE_CATEGORY);
+  const unsupportedMediaRule = behaviorRuntime.selected.find(rule => rule.category === UNSUPPORTED_MEDIA_RULE_CATEGORY);
+  const groundingSafetyRule = behaviorRuntime.selected.find(rule => rule.category === GROUNDING_SAFETY_RULE_CATEGORY);
   const routingTemplates = routingRuntimeRule ? parseQuotationRoutingTemplates(routingRuntimeRule.directive) : null;
   const quotationRoutingRule = routingRuntimeRule && routingTemplates ? {
     id: routingRuntimeRule.id, title: routingRuntimeRule.title, status: 'ACTIVE' as const,
@@ -548,7 +558,9 @@ export async function processBrainLayer(params: {
           })
         : currentPageProductSuggestionReply(extractedKnowledge.matchedProduct.name))
     : null;
-  let deterministicReply: string | null = intentFamily === 'GREETING'
+  let deterministicReply: string | null = unsupportedImage
+    ? unsupportedMediaRule?.instruction || DEFAULT_UNSUPPORTED_MEDIA_REPLY
+    : intentFamily === 'GREETING'
     ? simpleGreetingReply(userMessageContent) || 'سلام، وقت بخیر، در خدمتم.'
     : inferredProductConfirmation;
   let quotationState: BrainResult['quotationState'];
@@ -565,6 +577,9 @@ export async function processBrainLayer(params: {
     extractedKnowledge.matchedProduct
     && productRoutingResult.state.confirmedProductId === extractedKnowledge.matchedProduct.id,
   );
+  if (!deterministicReply && intentFamily === 'INFORMATIONAL' && detectedProductConfirmed && !extractedKnowledge.productKnowledgeAvailable) {
+    deterministicReply = groundingSafetyRule?.instruction || DEFAULT_INSUFFICIENT_PRODUCT_KNOWLEDGE_REPLY;
+  }
   const productConfirmedThisTurn = Boolean(
     detectedProductConfirmed
     && productRoutingResult.state.confirmedProductId !== previousProductRoutingState?.confirmedProductId,
@@ -575,10 +590,10 @@ export async function processBrainLayer(params: {
     && ['ASSISTED_QUOTE', 'ASSISTED_LEAD'].includes(existingCollectedData.purchaseLinkState?.mode)
     ? existingCollectedData.purchaseLinkState.mode as 'ASSISTED_QUOTE' | 'ASSISTED_LEAD'
     : null;
-  const activeQuotationSession = Boolean(
-    extractedKnowledge.matchedProduct
-    && conversation.currentProductId === extractedKnowledge.matchedProduct.id,
-  );
+  const activeSessionBinding = extractedKnowledge.matchedProduct
+    ? await getActiveQuotationTurnBinding(conversation.id, extractedKnowledge.matchedProduct.id)
+    : null;
+  const activeQuotationSession = Boolean(activeSessionBinding);
   const entryConversionMode = quotationEntryConversionMode({
     activeSession: activeQuotationSession,
     currentMode: existingCollectedData.conversionMode,
@@ -658,6 +673,7 @@ export async function processBrainLayer(params: {
     extractedKnowledge.matchedProduct &&
     detectedProductConfirmed &&
     extractedKnowledge.matchedProduct.purchaseUrl &&
+    registrationStatus !== 'SUBMITTED' &&
     (((productConfirmationAccepted || productConfirmedThisTurn) && !entryConversionMode) || ['OFFER_PURCHASE_ROUTE', 'REQUEST_LINK_AGAIN'].includes(semanticRoutingDecision || '') || (!semanticRoutingAvailable && shouldOfferProductPurchaseLink({
       intent,
       productId: extractedKnowledge.matchedProduct.id,
@@ -724,8 +740,7 @@ export async function processBrainLayer(params: {
     !deterministicReply && extractedKnowledge.matchedProduct && detectedProductConfirmed && entryConversionMode
   ) {
     const product = extractedKnowledge.matchedProduct;
-    const categoryGuidanceKnowledge = extractedKnowledge.relevantArticles
-      .map(article => `${article.title}\n${article.content}`).join('\n\n');
+    const categoryGuidanceKnowledge = '';
     const quotationGuidanceKnowledge = [
       product.aiKnowledgeArticle || '',
       product.description || '',
@@ -743,7 +758,10 @@ export async function processBrainLayer(params: {
         ? existingCollectedData.quotationSubmission.sessionId : undefined,
     });
     const sessionQuestions = session.workflow?.questions || [];
-    const prefillAnswers = await canonicalQuotationPrefill(sessionQuestions, existingCollectedData);
+    const prefillAnswers = {
+      ...await canonicalQuotationHistoryPrefill(sessionQuestions, messageHistory),
+      ...await canonicalQuotationPrefill(sessionQuestions, existingCollectedData),
+    };
     const storedAssistedLimit = existingCollectedData.purchaseLinkState?.status === 'DETAILED_QUOTATION_SELECTED'
       && existingCollectedData.purchaseLinkState?.productId === product.id
       && existingCollectedData.purchaseLinkState?.mode === 'ASSISTED_LEAD'
@@ -757,8 +775,31 @@ export async function processBrainLayer(params: {
     );
     const assistedQuestions = assistedQuestionLimit ? sessionQuestions.slice(0, assistedQuestionLimit) : sessionQuestions;
     let evaluation = await processSessionAnswers(session.id, prefillAnswers, 'ai_extracted', { questionLimit: assistedQuestionLimit || undefined });
-    const workflowWasActive = conversation.currentProductId === product.id;
+    const workflowWasActive = Boolean(activeSessionBinding && activeSessionBinding.sessionId === session.id);
     const pendingQuestion = evaluation.nextQuestion;
+    if (workflowWasActive && isStaleQuotationTurn(quotationTurnBinding, {
+      sessionId: session.id,
+      productId: product.id,
+      questionId: pendingQuestion?.id || null,
+      fieldName: pendingQuestion?.fieldName || null,
+    })) {
+      return {
+        suppressAutomaticReply: true,
+        intent,
+        stage,
+        missingInfo: '',
+        loadedKnowledgeSummary: JSON.stringify({ staleQuotationTurn: { received: quotationTurnBinding, current: activeSessionBinding } }),
+        extractedKnowledge,
+        appliedRules: extractedKnowledge.appliedRules,
+        systemPrompt: '', userPrompt: '', finalPromptSnippet: '', replyText: '',
+        collectedData: existingCollectedData,
+        promptTokens: 0, completionTokens: 0,
+        validationResult: 'REJECTED',
+        validationReason: 'STALE_QUOTATION_TURN_SUPPRESSED',
+        retryCount: 0,
+        modelUsed: 'deterministic-state-guard',
+      };
+    }
     if (workflowWasActive) {
       quotationTurn = await advanceQuotationTurn({
         sessionId: session.id,

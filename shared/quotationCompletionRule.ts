@@ -19,7 +19,7 @@ export type QuotationCompletionRuleConfig = {
 export const DEFAULT_QUOTATION_COMPLETION_CONFIG: QuotationCompletionRuleConfig = {
   version: 1,
   choicePrompt: DEFAULT_QUOTATION_COMPLETION_PROMPT,
-  callSuccess: 'حتماً، درخواست تماس با کارشناس ثبت شد{{slaText}}.',
+  callSuccess: 'ممنونم {{customerTitle}} {{customerLastName}}. اطلاعات درخواست‌تون کامل شد و برای کارشناسان مربوطه ارسال شد. همکاران ما در اولین فرصت با شما تماس می‌گیرند تا راهنمایی‌های لازم رو ارائه بدن و قیمت بیمه رو اعلام کنند.',
   chatSuccess: 'حتماً، کارشناس قیمت را بررسی می‌کند{{slaText}} و همین‌جا در چت با شما در ارتباط خواهد بود.',
   failure: 'در تکمیل ثبت درخواست و اعلان به کارشناس مشکلی پیش آمد. فعلاً نمی‌توانم زمان تماس یا اعلام قیمت را تأیید کنم؛ اطلاعات شما محفوظ است.',
   failedTerminal: 'ثبت درخواست در مرحلهٔ قبل کامل نشد. اطلاعات استعلام محفوظ است؛ در صورت تمایل می‌توانید درخواست کنید ثبت دوباره انجام شود.',
@@ -40,7 +40,7 @@ export function parseQuotationCompletionRule(value: unknown): QuotationCompletio
     const variablesAreSafe = COMPLETION_KEYS.every(key => {
       if (typeof result[key] !== 'string' || !result[key].trim()) return false;
       return [...result[key].matchAll(/{{\s*([^{}]+?)\s*}}/g)]
-        .every(match => ['slaText', 'slaMinutes'].includes(match[1].trim()));
+        .every(match => ['slaText', 'slaMinutes', 'customerTitle', 'customerLastName'].includes(match[1].trim()));
     });
     return variablesAreSafe ? result : null;
   } catch { return null; }
@@ -51,14 +51,18 @@ export function serializeQuotationCompletionRule(value: QuotationCompletionRuleC
   return JSON.stringify(value, null, 2);
 }
 
-export function renderQuotationCompletionSuccess(template: string, slaMinutes: number | null): string {
+export function renderQuotationCompletionSuccess(template: string, slaMinutes: number | null, customerFullName?: string | null): string {
   const safeMinutes = Number.isInteger(slaMinutes) && Number(slaMinutes) > 0 && Number(slaMinutes) <= 1440
     ? Number(slaMinutes)
     : null;
   const slaText = safeMinutes ? ` و حداکثر تا ${safeMinutes.toLocaleString('fa-IR')} دقیقهٔ دیگر` : '';
+  const nameParts = String(customerFullName || '').trim().split(/\s+/).filter(Boolean);
+  const customerLastName = nameParts.length > 1 ? nameParts.at(-1)! : nameParts[0] || 'محترم';
   return template
     .replace(/{{\s*slaMinutes\s*}}/g, safeMinutes ? safeMinutes.toLocaleString('fa-IR') : '')
     .replace(/{{\s*slaText\s*}}/g, slaText)
+    .replace(/{{\s*customerTitle\s*}}/g, 'آقای/خانم')
+    .replace(/{{\s*customerLastName\s*}}/g, customerLastName)
     .replace(/\s+([.،؛])/g, '$1')
     .replace(/\s{2,}/g, ' ')
     .trim();

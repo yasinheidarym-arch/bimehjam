@@ -599,6 +599,10 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
   });
 
   const messagesReversed = [...conversation.messages].reverse();
+  const sourceMessage = conversation.messages.find(message => message.id === messageId)
+    || await prisma.message.findUnique({ where: { id: messageId } });
+  const sourceMetadata = parseConversationCollectedData(sourceMessage?.metadata);
+  const quotationTurnBinding = sourceMetadata.quotationTurnBinding || null;
 
   let brainResult;
   let quotationFinalizationAudit: QuotationFinalizationAudit | null = null;
@@ -780,6 +784,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
             successReply: renderQuotationCompletionSuccess(
               decision.route === 'CALL' ? quotationCompletionConfig.callSuccess : quotationCompletionConfig.chatSuccess,
               quoteResponseSlaMinutes,
+              profile.fullName,
             ),
           });
           const finalState = completeQuotationSubmissionState(
@@ -932,6 +937,8 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
           }
         })(),
         messageId,
+        messageType: sourceMessage?.messageType || 'TEXT',
+        quotationTurnBinding,
       });
 
       if (brainResult.suppressAutomaticReply) {
@@ -942,7 +949,9 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         await createAiLog({
           conversationId, customerId, messageId,
           step: 'Conversation Opening State', status: 'INFO',
-          details: 'پیام صرفاً ادامهٔ greeting آغاز مکالمه بود؛ پاسخ خودکار تکراری تولید یا ارسال نشد.',
+          details: brainResult.validationReason === 'STALE_QUOTATION_TURN_SUPPRESSED'
+            ? 'پیام به turn قدیمی استعلام متصل بود؛ روی سؤال جدید ذخیره و پاسخ stale ارسال نشد.'
+            : 'پیام صرفاً ادامهٔ greeting آغاز مکالمه بود؛ پاسخ خودکار تکراری تولید یا ارسال نشد.',
           durationMs: Date.now() - brainStart,
         });
         return;
@@ -970,13 +979,38 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
           categoryId: brainResult.workflowContext?.matchedCategory?.id || null,
           categoryName: brainResult.workflowContext?.matchedCategory?.name || null,
         });
-        brainResult.replyText = submission.replyText;
+        if (submission.action === 'ROUTE') {
+          const idempotencyKey = 'quotation-completion:' + conversationId + ':' + submission.state.sessionId;
+          const product = await prisma.insuranceProduct.findUnique({
+            where: { id: submission.state.productId }, select: { category: true },
+          });
+          const outcome = await finalizeQuotationCompletion({
+            conversationId, customerId,
+            sessionId: submission.state.sessionId,
+            productId: submission.state.productId,
+            productName: submission.state.productName,
+            productCategory: product?.category,
+            route: 'CALL',
+            preferredAssignedUserId: conversation.assignedUserId,
+            profile: submission.state.profile,
+            answers: submission.state.answers,
+            successReply: renderQuotationCompletionSuccess(
+              quotationCompletionConfig.callSuccess,
+              quoteResponseSlaMinutes,
+              submission.state.profile.fullName,
+            ),
+          });
+          const finalState = completeQuotationSubmissionState(submission.state, 'CALL', idempotencyKey, outcome);
+          brainResult.replyText = outcome.ok ? outcome.replyText : quotationCompletionConfig.failure;
+          brainResult.collectedData = { ...brainResult.collectedData, quotationSubmission: finalState };
+          brainResult.handoffCompleted = outcome.ok;
+          brainResult.deferHumanHandoff = !outcome.ok;
+        } else {
+          brainResult.replyText = submission.replyText;
+          brainResult.collectedData = { ...brainResult.collectedData, quotationSubmission: submission.state };
+          brainResult.deferHumanHandoff = true;
+        }
         brainResult.task = undefined;
-        brainResult.deferHumanHandoff = true;
-        brainResult.collectedData = {
-          ...brainResult.collectedData,
-          quotationSubmission: submission.state,
-        };
         quotationFinalizationAudit = {
           productId: submission.state.productId, productName: submission.state.productName,
           sessionId: submission.state.sessionId, phase: 'START_FINALIZATION', before: null,

@@ -3866,15 +3866,12 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
               ) : behaviorForm.completionConfig ? (
                 <div className="space-y-3 rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
                   <p className="text-[11px] text-emerald-800">تمام متن‌های مرحلهٔ پایانی از همین قانون خوانده می‌شوند و پس از ذخیره، بدون deploy روی پیام بعدی اثر دارند.</p>
-                  <p className="text-[11px] text-emerald-700">متغیرهای مجاز زمان پاسخ: <code>{'{{slaText}}'}</code> و <code>{'{{slaMinutes}}'}</code>. مقدار آن‌ها از تنظیم مدیریتی زمان هدف پاسخ خوانده می‌شود.</p>
+                  <p className="text-[11px] text-emerald-700">مسیر جدید پایان استعلام فقط تماس کارشناس است. متغیرهای مجاز: <code>{'{{slaText}}'}</code>، <code>{'{{slaMinutes}}'}</code>، <code>{'{{customerTitle}}'}</code> و <code>{'{{customerLastName}}'}</code>.</p>
                   {([
-                    ['choicePrompt', 'پرسش انتخاب تماس یا اعلام قیمت در چت'],
                     ['callSuccess', 'پیام پس از ثبت موفق مسیر تماس'],
-                    ['chatSuccess', 'پیام پس از ثبت موفق مسیر چت'],
                     ['failure', 'پیام شکست ثبت واقعی'],
                     ['failedTerminal', 'پاسخ ادامه گفتگو پس از شکست'],
                     ['callSubmitted', 'پاسخ تکراری پس از ثبت مسیر تماس'],
-                    ['chatSubmitted', 'پاسخ تکراری پس از ثبت مسیر چت'],
                   ] as const).map(([key, label]) => (
                     <label key={key} className="block space-y-1"><span className="font-bold text-slate-700">{label}</span><textarea rows={2} required value={behaviorForm.completionConfig![key]} onChange={(e) => setBehaviorForm({ ...behaviorForm, completionConfig: { ...behaviorForm.completionConfig!, [key]: e.target.value } })} className="w-full rounded-xl border border-slate-200 bg-white p-2.5" /></label>
                   ))}

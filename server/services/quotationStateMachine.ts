@@ -102,6 +102,28 @@ export async function canonicalQuotationPrefill(
   return Object.fromEntries(entries.filter((entry): entry is readonly [string, string] => Boolean(entry)));
 }
 
+/** Conservative history prefill: only values carrying an explicit duration unit
+ * are considered for a duration-labelled field. This avoids assigning a bare
+ * number to the wrong numeric question. */
+export async function canonicalQuotationHistoryPrefill(
+  questions: QuotationTurnQuestion[],
+  messages: Array<{ senderType: string; content: string }>,
+): Promise<Record<string, string>> {
+  const durationQuestions = questions.filter(question => /مدت|دوره|اعتبار/u.test(`${question.title} ${question.fieldName}`));
+  const customerMessages = messages.filter(message => message.senderType === 'CUSTOMER').map(message => message.content);
+  for (const question of durationQuestions) {
+    for (const message of [...customerMessages].reverse()) {
+      const normalizedMessage = normalize(message);
+      const explicitDurations = normalizedMessage.match(/(?:\d+(?:[.,]\d+)?|یک|دو|سه|چهار|پنج|شش|هفت|هشت|نه|ده|یازده|دوازده)\s*(?:روز|ماهه?|ماه|ساله?|سال)/gu) || [];
+      for (const duration of [...explicitDurations].reverse()) {
+        const value = await canonicalQuotationAnswer(question, duration);
+        if (value !== null) return { [question.fieldName]: value };
+      }
+    }
+  }
+  return {};
+}
+
 function parseClassification(raw: unknown, correction = false): QuotationClassification | null {
   if (!raw || typeof raw !== 'object') return null;
   const value = raw as Record<string, unknown>;
