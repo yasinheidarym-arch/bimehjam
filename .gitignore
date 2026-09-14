@@ -23,6 +23,7 @@ coverage/
 # Production archives
 *.zip
 *.tar.gz
+/backups/
 
 # Local test scripts
 check-db.cjs
