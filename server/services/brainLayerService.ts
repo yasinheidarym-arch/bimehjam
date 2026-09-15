@@ -328,7 +328,11 @@ export async function processBrainLayer(params: {
   const routingCandidatesRaw = await prisma.insuranceProduct.findMany({
     where: {
       status: 'ACTIVE',
-      ...(restrictKnowledgeScope && allowedCategoryId ? { categoryId: allowedCategoryId } : {}),
+      ...(restrictKnowledgeScope
+        ? allowedCategoryId
+          ? { categoryId: allowedCategoryId }
+          : { id: { in: [] } }
+        : {}),
     },
     select: {
       id: true, name: true, description: true, purchaseUrl: true, categoryId: true,

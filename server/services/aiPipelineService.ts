@@ -36,6 +36,7 @@ import {
 } from './quotationCompletionService';
 import { renderQuotationCompletionSuccess } from '../../shared/quotationCompletionRule';
 import { processSessionAnswers } from './quotationWorkflowService';
+import { conversationStatusAfterAiTurn } from '../../shared/conversationOperatorState';
 
 function customerGoftinoTopicId(metadata?: string | null): string | null {
   if (!metadata) return null;
@@ -960,8 +961,8 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         conversation,
         userMessageContent,
         messageHistory: messagesReversed,
-        allowedCategoryId: policyDecision.policy.insuranceCategoryId || undefined,
-        goftinoPolicyTitle: policyDecision.policy.goftinoTopicTitle,
+        allowedCategoryId: policyDecision.kind === 'ALLOW' ? policyDecision.policy.insuranceCategoryId || undefined : undefined,
+        goftinoPolicyTitle: policyDecision.kind === 'ALLOW' ? policyDecision.policy.goftinoTopicTitle : undefined,
         restrictKnowledgeScope: true,
         offeredPurchaseLinkProductIds: offeredPurchaseLinkProductIds(priorPurchaseLinkMessages),
         currentPageUrl: (() => {
@@ -1298,9 +1299,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
   await prisma.conversation.update({
     where: { id: conversation.id },
     data: {
-      status: !brainResult.deferHumanHandoff && (brainResult.policyHandoff || brainResult.handoffCompleted || brainResult.quotationState?.isCompleted)
-        ? 'WAITING_OPERATOR'
-        : 'AI_HANDLING',
+      status: conversationStatusAfterAiTurn(brainResult),
       lastMessage: aiReplyText,
       lastMessageAt: new Date(),
       collectedData: updatedCollectedDataStr,

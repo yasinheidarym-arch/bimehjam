@@ -86,12 +86,12 @@ test('a disabled topic stays silent even when it has no specialized category', (
   assert.equal(goftinoAiResponseMode(decision), 'SILENT');
 });
 
-test('unknown topic always routes to handoff', () => {
+test('unknown topic is limited to general AI without an operator handoff', () => {
   assert.equal(findGoftinoCatalogTopic('unknown-topic', 'رشته ناشناس'), null);
   const decision = decideGoftinoAiPolicy(null, true);
-  assert.equal(decision.kind, 'HANDOFF');
-  if (decision.kind === 'HANDOFF') assert.equal(decision.reason, 'UNKNOWN_TOPIC');
-  assert.equal(goftinoAiResponseMode(decision), 'HANDOFF_MESSAGE');
+  assert.equal(decision.kind, 'GENERAL');
+  if (decision.kind === 'GENERAL') assert.equal(decision.reason, 'UNKNOWN_TOPIC');
+  assert.equal(goftinoAiResponseMode(decision), 'AI');
 });
 
 test('catalog contains exactly the ten uploaded Goftino topics', () => {

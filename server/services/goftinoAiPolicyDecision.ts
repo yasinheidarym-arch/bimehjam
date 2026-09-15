@@ -6,6 +6,7 @@ export type GoftinoAiPolicyInput = {
 
 export type GoftinoAiPolicyDecision =
   | { kind: 'ALLOW'; scope: 'CATEGORY' | 'GENERAL'; policy: GoftinoAiPolicyInput }
+  | { kind: 'GENERAL'; scope: 'GENERAL'; policy: null; reason: 'UNKNOWN_TOPIC' }
   | { kind: 'HANDOFF'; policy: GoftinoAiPolicyInput | null; reason: 'UNKNOWN_TOPIC' | 'DISABLED' };
 
 export type GoftinoAiResponseMode = 'AI' | 'SILENT' | 'HANDOFF_MESSAGE';
@@ -15,13 +16,13 @@ export function decideGoftinoAiPolicy(
   policy: GoftinoAiPolicyInput | null,
   enabled: boolean,
 ): GoftinoAiPolicyDecision {
-  if (!policy) return { kind: 'HANDOFF', policy: null, reason: 'UNKNOWN_TOPIC' };
+  if (!policy) return { kind: 'GENERAL', scope: 'GENERAL', policy: null, reason: 'UNKNOWN_TOPIC' };
   if (!enabled) return { kind: 'HANDOFF', policy, reason: 'DISABLED' };
   return { kind: 'ALLOW', scope: policy.insuranceCategoryId ? 'CATEGORY' : 'GENERAL', policy };
 }
 
 /** Disabled catalog topics must produce no customer-visible AI activity. */
 export function goftinoAiResponseMode(decision: GoftinoAiPolicyDecision): GoftinoAiResponseMode {
-  if (decision.kind === 'ALLOW') return 'AI';
+  if (decision.kind === 'ALLOW' || decision.kind === 'GENERAL') return 'AI';
   return decision.reason === 'DISABLED' ? 'SILENT' : 'HANDOFF_MESSAGE';
 }

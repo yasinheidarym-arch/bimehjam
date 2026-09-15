@@ -34,7 +34,7 @@ test('policy mapping update is restricted to administrators', () => {
 test('resolved category id continues through the existing Brain Layer retrieval contract', () => {
   const pipeline = source('server/services/aiPipelineService.ts');
   const retrieval = source('server/services/knowledgeRetrievalService.ts');
-  assert.match(pipeline, /allowedCategoryId: policyDecision\.policy\.insuranceCategoryId/);
+  assert.match(pipeline, /allowedCategoryId: policyDecision\.kind === 'ALLOW' \? policyDecision\.policy\.insuranceCategoryId/);
   assert.match(pipeline, /restrictKnowledgeScope: true/);
   assert.match(retrieval, /matchedCategoryRaw = activeCategories\.find/);
   assert.match(retrieval, /categoryKnowledgeScope\(matchedCategoryRaw\.id\)/);
