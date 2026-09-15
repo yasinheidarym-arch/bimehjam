@@ -360,6 +360,13 @@ export async function classifyProductIntentWithRuntime(input: {
   });
 }
 
+export async function classifyConversationIntentOnce(
+  input: Parameters<typeof classifyConversationIntentWithRuntime>[0],
+  preclassified?: Awaited<ReturnType<typeof classifyConversationIntentWithRuntime>> | null,
+) {
+  return preclassified || classifyConversationIntentWithRuntime(input);
+}
+
 export async function classifyQuotationDeliveryChoiceWithRuntime(input: {
   message: string;
   context: AiBehaviorContext;

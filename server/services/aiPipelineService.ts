@@ -331,6 +331,7 @@ type AiPipelineParams = {
   aiCategory?: string;
   effectiveAiMode?: AiMode;
   coalescedSourceMessageIds?: string[];
+  queueWaitMs?: number;
 };
 
 async function coalesceGreetingPipelineTurn(params: AiPipelineParams): Promise<AiPipelineParams> {
@@ -364,13 +365,15 @@ async function coalesceGreetingPipelineTurn(params: AiPipelineParams): Promise<A
 }
 
 export async function runAiPipelineForMessage(params: AiPipelineParams) {
+  const queuedAt = Date.now();
   return withConversationTurn(params.conversationId, async () => {
+    const queueWaitMs = Date.now() - queuedAt;
     const effectiveParams = await coalesceGreetingPipelineTurn(params);
     const alreadyHandled = await prisma.message.findFirst({
       where: { conversationId: params.conversationId, senderType: 'AI', metadata: { contains: effectiveParams.messageId } },
       select: { id: true },
     });
-    if (!alreadyHandled) return runAiPipelineTurn(effectiveParams);
+    if (!alreadyHandled) return runAiPipelineTurn({ ...effectiveParams, queueWaitMs });
   });
 }
 async function runAiPipelineTurn(params: AiPipelineParams) {
@@ -650,7 +653,11 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
       }
     }
     let customerRequestedHuman = false;
+    let preclassifiedIntent: Awaited<ReturnType<typeof classifyConversationIntentWithRuntime>> | null = null;
+    let intentClassificationDurationMs = 0;
     try {
+      if (isSimpleGreeting(userMessageContent)) throw new Error('INTENT_CLASSIFICATION_NOT_APPLICABLE');
+      const intentClassificationStartedAt = Date.now();
       const semanticIntent = await classifyConversationIntentWithRuntime({
         message: userMessageContent,
         recentMessages: messagesReversed.map(message => ({ senderType: message.senderType, content: message.content })),
@@ -661,6 +668,8 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
           messageType: 'CUSTOMER_MESSAGE', userRole: 'CUSTOMER',
         },
       });
+      intentClassificationDurationMs = Date.now() - intentClassificationStartedAt;
+      preclassifiedIntent = semanticIntent;
       customerRequestedHuman = semanticIntent.output.intent === 'Human Operator Request' && semanticIntent.output.confidence >= .75;
     } catch {
       // Narrow provider-unavailable safety fallback; semantic handling is primary.
@@ -966,6 +975,8 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         messageId,
         messageType: sourceMessage?.messageType || 'TEXT',
         quotationTurnBinding,
+        preclassifiedIntent,
+        preclassifiedIntentDurationMs: intentClassificationDurationMs,
       });
 
       if (brainResult.suppressAutomaticReply) {
@@ -1218,6 +1229,10 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         validationResult: brainResult.validationResult,
         purchaseLinkRule: brainResult.purchaseLinkOffer?.ruleTitle || null,
         validationReason: brainResult.validationReason,
+        performanceTimings: {
+          queueWaitMs: params.queueWaitMs || 0,
+          ...brainResult.performanceTimings,
+        },
       }, null, 2),
       durationMs: Date.now() - brainStart,
     });
@@ -1321,6 +1336,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
   }
 
   // Send AI response back to Goftino ONLY if AI mode is ACTIVE
+  let goftinoSendMs = 0;
   if (isTestModeActive) {
     await createAiLog({
       conversationId,
@@ -1341,6 +1357,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
       conversation.goftinoChatId || customer.goftinoChatId || '',
       aiReplyText
     );
+    goftinoSendMs = Date.now() - goftinoStepStart;
 
     if (sendResult.success) {
       await createAiLog({
@@ -1372,7 +1389,15 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
     messageId: savedAiMessage.id,
     step: 'Completed',
     status: 'SUCCESS',
-    details: `پایپ‌لاین هوش مصنوعی در حالت [${isTestModeActive ? '🧪 AI Test Mode' : 'فعال (ACTIVE)'}] در مدت ${Date.now() - startTime} میلی‌ثانیه با موفقیت انجام شد.`,
+    details: JSON.stringify({
+      mode: isTestModeActive ? 'TEST_MODE' : 'ACTIVE',
+      totalMs: Date.now() - startTime,
+      performanceTimings: {
+        queueWaitMs: params.queueWaitMs || 0,
+        ...brainResult.performanceTimings,
+        goftinoSendMs,
+      },
+    }, null, 2),
     durationMs: Date.now() - startTime,
   });
 

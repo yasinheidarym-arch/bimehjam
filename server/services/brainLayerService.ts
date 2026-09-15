@@ -32,7 +32,7 @@ import {
 } from '../../shared/productPurchaseLink';
 import { resolveProductByUrl } from './productIntelligenceService';
 import { buildQuotationAudit } from './quotationAudit';
-import { buildAiBehaviorSystemPrompt, classifyConversationIntentWithRuntime, classifyProductIntentWithRuntime, classifyQuotationRoutingWithRuntime, conversationIntentFamily, isSimpleGreeting, salesFlowAllowedForIntent, simpleGreetingReply, resolveAiBehaviorRules, runAiBehaviorStructuredModel, validateRequestedAction, type ProductRoutingCandidate } from './aiBehaviorRuntime';
+import { buildAiBehaviorSystemPrompt, classifyConversationIntentOnce, classifyConversationIntentWithRuntime, classifyProductIntentWithRuntime, classifyQuotationRoutingWithRuntime, conversationIntentFamily, isSimpleGreeting, salesFlowAllowedForIntent, simpleGreetingReply, resolveAiBehaviorRules, runAiBehaviorStructuredModel, validateRequestedAction, type ProductRoutingCandidate } from './aiBehaviorRuntime';
 import { parseQuotationResponseEngineConfig, QUOTATION_RESPONSE_ENGINE_CATEGORY } from '../../shared/quotationResponseEngine';
 import { parseQuotationRoutingTemplates, PURCHASE_LINK_RULE_CATEGORY } from '../../shared/productPurchaseLink';
 import { getQuotationCompletionConfig, getQuotationRoutingRule } from './aiBehaviorService';
@@ -79,6 +79,7 @@ export interface BrainResult {
   validationReason: string;
   retryCount: number;
   modelUsed: string;
+  performanceTimings?: Record<string, number>;
 
   quotationState?: {
     sessionId: string;
@@ -221,8 +222,22 @@ export async function processBrainLayer(params: {
   messageId?: string;
   messageType?: string;
   quotationTurnBinding?: QuotationTurnBinding | null;
+  preclassifiedIntent?: Awaited<ReturnType<typeof classifyConversationIntentWithRuntime>> | null;
+  preclassifiedIntentDurationMs?: number;
 }): Promise<BrainResult> {
   const { customer, conversation, userMessageContent, messageHistory, allowedCategoryId, goftinoPolicyTitle, restrictKnowledgeScope, offeredPurchaseLinkProductIds = [], currentPageUrl: suppliedCurrentPageUrl, messageId, quotationTurnBinding } = params;
+  const performanceTimings: Record<string, number> = {
+    intentClassificationMs: params.preclassifiedIntentDurationMs || 0,
+    pageProductLookupMs: 0,
+    productMetadataLookupMs: 0,
+    productClassificationMs: 0,
+    knowledgeRetrievalMs: 0,
+    quotationRoutingMs: 0,
+    behaviorRulesLoadingMs: 0,
+    quotationStateProcessingMs: 0,
+    responseLlmMs: 0,
+    postProcessingMs: 0,
+  };
 
   const historyText = messageHistory
     .map((m) => `${m.senderType === 'CUSTOMER' ? 'مشتری' : 'مشاور بیمه جم'}: ${m.content}`)
@@ -250,9 +265,11 @@ export async function processBrainLayer(params: {
   }
 
   const currentPageUrl = suppliedCurrentPageUrl || (typeof customerMetadata.lastUrl === 'string' ? customerMetadata.lastUrl : null);
+  const pageProductLookupStartedAt = Date.now();
   const currentPageMap = currentPageUrl
     ? await resolveProductByUrl(currentPageUrl, { seedIfEmpty: false, exactOnly: true })
     : null;
+  performanceTimings.pageProductLookupMs = Date.now() - pageProductLookupStartedAt;
   const currentPageProduct = currentPageMap?.product &&
     currentPageMap.product.status === 'ACTIVE' && currentPageMap.aiEnabled
     ? {
@@ -274,8 +291,9 @@ export async function processBrainLayer(params: {
   let detectedIntent = greetingOnly ? 'Greeting' : detectIntent(userMessageContent, historyText);
   let semanticIntentResolved = false;
   try {
-    if (unsupportedImage) throw new Error('UNSUPPORTED_MEDIA');
-    const semanticIntent = await classifyConversationIntentWithRuntime({
+    if (unsupportedImage || greetingOnly) throw new Error('INTENT_CLASSIFICATION_NOT_APPLICABLE');
+    const intentClassificationStartedAt = Date.now();
+    const semanticIntent = await classifyConversationIntentOnce({
       message: userMessageContent,
       recentMessages: messageHistory.map(message => ({ senderType: message.senderType, content: message.content })),
       context: {
@@ -283,7 +301,10 @@ export async function processBrainLayer(params: {
         currentPageUrl, conversationState: conversation.currentProductId ? 'QUOTATION' : 'GENERAL',
         messageType: 'CUSTOMER_MESSAGE', userRole: 'CUSTOMER',
       },
-    });
+    }, params.preclassifiedIntent);
+    if (!params.preclassifiedIntent) {
+      performanceTimings.intentClassificationMs = Date.now() - intentClassificationStartedAt;
+    }
     if (!greetingOnly && semanticIntent.output.confidence >= .65) {
       detectedIntent = semanticIntent.output.intent;
       semanticIntentResolved = true;
@@ -303,6 +324,7 @@ export async function processBrainLayer(params: {
     isCurrentPageProductSuggestionAccepted(userMessageContent),
   );
   const productConfirmationAccepted = Boolean(suggestionAccepted || inferredConfirmation);
+  const productMetadataLookupStartedAt = Date.now();
   const routingCandidatesRaw = await prisma.insuranceProduct.findMany({
     where: {
       status: 'ACTIVE',
@@ -316,6 +338,8 @@ export async function processBrainLayer(params: {
     },
     orderBy: [{ categoryId: 'asc' }, { name: 'asc' }, { id: 'asc' }],
   });
+  performanceTimings.productMetadataLookupMs = Date.now() - productMetadataLookupStartedAt;
+  const productClassificationStartedAt = Date.now();
   const routingCandidates: ProductRoutingCandidate[] = routingCandidatesRaw.map(product => ({
     id: product.id,
     name: product.name,
@@ -417,6 +441,7 @@ export async function processBrainLayer(params: {
       // Availability fallback preserves the prior product but never promotes the page hint.
     }
   }
+  performanceTimings.productClassificationMs = Date.now() - productClassificationStartedAt;
   if (productRoutingResult.changed) {
     const previousQuestionFields = previousActiveProductId
       ? (await prisma.quotationQuestion.findMany({ where: { productId: previousActiveProductId }, select: { fieldName: true } })).map(item => item.fieldName)
@@ -431,6 +456,7 @@ export async function processBrainLayer(params: {
   existingCollectedData.productIntentRouting = productRoutingResult.state;
 
   // Step 1: Intelligent Knowledge Retrieval from AI Training Center (5 Sources)
+  const knowledgeRetrievalStartedAt = Date.now();
   const extractedKnowledge = await retrieveRelevantKnowledgeFromTrainingCenter({
     userMessage: userMessageContent,
     conversationHistoryText: historyText,
@@ -449,6 +475,7 @@ export async function processBrainLayer(params: {
     },
     existingCollectedData,
   });
+  performanceTimings.knowledgeRetrievalMs = Date.now() - knowledgeRetrievalStartedAt;
 
   if (intentFamily !== 'SALES_QUOTE' && !productConfirmationAccepted && !conversation.currentProductId) {
     // Product knowledge may answer an informational question, but its
@@ -468,10 +495,11 @@ export async function processBrainLayer(params: {
     : detectedIntent;
   let semanticRoutingDecision: string | null = null;
   let semanticRoutingAvailable = false;
+  const quotationRoutingStartedAt = Date.now();
   const routingRuleForClassification = await getQuotationRoutingRule();
   try {
     if (unsupportedImage) throw new Error('UNSUPPORTED_MEDIA');
-    if (intentFamily === 'GREETING' || (intentFamily !== 'SALES_QUOTE' && !conversation.currentProductId && !productRoutingResult.selectedProductId && existingPageSuggestion?.status !== 'AWAITING_CONFIRMATION')) {
+    if (productRoutingResult.clarificationQuestion || intentFamily === 'GREETING' || (intentFamily !== 'SALES_QUOTE' && !conversation.currentProductId && !productRoutingResult.selectedProductId && existingPageSuggestion?.status !== 'AWAITING_CONFIRMATION')) {
       throw new Error('ROUTING_NOT_APPLICABLE');
     }
     const routing = await classifyQuotationRoutingWithRuntime({
@@ -498,6 +526,7 @@ export async function processBrainLayer(params: {
   } catch {
     // Provider-unavailable fallback uses the narrow deterministic helpers.
   }
+  performanceTimings.quotationRoutingMs = Date.now() - quotationRoutingStartedAt;
   if (semanticRoutingAvailable) {
     suggestionAccepted = semanticRoutingDecision === 'ACCEPT_PAGE_PRODUCT';
     suggestionRejected = semanticRoutingDecision === 'REJECT_PAGE_PRODUCT';
@@ -530,7 +559,9 @@ export async function processBrainLayer(params: {
     messageType: params.messageType || 'CUSTOMER_MESSAGE',
     userRole: 'CUSTOMER',
   };
+  const behaviorRulesLoadingStartedAt = Date.now();
   const behaviorRuntime = await resolveAiBehaviorRules(behaviorContext);
+  performanceTimings.behaviorRulesLoadingMs = Date.now() - behaviorRulesLoadingStartedAt;
   const quotationCompletionConfig = await getQuotationCompletionConfig();
   const routingRuntimeRule = behaviorRuntime.selected.find(rule => rule.category === PURCHASE_LINK_RULE_CATEGORY);
   const unsupportedMediaRule = behaviorRuntime.selected.find(rule => rule.category === UNSUPPORTED_MEDIA_RULE_CATEGORY);
@@ -563,6 +594,7 @@ export async function processBrainLayer(params: {
     : intentFamily === 'GREETING'
     ? simpleGreetingReply(userMessageContent) || 'سلام، وقت بخیر، در خدمتم.'
     : inferredProductConfirmation;
+  const quotationStateProcessingStartedAt = Date.now();
   let quotationState: BrainResult['quotationState'];
   let purchaseLinkOffer: BrainResult['purchaseLinkOffer'];
   let quotationInterruptionQuestion: { text: string } | null = null;
@@ -798,6 +830,10 @@ export async function processBrainLayer(params: {
         validationReason: 'STALE_QUOTATION_TURN_SUPPRESSED',
         retryCount: 0,
         modelUsed: 'deterministic-state-guard',
+        performanceTimings: {
+          ...performanceTimings,
+          quotationStateProcessingMs: Date.now() - quotationStateProcessingStartedAt,
+        },
       };
     }
     if (workflowWasActive) {
@@ -926,6 +962,7 @@ export async function processBrainLayer(params: {
   }
 
   const missingInfo = detectMissingInfo(intent, userMessageContent, historyText, extractedKnowledge.quotationWorkflow);
+  performanceTimings.quotationStateProcessingMs = Date.now() - quotationStateProcessingStartedAt;
   const workflowContext: NonNullable<BrainResult['workflowContext']> = {
     currentPageUrl,
     currentPageProduct,
@@ -992,6 +1029,7 @@ export async function processBrainLayer(params: {
   // The conversational response path uses the same central runtime as the
   // quotation classifier, guidance generator, terminal classifier and simulator.
   while (!deterministicReply && retryCount <= 2) {
+    const responseLlmStartedAt = Date.now();
     try {
       const runtimeResult = await runAiBehaviorStructuredModel<{
         decision: string;
@@ -1051,6 +1089,8 @@ export async function processBrainLayer(params: {
       generatedOperatorSummary = '';
     } catch {
       finalReplyText = '';
+    } finally {
+      performanceTimings.responseLlmMs += Date.now() - responseLlmStartedAt;
     }
 
     // Validate Response against Training Center Policies
@@ -1089,6 +1129,7 @@ export async function processBrainLayer(params: {
     generatedOperatorSummary = `پرسش‌های استعلام ${quotationState.productName} تکمیل شد و آماده محاسبه قیمت است.`;
   }
 
+  const postProcessingStartedAt = Date.now();
   const loadedKnowledgeSummary = JSON.stringify({
     summary: purchaseLinkOffer
     ? `${purchaseLinkDecisionLogSummary(purchaseLinkOffer.productName)} | [تعداد قوانین فعال]: ${extractedKnowledge.appliedRules.length}`
@@ -1193,6 +1234,10 @@ export async function processBrainLayer(params: {
     validationReason: quotationAnswerValidationReason || validation.reason,
     retryCount,
     modelUsed,
+    performanceTimings: {
+      ...performanceTimings,
+      postProcessingMs: Date.now() - postProcessingStartedAt,
+    },
     quotationState,
     workflowContext,
     purchaseLinkOffer,
