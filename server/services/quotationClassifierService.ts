@@ -2,8 +2,136 @@ import type { QuotationTurnModel } from './quotationStateMachine';
 import { quotationQuestionOptions } from './quotationOptionMatchingService';
 import type { QuotationTurnQuestion } from './quotationConversationFlow';
 import { runAiBehaviorStructuredModel } from './aiBehaviorRuntime';
+import { canonicalQuotationAnswer } from './quotationStateMachine';
+import {
+  isQuotationSummaryConfirmed,
+  normalizeIranMobile,
+  normalizeQuotationCity,
+  normalizeQuotationFullName,
+  type QuotationSubmissionState,
+  type QuotationSummaryDecision,
+} from './quotationSubmissionFlow';
 
 export type QuotationTerminalIntent = 'RETRY_SUBMISSION' | 'ASK_FAILURE_REASON' | 'START_NEW_QUOTATION' | 'REPLAY_RESULT' | 'OTHER';
+
+export type SummaryClassifierOutput = {
+  action: 'CONFIRM' | 'FIELD_CORRECTION' | 'UNSPECIFIED_CORRECTION' | 'OTHER';
+  fieldKey: string | null;
+  proposedValue: string | null;
+  evidence: string | null;
+  selectedOptionId: string | null;
+  selectedOptionValue: string | null;
+  confidence: number;
+  reason: string;
+};
+
+const SUMMARY_PROFILE_FIELDS = {
+  fullName: { label: 'نام و نام خانوادگی', normalize: normalizeQuotationFullName },
+  mobile: { label: 'شماره همراه', normalize: normalizeIranMobile },
+  city: { label: 'شهر یا محل مورد بیمه', normalize: normalizeQuotationCity },
+} as const;
+
+function evidenceExists(message: string, evidence: string | null): boolean {
+  if (!evidence?.trim()) return false;
+  const normalize = (value: string) => value.replace(/\u200c/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+  return normalize(message).includes(normalize(evidence));
+}
+
+export async function validateQuotationSummaryClassifierOutput(input: {
+  message: string;
+  state: QuotationSubmissionState;
+  questions: QuotationTurnQuestion[];
+  output: SummaryClassifierOutput;
+  behaviorRuntime?: unknown;
+}): Promise<QuotationSummaryDecision & { behaviorRuntime?: unknown }> {
+  const { output } = input;
+  const runtime = input.behaviorRuntime === undefined ? {} : { behaviorRuntime: input.behaviorRuntime };
+  if (output.confidence < .75) return { action: output.action === 'UNSPECIFIED_CORRECTION' ? 'UNSPECIFIED_CORRECTION' : 'OTHER', confidence: output.confidence, reason: output.reason, ...runtime };
+  if (output.action === 'CONFIRM') return { action: 'CONFIRM', confidence: output.confidence, reason: output.reason, ...runtime };
+  if (output.action !== 'FIELD_CORRECTION' || !output.fieldKey || !evidenceExists(input.message, output.evidence)) {
+    return { action: output.action === 'UNSPECIFIED_CORRECTION' ? 'UNSPECIFIED_CORRECTION' : 'OTHER', confidence: output.confidence, reason: output.reason, ...runtime };
+  }
+  const candidate = output.selectedOptionValue || output.proposedValue || output.evidence || '';
+  if (output.fieldKey.startsWith('profile.')) {
+    const fieldName = output.fieldKey.slice('profile.'.length) as keyof typeof SUMMARY_PROFILE_FIELDS;
+    const field = SUMMARY_PROFILE_FIELDS[fieldName];
+    const value = field?.normalize(candidate);
+    return value
+      ? { action: 'FIELD_CORRECTION', target: 'PROFILE', fieldName, canonicalValue: value, confidence: output.confidence, reason: output.reason, ...runtime }
+      : { action: 'INVALID_CORRECTION', confidence: output.confidence, reason: 'Profile value failed backend validation', ...runtime };
+  }
+  if (output.fieldKey.startsWith('answer.')) {
+    const fieldName = output.fieldKey.slice('answer.'.length);
+    const question = input.questions.find(item => item.fieldName === fieldName);
+    const answer = input.state.answers.find(item => item.fieldName === fieldName);
+    if (question && answer) {
+      const value = await canonicalQuotationAnswer(question, output.evidence || '', candidate, output.selectedOptionId, output.confidence);
+      if (value !== null) return { action: 'FIELD_CORRECTION', target: 'ANSWER', fieldName, canonicalValue: value, confidence: output.confidence, reason: output.reason, ...runtime };
+    }
+  }
+  return { action: 'INVALID_CORRECTION', confidence: output.confidence, reason: 'Correction failed backend field validation', ...runtime };
+}
+
+export async function classifyQuotationSummaryResponseWithAi(input: {
+  message: string;
+  state: QuotationSubmissionState;
+  questions: QuotationTurnQuestion[];
+  recentMessages?: Array<{ senderType: string; content: string }>;
+  behaviorContext?: { channel: string; productId?: string | null; categoryId?: string | null; currentPageUrl?: string | null; intent?: string | null; conversationState?: string | null; quotationState?: string | null; currentField?: string | null; messageType?: string | null; userRole?: string | null };
+}): Promise<QuotationSummaryDecision & { behaviorRuntime?: unknown }> {
+  if (isQuotationSummaryConfirmed(input.message)) {
+    return { action: 'CONFIRM', confidence: 1, reason: 'Deterministic normalized confirmation' };
+  }
+  const profileFields = Object.entries(SUMMARY_PROFILE_FIELDS).map(([fieldName, field]) => ({
+    fieldKey: `profile.${fieldName}`,
+    label: field.label,
+    value: input.state.profile[fieldName as keyof typeof input.state.profile] || '',
+  }));
+  const answerFields = input.state.answers.map(answer => {
+    const question = input.questions.find(item => item.fieldName === answer.fieldName);
+    return {
+      fieldKey: `answer.${answer.fieldName}`,
+      label: answer.fieldLabel,
+      value: answer.value,
+      type: question?.type || 'text',
+      options: question ? quotationQuestionOptions(question) : [],
+      validation: question ? { minVal: question.minVal, maxVal: question.maxVal, minLength: question.minLength, maxLength: question.maxLength } : null,
+    };
+  });
+  const fieldKeys = [...profileFields, ...answerFields].map(field => field.fieldKey);
+  let result;
+  try {
+    result = await runAiBehaviorStructuredModel<SummaryClassifierOutput>({
+      context: { ...input.behaviorContext, channel: input.behaviorContext?.channel || 'GOFTINO', conversationState: 'QUOTATION', quotationState: 'AWAITING_CONFIRMATION' },
+      taskContract: 'فقط پیام کاربر در مرحله تأیید خلاصه را طبقه‌بندی کن. CONFIRM یعنی تأیید معنایی تمام خلاصه؛ FIELD_CORRECTION فقط وقتی مقدار جدید برای دقیقاً یکی از fieldKeyهای واقعی داده شده؛ UNSPECIFIED_CORRECTION یعنی گفته اصلاح لازم است اما فیلد یا مقدار روشن نیست؛ OTHER برای بقیه. فقط fieldKey موجود را برگردان، proposedValue باید مقدار خالص و بدون جمله پیرامونی باشد، evidence باید عین بخش حاوی مقدار در پیام باشد و عملیات یا پاسخ مکالمه تولید نکن.',
+      schemaName: 'quotation_summary_confirmation',
+      schema: {
+        type: 'object', additionalProperties: false,
+        properties: {
+          action: { type: 'string', enum: ['CONFIRM', 'FIELD_CORRECTION', 'UNSPECIFIED_CORRECTION', 'OTHER'] },
+          fieldKey: { type: ['string', 'null'], enum: [...fieldKeys, null] },
+          proposedValue: { type: ['string', 'null'] },
+          evidence: { type: ['string', 'null'] },
+          selectedOptionId: { type: ['string', 'null'] },
+          selectedOptionValue: { type: ['string', 'null'] },
+          confidence: { type: 'number', minimum: 0, maximum: 1 },
+          reason: { type: 'string' },
+        },
+        required: ['action', 'fieldKey', 'proposedValue', 'evidence', 'selectedOptionId', 'selectedOptionValue', 'confidence', 'reason'],
+      },
+      payload: { message: input.message, fields: [...profileFields, ...answerFields], recentMessages: (input.recentMessages || []).slice(-4) },
+    });
+  } catch {
+    return { action: 'OTHER', confidence: 0, reason: 'Provider unavailable and no deterministic confirmation' };
+  }
+  return validateQuotationSummaryClassifierOutput({
+    message: input.message,
+    state: input.state,
+    questions: input.questions,
+    output: result.output,
+    behaviorRuntime: result.resolution,
+  });
+}
 
 export async function classifyQuotationTerminalIntentWithAi(input: {
   message: string;

@@ -26,7 +26,7 @@ import {
   QuotationSubmissionState,
   startQuotationSubmission,
 } from './quotationSubmissionFlow';
-import { classifyQuotationTerminalIntentWithAi } from './quotationClassifierService';
+import { classifyQuotationSummaryResponseWithAi, classifyQuotationTerminalIntentWithAi } from './quotationClassifierService';
 import { classifyConversationIntentWithRuntime, classifyQuotationDeliveryChoiceWithRuntime, isSimpleGreeting } from './aiBehaviorRuntime';
 import { buildQuotationAudit } from './quotationAudit';
 import { coalesceConsecutiveGreetingMessages, GREETING_COALESCE_WINDOW_MS } from '../../shared/conversationGreetingCoalescing';
@@ -35,6 +35,7 @@ import {
   finalizeQuotationCompletion,
 } from './quotationCompletionService';
 import { renderQuotationCompletionSuccess } from '../../shared/quotationCompletionRule';
+import { processSessionAnswers } from './quotationWorkflowService';
 
 function customerGoftinoTopicId(metadata?: string | null): string | null {
   if (!metadata) return null;
@@ -732,6 +733,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         : userMessageContent;
       let semanticDeliveryChoice: 'CALL' | 'CHAT' | null = null;
       let deliveryChoiceBehaviorRuntime: unknown = null;
+      let summaryDecision = null;
       if (pendingQuotationSubmission.step === 'DELIVERY_CHOICE') {
         try {
           const choice = await classifyQuotationDeliveryChoiceWithRuntime({
@@ -749,7 +751,32 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
           // The deterministic parser is only a provider-unavailable fallback.
         }
       }
-      const decision = advanceQuotationSubmission(pendingQuotationSubmission, submissionMessage, semanticDeliveryChoice, humanHandoffConfig, quotationCompletionConfig);
+      if (pendingQuotationSubmission.step === 'CONFIRM') {
+        const questions = await prisma.quotationQuestion.findMany({
+          where: { productId: pendingQuotationSubmission.productId },
+          orderBy: [{ order: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+        });
+        summaryDecision = await classifyQuotationSummaryResponseWithAi({
+          message: submissionMessage,
+          state: pendingQuotationSubmission,
+          questions,
+          recentMessages: messagesReversed.map(message => ({ senderType: message.senderType, content: message.content })),
+          behaviorContext: {
+            channel: 'GOFTINO', productId: pendingQuotationSubmission.productId, categoryId: pendingQuotationSubmission.categoryId,
+            currentPageUrl: pendingQuotationSubmission.currentPageUrl, intent: 'Insurance Quotation', conversationState: 'QUOTATION',
+            quotationState: 'AWAITING_CONFIRMATION', messageType: 'CUSTOMER_MESSAGE', userRole: 'CUSTOMER',
+          },
+        });
+        deliveryChoiceBehaviorRuntime = summaryDecision.behaviorRuntime || null;
+        if (summaryDecision.action === 'FIELD_CORRECTION' && summaryDecision.target === 'ANSWER') {
+          await processSessionAnswers(
+            pendingQuotationSubmission.sessionId,
+            { [summaryDecision.fieldName]: summaryDecision.canonicalValue },
+            'customer',
+          );
+        }
+      }
+      const decision = advanceQuotationSubmission(pendingQuotationSubmission, submissionMessage, semanticDeliveryChoice, humanHandoffConfig, quotationCompletionConfig, summaryDecision);
       const profile = decision.state.profile;
       await prisma.customer.update({
         where: { id: customer.id },
@@ -829,7 +856,7 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
       quotationFinalizationAudit = {
         productId: decision.state.productId, productName: decision.state.productName,
         sessionId: decision.state.sessionId,
-        phase: decision.action === 'ROUTE' ? 'FINAL_SUBMISSION' : 'PROFILE_OR_DELIVERY_CHOICE',
+        phase: decision.action === 'ROUTE' ? 'FINAL_SUBMISSION' : pendingQuotationSubmission.step === 'CONFIRM' ? 'SUMMARY_CONFIRMATION' : 'PROFILE_OR_DELIVERY_CHOICE',
         before: finalizationBefore,
         after: {
           status: brainResult.collectedData?.quotationSubmission?.status || decision.state.status,

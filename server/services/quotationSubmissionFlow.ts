@@ -7,6 +7,10 @@ export type QuotationSubmissionStep = 'FULL_NAME' | 'LAST_NAME' | 'MOBILE' | 'CI
 export type QuotationSubmissionStatus = 'COLLECTING_PROFILE' | 'AWAITING_DELIVERY_CHOICE' | 'PROCESSING' | 'SUBMITTED' | 'FAILED' | 'AWAITING_CONFIRMATION' | 'NOT_SUBMITTED';
 export type QuotationDeliveryChoice = 'CALL' | 'CHAT';
 export type QuotationFulfillmentStatus = 'WAITING_FOR_CALLBACK' | 'WAITING_FOR_CHAT_QUOTE';
+export type QuotationSummaryDecision =
+  | { action: 'CONFIRM'; confidence: number; reason: string }
+  | { action: 'FIELD_CORRECTION'; target: 'PROFILE' | 'ANSWER'; fieldName: string; canonicalValue: string; confidence: number; reason: string }
+  | { action: 'UNSPECIFIED_CORRECTION' | 'INVALID_CORRECTION' | 'OTHER'; confidence: number; reason: string };
 
 export type QuotationSubmissionAnswer = {
   order: number;
@@ -88,7 +92,7 @@ export function normalizeIranMobile(value: unknown): string | null {
   return /^09\d{9}$/.test(local) ? local : null;
 }
 
-function normalizeCity(value: unknown): string | null {
+export function normalizeQuotationCity(value: unknown): string | null {
   const city = String(value || '').trim().replace(/\s+/g, ' ');
   return city && !['نامشخص', 'ثبت نشده', 'ندارم'].includes(city) ? city : null;
 }
@@ -102,16 +106,20 @@ function parseName(value: unknown): { fullName?: string; givenName?: string } {
   return /^\p{L}[\p{L}\u200c'-]{1,39}$/u.test(candidate) ? { givenName: candidate } : {};
 }
 
+export function normalizeQuotationFullName(value: unknown): string | null {
+  return parseName(value).fullName || null;
+}
+
 function nextMissingStep(profile: QuotationSubmissionState['profile']): QuotationSubmissionStep {
   if (!validStoredFullName(profile.fullName)) return 'FULL_NAME';
   if (!normalizeIranMobile(profile.mobile)) return 'MOBILE';
-  if (!normalizeCity(profile.city)) return 'CITY';
+  if (!normalizeQuotationCity(profile.city)) return 'CITY';
   return 'CONFIRM';
 }
 
 export function isQuotationSummaryConfirmed(message: string): boolean {
   const normalized = String(message || '').replace(/‌/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-  return /^(?:بله|آره|اره|تأیید|تایید|درسته|صحیحه|اوکی|بله[،, ]+درسته|تأیید(?:\s*می)?\s*کنم|تایید(?:\s*می)?\s*کنم)[.!،؟? ]*$/u.test(normalized);
+  return /^(?:(?:بله|آره|اره)[،, ]*)?(?:همه(?:\s*چی|\s*چیز)?\s*)?(?:درست(?:ه|\s*است)?|صحیح(?:ه|\s*است)?|اوکی(?:ه|\s*است)?|تأیید(?:\s*است|(?:\s*می)?\s*کنم)?|تایید(?:\s*است|(?:\s*می)?\s*کنم)?|بله|آره|اره)[.!،؟? ]*$/u.test(normalized);
 }
 
 function summaryReply(state: QuotationSubmissionState, config: QuotationCompletionRuleConfig): string {
@@ -142,7 +150,7 @@ export function startQuotationSubmission(input: {
   const profile = {
     ...(validStoredFullName(input.existingProfile.fullName) ? { fullName: validStoredFullName(input.existingProfile.fullName)! } : {}),
     ...(normalizeIranMobile(input.existingProfile.mobile) ? { mobile: normalizeIranMobile(input.existingProfile.mobile)! } : {}),
-    ...(normalizeCity(input.existingProfile.city) ? { city: normalizeCity(input.existingProfile.city)! } : {}),
+    ...(normalizeQuotationCity(input.existingProfile.city) ? { city: normalizeQuotationCity(input.existingProfile.city)! } : {}),
   };
   const step = nextMissingStep(profile);
   const state: QuotationSubmissionState = {
@@ -192,7 +200,7 @@ export function quotationDeliveryChoice(message: string): QuotationDeliveryChoic
   return null;
 }
 
-export function advanceQuotationSubmission(state: QuotationSubmissionState, message: string, semanticDeliveryChoice?: QuotationDeliveryChoice | null, profilePrompts: HumanHandoffRuleConfig = DEFAULT_HUMAN_HANDOFF_RULE_CONFIG, completionConfig: QuotationCompletionRuleConfig = DEFAULT_QUOTATION_COMPLETION_CONFIG): QuotationSubmissionDecision {
+export function advanceQuotationSubmission(state: QuotationSubmissionState, message: string, semanticDeliveryChoice?: QuotationDeliveryChoice | null, profilePrompts: HumanHandoffRuleConfig = DEFAULT_HUMAN_HANDOFF_RULE_CONFIG, completionConfig: QuotationCompletionRuleConfig = DEFAULT_QUOTATION_COMPLETION_CONFIG, summaryDecision?: QuotationSummaryDecision | null): QuotationSubmissionDecision {
   const next: QuotationSubmissionState = {
     ...state,
     profile: { ...state.profile },
@@ -200,7 +208,21 @@ export function advanceQuotationSubmission(state: QuotationSubmissionState, mess
   };
   const normalizedResponse = message.replace(/‌/g, ' ').trim();
   if (next.step === 'CONFIRM') {
-    if (!isQuotationSummaryConfirmed(message)) {
+    if (summaryDecision?.action === 'FIELD_CORRECTION') {
+      if (summaryDecision.target === 'PROFILE' && ['fullName', 'mobile', 'city'].includes(summaryDecision.fieldName)) {
+        next.profile[summaryDecision.fieldName as keyof typeof next.profile] = summaryDecision.canonicalValue;
+      } else if (summaryDecision.target === 'ANSWER') {
+        const answer = next.answers.find(item => item.fieldName === summaryDecision.fieldName);
+        if (!answer) return { action: 'ASK', replyText: completionConfig.summaryCorrectionPrompt, state: next };
+        next.answers = next.answers.map(item => item.fieldName === summaryDecision.fieldName
+          ? { ...item, value: summaryDecision.canonicalValue }
+          : item);
+      } else return { action: 'ASK', replyText: completionConfig.summaryCorrectionPrompt, state: next };
+      next.status = 'AWAITING_CONFIRMATION';
+      return { action: 'ASK', replyText: summaryReply(next, completionConfig), state: next };
+    }
+    const confirmed = summaryDecision?.action === 'CONFIRM' && summaryDecision.confidence >= .75;
+    if (!confirmed && !isQuotationSummaryConfirmed(message)) {
       return { action: 'ASK', replyText: completionConfig.summaryCorrectionPrompt, state: next };
     }
     next.status = 'PROCESSING';
@@ -237,7 +259,7 @@ export function advanceQuotationSubmission(state: QuotationSubmissionState, mess
     if (!mobile) return { action: 'ASK', replyText: profilePrompts.mobilePrompt, state: next };
     next.profile.mobile = mobile;
   } else if (next.step === 'CITY') {
-    const city = normalizeCity(message);
+    const city = normalizeQuotationCity(message);
     if (!city) return { action: 'ASK', replyText: profilePrompts.cityPrompt, state: next };
     next.profile.city = city;
   }
