@@ -1,4 +1,4 @@
-import { advanceQuotationTurn, canonicalQuotationHistoryPrefill, canonicalQuotationPrefill, type QuotationTurnState } from './quotationStateMachine';
+import { advanceQuotationTurn, canonicalQuotationAnswer, canonicalQuotationHistoryPrefill, canonicalQuotationPrefill, isQuotationCorrection, isQuotationInterruption, type QuotationTurnState } from './quotationStateMachine';
 import { classifyQuotationTurnWithAi, selectQuotationGuidanceWithAi } from './quotationClassifierService';
 import prisma from '../db/client';
 import {
@@ -224,6 +224,9 @@ export async function processBrainLayer(params: {
   quotationTurnBinding?: QuotationTurnBinding | null;
   preclassifiedIntent?: Awaited<ReturnType<typeof classifyConversationIntentWithRuntime>> | null;
   preclassifiedIntentDurationMs?: number;
+  preclassifiedIntentAttempted?: boolean;
+  prevalidatedBoundAnswer?: string | null;
+  prevalidatedBoundAnswerLookupMs?: number;
 }): Promise<BrainResult> {
   const { customer, conversation, userMessageContent, messageHistory, allowedCategoryId, goftinoPolicyTitle, restrictKnowledgeScope, offeredPurchaseLinkProductIds = [], currentPageUrl: suppliedCurrentPageUrl, messageId, quotationTurnBinding } = params;
   const performanceTimings: Record<string, number> = {
@@ -236,6 +239,21 @@ export async function processBrainLayer(params: {
     behaviorRulesLoadingMs: 0,
     quotationStateProcessingMs: 0,
     responseLlmMs: 0,
+    intentLlmCalls: params.preclassifiedIntentAttempted || params.preclassifiedIntent ? 1 : 0,
+    productLlmCalls: 0,
+    routingLlmCalls: 0,
+    answerInterpretationLlmCalls: 0,
+    guidanceLlmCalls: 0,
+    responseLlmCalls: 0,
+    answerInterpretationValidationMs: 0,
+    guidanceGenerationMs: 0,
+    intentInputChars: params.preclassifiedIntent?.telemetry.inputChars || 0,
+    productInputChars: 0,
+    routingInputChars: 0,
+    answerInterpretationInputChars: 0,
+    guidanceInputChars: 0,
+    responseInputChars: 0,
+    boundQuestionLookupMs: params.prevalidatedBoundAnswerLookupMs || 0,
     postProcessingMs: 0,
   };
 
@@ -265,6 +283,20 @@ export async function processBrainLayer(params: {
   }
 
   const currentPageUrl = suppliedCurrentPageUrl || (typeof customerMetadata.lastUrl === 'string' ? customerMetadata.lastUrl : null);
+  let boundTypedAnswer = params.prevalidatedBoundAnswer;
+  if (boundTypedAnswer === undefined) {
+    const boundQuestionLookupStartedAt = Date.now();
+    const boundQuestion = quotationTurnBinding?.questionId
+      ? await prisma.quotationQuestion.findUnique({ where: { id: quotationTurnBinding.questionId } })
+      : null;
+    const boundTypedEvidence = !isQuotationCorrection(userMessageContent) && !isQuotationInterruption(userMessageContent)
+      ? userMessageContent
+      : '';
+    boundTypedAnswer = boundQuestion && boundTypedEvidence
+      ? await canonicalQuotationAnswer(boundQuestion, boundTypedEvidence)
+      : null;
+    performanceTimings.boundQuestionLookupMs = Date.now() - boundQuestionLookupStartedAt;
+  }
   const pageProductLookupStartedAt = Date.now();
   const currentPageMap = currentPageUrl
     ? await resolveProductByUrl(currentPageUrl, { seedIfEmpty: false, exactOnly: true })
@@ -291,8 +323,9 @@ export async function processBrainLayer(params: {
   let detectedIntent = greetingOnly ? 'Greeting' : detectIntent(userMessageContent, historyText);
   let semanticIntentResolved = false;
   try {
-    if (unsupportedImage || greetingOnly) throw new Error('INTENT_CLASSIFICATION_NOT_APPLICABLE');
+    if (unsupportedImage || greetingOnly || boundTypedAnswer !== null) throw new Error('INTENT_CLASSIFICATION_NOT_APPLICABLE');
     const intentClassificationStartedAt = Date.now();
+    if (params.preclassifiedIntentAttempted && !params.preclassifiedIntent) throw new Error('PRECLASSIFIED_INTENT_UNAVAILABLE');
     const semanticIntent = await classifyConversationIntentOnce({
       message: userMessageContent,
       recentMessages: messageHistory.map(message => ({ senderType: message.senderType, content: message.content })),
@@ -304,13 +337,19 @@ export async function processBrainLayer(params: {
     }, params.preclassifiedIntent);
     if (!params.preclassifiedIntent) {
       performanceTimings.intentClassificationMs = Date.now() - intentClassificationStartedAt;
+      performanceTimings.intentLlmCalls += 1;
     }
+    performanceTimings.intentInputChars = semanticIntent.telemetry.inputChars;
     if (!greetingOnly && semanticIntent.output.confidence >= .65) {
       detectedIntent = semanticIntent.output.intent;
       semanticIntentResolved = true;
     }
   } catch {
     // The narrow fallback distinguishes greeting, quote intent and general inquiry.
+  }
+  if (boundTypedAnswer !== null) {
+    detectedIntent = 'Insurance Quotation';
+    semanticIntentResolved = true;
   }
   const intentFamily = conversationIntentFamily(detectedIntent);
   const openingTransition = advanceConversationOpeningState(
@@ -407,8 +446,9 @@ export async function processBrainLayer(params: {
       originPageProduct: currentPageProduct ? { id: currentPageProduct.id, name: currentPageProduct.name } : null,
     });
     productRoutingAudit = { ...productRoutingAudit, ...accepted, newActiveProductId: productRoutingResult.selectedProductId, source: 'PRODUCT_CONFIRMATION' };
-  } else if (!unsupportedImage && intentFamily !== 'GREETING' && (intentFamily === 'SALES_QUOTE' || Boolean(previousActiveProductId) || existingPageSuggestion?.status === 'AWAITING_CONFIRMATION')) {
+  } else if (boundTypedAnswer === null && !unsupportedImage && intentFamily !== 'GREETING' && (intentFamily === 'SALES_QUOTE' || Boolean(previousActiveProductId) || existingPageSuggestion?.status === 'AWAITING_CONFIRMATION')) {
     try {
+      performanceTimings.productLlmCalls += 1;
       const semanticProduct = await classifyProductIntentWithRuntime({
         message: userMessageContent,
         recentMessages: messageHistory.map(message => ({ senderType: message.senderType, content: message.content })),
@@ -422,6 +462,7 @@ export async function processBrainLayer(params: {
         previousActiveProductId,
         previousConfirmedProductId: previousProductRoutingState?.confirmedProductId || null,
       });
+      performanceTimings.productInputChars = semanticProduct.telemetry.inputChars;
       const ruleApplied = semanticProduct.resolution.selected.some(rule => rule.category === PRODUCT_INTENT_ROUTING_RULE_CATEGORY);
       if (ruleApplied) {
         productRoutingResult = applyProductIntentClassification({
@@ -502,10 +543,11 @@ export async function processBrainLayer(params: {
   const quotationRoutingStartedAt = Date.now();
   const routingRuleForClassification = await getQuotationRoutingRule();
   try {
-    if (unsupportedImage) throw new Error('UNSUPPORTED_MEDIA');
+    if (unsupportedImage || boundTypedAnswer !== null) throw new Error('ROUTING_NOT_APPLICABLE');
     if (productRoutingResult.clarificationQuestion || intentFamily === 'GREETING' || (intentFamily !== 'SALES_QUOTE' && !conversation.currentProductId && !productRoutingResult.selectedProductId && existingPageSuggestion?.status !== 'AWAITING_CONFIRMATION')) {
       throw new Error('ROUTING_NOT_APPLICABLE');
     }
+    performanceTimings.routingLlmCalls += 1;
     const routing = await classifyQuotationRoutingWithRuntime({
       message: userMessageContent,
       recentMessages: messageHistory.map(message => ({ senderType: message.senderType, content: message.content })),
@@ -525,6 +567,7 @@ export async function processBrainLayer(params: {
         assistedLeadExamples: routingRuleForClassification?.templates.assistedLeadExamples || [],
       },
     });
+    performanceTimings.routingInputChars = routing.telemetry.inputChars;
     semanticRoutingAvailable = true;
     if (routing.output.confidence >= .7) semanticRoutingDecision = routing.output.decision;
   } catch {
@@ -793,32 +836,10 @@ export async function processBrainLayer(params: {
         && existingCollectedData.quotationSubmission?.productId === product.id
         ? existingCollectedData.quotationSubmission.sessionId : undefined,
     });
-    const sessionQuestions = session.workflow?.questions || [];
-    const prefillAnswers = {
-      ...await canonicalQuotationHistoryPrefill(sessionQuestions, messageHistory),
-      ...await canonicalQuotationPrefill(sessionQuestions, existingCollectedData),
-    };
-    const storedAssistedLimit = existingCollectedData.purchaseLinkState?.status === 'DETAILED_QUOTATION_SELECTED'
-      && existingCollectedData.purchaseLinkState?.productId === product.id
-      && existingCollectedData.purchaseLinkState?.mode === 'ASSISTED_LEAD'
-      && Number.isInteger(existingCollectedData.purchaseLinkState?.assistedLeadQuestionLimit)
-      ? Number(existingCollectedData.purchaseLinkState.assistedLeadQuestionLimit)
-      : null;
-    const conversionMode: 'ASSISTED_LEAD' | 'ASSISTED_QUOTE' = entryConversionMode;
-    const assistedQuestionLimit = quotationQuestionLimitForConversionMode(
-      conversionMode,
-      storedAssistedLimit || quotationRoutingRule?.templates.assistedLeadQuestionLimit || 5,
-    );
-    const assistedQuestions = assistedQuestionLimit ? sessionQuestions.slice(0, assistedQuestionLimit) : sessionQuestions;
-    let evaluation = await processSessionAnswers(session.id, prefillAnswers, 'ai_extracted', { questionLimit: assistedQuestionLimit || undefined });
     const workflowWasActive = Boolean(activeSessionBinding && activeSessionBinding.sessionId === session.id);
-    const pendingQuestion = evaluation.nextQuestion;
-    if (workflowWasActive && isStaleQuotationTurn(quotationTurnBinding, {
-      sessionId: session.id,
-      productId: product.id,
-      questionId: pendingQuestion?.id || null,
-      fieldName: pendingQuestion?.fieldName || null,
-    })) {
+    // Reject a late transport turn before any prefill or session write. This
+    // keeps a stale customer message from advancing the persisted stateVersion.
+    if (workflowWasActive && isStaleQuotationTurn(quotationTurnBinding, activeSessionBinding)) {
       return {
         suppressAutomaticReply: true,
         intent,
@@ -840,6 +861,25 @@ export async function processBrainLayer(params: {
         },
       };
     }
+    const sessionQuestions = session.workflow?.questions || [];
+    const prefillAnswers = {
+      ...await canonicalQuotationHistoryPrefill(sessionQuestions, messageHistory),
+      ...await canonicalQuotationPrefill(sessionQuestions, existingCollectedData),
+    };
+    const storedAssistedLimit = existingCollectedData.purchaseLinkState?.status === 'DETAILED_QUOTATION_SELECTED'
+      && existingCollectedData.purchaseLinkState?.productId === product.id
+      && existingCollectedData.purchaseLinkState?.mode === 'ASSISTED_LEAD'
+      && Number.isInteger(existingCollectedData.purchaseLinkState?.assistedLeadQuestionLimit)
+      ? Number(existingCollectedData.purchaseLinkState.assistedLeadQuestionLimit)
+      : null;
+    const conversionMode: 'ASSISTED_LEAD' | 'ASSISTED_QUOTE' = entryConversionMode;
+    const assistedQuestionLimit = quotationQuestionLimitForConversionMode(
+      conversionMode,
+      storedAssistedLimit || quotationRoutingRule?.templates.assistedLeadQuestionLimit || 5,
+    );
+    const assistedQuestions = assistedQuestionLimit ? sessionQuestions.slice(0, assistedQuestionLimit) : sessionQuestions;
+    let evaluation = await processSessionAnswers(session.id, prefillAnswers, 'ai_extracted', { questionLimit: assistedQuestionLimit || undefined });
+    const pendingQuestion = evaluation.nextQuestion;
     if (workflowWasActive) {
       quotationTurn = await advanceQuotationTurn({
         sessionId: session.id,
@@ -861,6 +901,12 @@ export async function processBrainLayer(params: {
         behaviorContext,
         recentMessages: messageHistory.map(message => ({ senderType: message.senderType, content: message.content })),
       });
+      performanceTimings.answerInterpretationLlmCalls += quotationTurn.performance.classifierCallCount;
+      performanceTimings.guidanceLlmCalls += quotationTurn.performance.guidanceCallCount;
+      performanceTimings.answerInterpretationValidationMs += quotationTurn.performance.classifierMs;
+      performanceTimings.guidanceGenerationMs += quotationTurn.performance.guidanceMs;
+      performanceTimings.answerInterpretationInputChars += quotationTurn.performance.classifierInputChars;
+      performanceTimings.guidanceInputChars += quotationTurn.performance.guidanceInputChars;
       if (Object.keys(quotationTurn.updates).length) {
         evaluation = await processSessionAnswers(session.id, quotationTurn.updates, 'customer', { questionLimit: assistedQuestionLimit || undefined });
       }
@@ -888,6 +934,7 @@ export async function processBrainLayer(params: {
         nextQuestionText: pendingQuestion ? quotationQuestionReply(pendingQuestion) : null,
         answerValidation: { status: 'CLARIFY', reason: 'Quotation workflow initialized', canonicalValue: null, confidence: 1, fieldName: pendingQuestion?.fieldName || null },
         decisionSource: 'BACKEND_WORKFLOW_INITIALIZATION',
+        performance: { modelCallCount: 0, classifierCallCount: 0, guidanceCallCount: 0, classifierMs: 0, guidanceMs: 0, classifierInputChars: 0, guidanceInputChars: 0 },
       };
     }
 
@@ -1035,6 +1082,7 @@ export async function processBrainLayer(params: {
   while (!deterministicReply && retryCount <= 2) {
     const responseLlmStartedAt = Date.now();
     try {
+      performanceTimings.responseLlmCalls += 1;
       const runtimeResult = await runAiBehaviorStructuredModel<{
         decision: string;
         intent: string;
@@ -1074,6 +1122,7 @@ export async function processBrainLayer(params: {
         },
       });
       modelUsed = runtimeResult.model;
+      performanceTimings.responseInputChars += runtimeResult.telemetry.inputChars;
       effectiveBehaviorRuntime = runtimeResult.resolution;
       promptTokens += runtimeResult.usage.promptTokens;
       completionTokens += runtimeResult.usage.completionTokens;
@@ -1133,6 +1182,12 @@ export async function processBrainLayer(params: {
     generatedOperatorSummary = `پرسش‌های استعلام ${quotationState.productName} تکمیل شد و آماده محاسبه قیمت است.`;
   }
 
+  performanceTimings.totalLlmCalls = performanceTimings.intentLlmCalls
+    + performanceTimings.productLlmCalls
+    + performanceTimings.routingLlmCalls
+    + performanceTimings.answerInterpretationLlmCalls
+    + performanceTimings.guidanceLlmCalls
+    + performanceTimings.responseLlmCalls;
   const postProcessingStartedAt = Date.now();
   const loadedKnowledgeSummary = JSON.stringify({
     summary: purchaseLinkOffer

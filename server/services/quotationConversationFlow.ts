@@ -3,6 +3,7 @@ import { isDirectQuotationWorkflowRequest } from '../../shared/productPurchaseLi
 export type QuotationTurnQuestion = {
   id?: string;
   createdAt?: Date | string | null;
+  updatedAt?: Date | string | null;
   title: string;
   aiQuestion?: string | null;
   fieldName: string;

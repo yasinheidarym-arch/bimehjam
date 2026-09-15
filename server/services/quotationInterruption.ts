@@ -81,7 +81,7 @@ export async function resolveQuotationGuidance(input: {
   select: GuidanceGenerator;
   tone?: string;
   behaviorContext?: { channel: string; productId?: string | null; categoryId?: string | null; currentPageUrl?: string | null; intent?: string | null; conversationState?: string | null; quotationState?: string | null; currentField?: string | null; messageType?: string | null; userRole?: string | null };
-}): Promise<{ text: string; source: QuotationGuidanceSource }> {
+}): Promise<{ text: string; source: QuotationGuidanceSource; modelCallCount: number; inputChars: number }> {
   const tone = input.tone || 'کارشناس حرفه‌ای، محترمانه، صمیمی و غیررسمیِ کنترل‌شده؛ خطاب جمع و بدون عبارت دستوری یا بچگانه';
   const helpText = input.question.helpText?.trim() || '';
   const productKnowledge = input.knowledge.trim();
@@ -92,8 +92,8 @@ export async function resolveQuotationGuidance(input: {
       { source: 'PRODUCT_KNOWLEDGE' as const, text: productKnowledge },
       { source: 'CATEGORY_KNOWLEDGE' as const, text: categoryKnowledge },
     ];
-    for (const candidateSource of groundedSources) {
-      if (!sourceCanAnswer(candidateSource.text, input.message, input.question, candidateSource.source)) continue;
+    const candidateSource = groundedSources.find(source => sourceCanAnswer(source.text, input.message, input.question, source.source));
+    if (candidateSource) {
       const raw = await input.select({
         ...input, source: candidateSource.source, sourceText: candidateSource.text,
         helpText, productKnowledge, categoryKnowledge,
@@ -101,7 +101,12 @@ export async function resolveQuotationGuidance(input: {
         behaviorContext: input.behaviorContext,
       });
       const response = groundedCandidate(raw, candidateSource.text, input.question);
-      if (response) return { text: response, source: candidateSource.source };
+      const telemetry = raw && typeof raw === 'object' && (raw as Record<string, unknown>).modelTelemetry && typeof (raw as Record<string, unknown>).modelTelemetry === 'object'
+        ? (raw as Record<string, unknown>).modelTelemetry as Record<string, unknown>
+        : null;
+      if (response) return { text: response, source: candidateSource.source, modelCallCount: 1, inputChars: typeof telemetry?.inputChars === 'number' ? telemetry.inputChars : 0 };
+      if (candidateSource.source === 'HELP_TEXT') return { text: naturalizeQuotationHelp(input.question, candidateSource.text), source: 'HELP_TEXT', modelCallCount: 1, inputChars: typeof telemetry?.inputChars === 'number' ? telemetry.inputChars : 0 };
+      return { text: quotationQuestionHelp({ ...input.question, helpText: '' }), source: 'FIELD_SCHEMA', modelCallCount: 1, inputChars: typeof telemetry?.inputChars === 'number' ? telemetry.inputChars : 0 };
     }
     const raw = await input.select({
       ...input, source: 'GENERAL_MODEL_KNOWLEDGE', sourceText: '', helpText,
@@ -112,7 +117,10 @@ export async function resolveQuotationGuidance(input: {
     const response = safeGeneralCandidate(raw, input.question);
     if (response) {
       const limitation = raw && typeof raw === 'object' && (raw as Record<string, unknown>).source === 'HONEST_LIMITATION';
-      return { text: response, source: limitation ? 'HONEST_LIMITATION' : 'GENERAL_MODEL_KNOWLEDGE' };
+      const telemetry = raw && typeof raw === 'object' && (raw as Record<string, unknown>).modelTelemetry && typeof (raw as Record<string, unknown>).modelTelemetry === 'object'
+        ? (raw as Record<string, unknown>).modelTelemetry as Record<string, unknown>
+        : null;
+      return { text: response, source: limitation ? 'HONEST_LIMITATION' : 'GENERAL_MODEL_KNOWLEDGE', modelCallCount: 1, inputChars: typeof telemetry?.inputChars === 'number' ? telemetry.inputChars : 0 };
     }
   } catch {
     // Provider failure uses only deterministic grounded fallbacks below.
@@ -120,13 +128,15 @@ export async function resolveQuotationGuidance(input: {
 
   // When the model is unavailable, never guess. A stored helpText remains the
   // safest field-specific fallback, followed by field schema guidance.
-  if (sourceCanAnswer(helpText, input.message, input.question, 'HELP_TEXT')) return { text: naturalizeQuotationHelp(input.question, helpText), source: 'HELP_TEXT' };
+  if (sourceCanAnswer(helpText, input.message, input.question, 'HELP_TEXT')) return { text: naturalizeQuotationHelp(input.question, helpText), source: 'HELP_TEXT', modelCallCount: 1, inputChars: 0 };
 
   const generic = quotationQuestionHelp(input.question);
-  if (generic.trim()) return { text: generic, source: 'FIELD_SCHEMA' };
+  if (generic.trim()) return { text: generic, source: 'FIELD_SCHEMA', modelCallCount: 1, inputChars: 0 };
   return {
     text: `جزئیات تخصصی مربوط به «${input.question.title}» نیاز به بررسی کارشناس دارد.`,
     source: 'HONEST_LIMITATION',
+    modelCallCount: 1,
+    inputChars: 0,
   };
 }
 

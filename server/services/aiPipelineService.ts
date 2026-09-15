@@ -37,6 +37,7 @@ import {
 import { renderQuotationCompletionSuccess } from '../../shared/quotationCompletionRule';
 import { processSessionAnswers } from './quotationWorkflowService';
 import { conversationStatusAfterAiTurn } from '../../shared/conversationOperatorState';
+import { canonicalQuotationAnswer, isQuotationCorrection, isQuotationInterruption } from './quotationStateMachine';
 
 function customerGoftinoTopicId(metadata?: string | null): string | null {
   if (!metadata) return null;
@@ -608,6 +609,14 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
     || await prisma.message.findUnique({ where: { id: messageId } });
   const sourceMetadata = parseConversationCollectedData(sourceMessage?.metadata);
   const quotationTurnBinding = sourceMetadata.quotationTurnBinding || null;
+  const boundAnswerLookupStartedAt = Date.now();
+  const boundQuestion = quotationTurnBinding?.questionId
+    ? await prisma.quotationQuestion.findUnique({ where: { id: quotationTurnBinding.questionId } })
+    : null;
+  const prevalidatedBoundAnswer = boundQuestion && !isQuotationCorrection(userMessageContent) && !isQuotationInterruption(userMessageContent)
+    ? await canonicalQuotationAnswer(boundQuestion, userMessageContent)
+    : null;
+  const boundAnswerLookupMs = Date.now() - boundAnswerLookupStartedAt;
 
   let brainResult;
   let quotationFinalizationAudit: QuotationFinalizationAudit | null = null;
@@ -656,8 +665,10 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
     let customerRequestedHuman = false;
     let preclassifiedIntent: Awaited<ReturnType<typeof classifyConversationIntentWithRuntime>> | null = null;
     let intentClassificationDurationMs = 0;
+    let preclassifiedIntentAttempted = false;
     try {
-      if (isSimpleGreeting(userMessageContent)) throw new Error('INTENT_CLASSIFICATION_NOT_APPLICABLE');
+      if (isSimpleGreeting(userMessageContent) || prevalidatedBoundAnswer !== null) throw new Error('INTENT_CLASSIFICATION_NOT_APPLICABLE');
+      preclassifiedIntentAttempted = true;
       const intentClassificationStartedAt = Date.now();
       const semanticIntent = await classifyConversationIntentWithRuntime({
         message: userMessageContent,
@@ -978,6 +989,9 @@ async function runAiPipelineTurn(params: AiPipelineParams) {
         quotationTurnBinding,
         preclassifiedIntent,
         preclassifiedIntentDurationMs: intentClassificationDurationMs,
+        preclassifiedIntentAttempted,
+        prevalidatedBoundAnswer,
+        prevalidatedBoundAnswerLookupMs: boundAnswerLookupMs,
       });
 
       if (brainResult.suppressAutomaticReply) {

@@ -377,6 +377,8 @@ export async function getActiveQuotationTurnBinding(conversationId: string, prod
     productId: session.productId,
     questionId: currentQuestion?.id || null,
     fieldName: currentQuestion?.fieldName || null,
+    questionRevision: currentQuestion?.updatedAt?.toISOString() || null,
+    stateVersion: session.updatedAt.toISOString(),
   };
 }
 
@@ -431,9 +433,12 @@ export async function processSessionAnswers(
     value !== undefined && value !== null && value !== '' && session.workflow?.questions.some(q => q.fieldName === key),
   ));
   const updatedData = { ...currentData, ...allowedAnswers };
+  const changedAnswers = Object.fromEntries(Object.entries(allowedAnswers).filter(([key, value]) =>
+    currentData[key] !== String(value),
+  ));
 
   // Save each answer in QuotationAnswer table
-  for (const [key, val] of Object.entries(allowedAnswers)) {
+  for (const [key, val] of Object.entries(changedAnswers)) {
     if (val === undefined || val === null || val === '') continue;
 
     const matchedQuestion = session.workflow?.questions.find((q) => q.fieldName === key);
@@ -480,19 +485,26 @@ export async function processSessionAnswers(
   const nextQuestion = missingQuestions[0] || null;
 
   // Update session state
-  const updatedSession = await tx.quotationSession.update({
-    where: { id: sessionId },
-    data: {
-      collectedData: JSON.stringify(updatedData),
-      status: isCompleted ? 'COMPLETED' : 'IN_PROGRESS',
-      completedAt: isCompleted ? new Date() : null,
-      currentStep: activeQuestions.length - missingQuestions.length + 1,
-    },
-    include: {
-      product: true,
-      answers: { include: { question: true } },
-    },
-  });
+  const nextStatus = isCompleted ? 'COMPLETED' : 'IN_PROGRESS';
+  const nextStep = activeQuestions.length - missingQuestions.length + 1;
+  const sessionNeedsUpdate = Object.keys(changedAnswers).length > 0
+    || session.status !== nextStatus
+    || session.currentStep !== nextStep;
+  const updatedSession = sessionNeedsUpdate
+    ? await tx.quotationSession.update({
+        where: { id: sessionId },
+        data: {
+          collectedData: JSON.stringify(updatedData),
+          status: nextStatus,
+          completedAt: isCompleted ? new Date() : null,
+          currentStep: nextStep,
+        },
+        include: {
+          product: true,
+          answers: { include: { question: true } },
+        },
+      })
+    : session;
 
   // Completion means only that the questionnaire is complete. Registration
   // and operator referral happen later, after profile completion and explicit

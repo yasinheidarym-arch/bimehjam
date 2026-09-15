@@ -196,7 +196,7 @@ export const classifyQuotationTurnWithAi: QuotationTurnModel = async (input) => 
         questions: input.questions.map(question => ({ ...question, options: quotationQuestionOptions(question) })),
     },
   });
-  return { ...result.output, behaviorRuntime: result.resolution };
+  return { ...result.output, behaviorRuntime: result.resolution, modelTelemetry: result.telemetry };
 };
 
 export async function selectQuotationGuidanceWithAi(input: {
@@ -227,5 +227,5 @@ export async function selectQuotationGuidanceWithAi(input: {
     },
     payload: { ...input, behaviorContext: undefined },
   });
-  return { ...result.output, behaviorRuntime: result.resolution };
+  return { ...result.output, behaviorRuntime: result.resolution, modelTelemetry: result.telemetry };
 }

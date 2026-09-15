@@ -1,6 +1,6 @@
 import { answerPortion, quotationQuestionReply, sortQuotationQuestions, type QuotationTurnQuestion } from './quotationConversationFlow';
 import { quotationQuestionHelp } from './quotationQuestionHelp';
-import { normalizeQuotationOptionText as normalize, numbersIn, isPlainQuotationNumber, quotationQuestionOptions, resolveQuotationOptionSelection } from './quotationOptionMatchingService';
+import { canonicalDurationDays, canonicalDurationValue, normalizeQuotationOptionText as normalize, numbersIn, isPlainQuotationNumber, quotationQuestionOptions, resolveQuotationOptionSelection } from './quotationOptionMatchingService';
 import { isAmbiguousQuotationMoney, resolveQuotationMoney } from './quotationMoney';
 import { DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG, NON_REPEATING_CLARIFICATION_STATES, QUOTATION_RESPONSE_STATES, type QuotationResponseEngineConfig, type QuotationResponseState } from '../../shared/quotationResponseEngine';
 import { resolveQuotationGuidance, type QuotationGuidanceSource } from './quotationInterruption';
@@ -8,7 +8,7 @@ import { quotationBehaviorContext } from './aiBehaviorRuntime';
 
 export type QuotationTurnState = { version: 1; sessionId: string; currentQuestion: QuotationTurnQuestion | null; answers: Record<string, string>; attempts: Record<string, number>; ambiguity: 'NONE' | 'CLARIFY' | 'HELP'; lastAnsweredField: string | null };
 export type QuotationClassifierAssignment = { fieldName: string; value: string; selectedOptionId?: string | null; selectedOptionValue?: string | null; evidence: string; confidence: number };
-export type QuotationClassification = { status: QuotationResponseState; confidence: number; reason: string; assignments: QuotationClassifierAssignment[]; relatedFieldName?: string | null; relatedExplanation?: string | null; clarification?: string | null; behaviorRuntime?: unknown };
+export type QuotationClassification = { status: QuotationResponseState; confidence: number; reason: string; assignments: QuotationClassifierAssignment[]; relatedFieldName?: string | null; relatedExplanation?: string | null; clarification?: string | null; behaviorRuntime?: unknown; modelTelemetry?: { durationMs?: number; inputChars?: number } };
 export type QuotationTurnModel = (context: { message: string; currentQuestion: QuotationTurnQuestion | null; questions: QuotationTurnQuestion[]; answers: Record<string, string>; correction: boolean; rule: QuotationResponseEngineConfig; validAnswerExamples: string[]; recentMessages: Array<{ senderType: string; content: string }>; session: { id: string; status: string; currentFieldName: string | null; answeredFieldNames: string[] }; grounding: { questionId: string | null; questionText: string | null; fieldLabel: string | null; fieldType: string | null; options: ReturnType<typeof quotationQuestionOptions>; validation: { minVal?: number | null; maxVal?: number | null; minLength?: number | null; maxLength?: number | null }; helpText: string | null; productKnowledge: string; categoryKnowledge: string }; behaviorContext?: { channel: string; productId?: string | null; categoryId?: string | null; currentPageUrl?: string | null; intent?: string | null; conversationState?: string | null; quotationState?: string | null; currentField?: string | null; messageType?: string | null; userRole?: string | null } }) => Promise<unknown>;
 export type TurnDecision = { status: QuotationResponseState; fieldName: string | null; confidence: number; reason: string; outcome: 'SAVED' | 'CORRECTED' | 'CLARIFY' | 'INTERRUPTION' };
 
@@ -40,6 +40,11 @@ export async function canonicalQuotationAnswer(q: QuotationTurnQuestion, evidenc
   const options = quotationQuestionOptions(q);
   if (!text) return null;
   if (/^(آره|اره|بله|نه|خیر|باشه)$/.test(text) && q.type !== 'boolean' && !options.some(o => /^(بله|خیر|آره|نه|دارد|ندارد)$/.test(normalize(o.value)))) return null;
+  if (q.type === 'boolean') {
+    if (/^(?:بله|آره|اره|دارد|هست)$/u.test(text)) return 'بله';
+    if (/^(?:نه|خیر|ندارد|نیست)$/u.test(text)) return 'خیر';
+    return null;
+  }
   if (options.length) {
     const money = resolveQuotationMoney(q, text);
     if (money?.status === 'MATCHED') return money.matchedOption || null;
@@ -83,6 +88,12 @@ export async function canonicalQuotationAnswer(q: QuotationTurnQuestion, evidenc
       ? [match[1], match[2].padStart(2, '0'), match[3].padStart(2, '0')].join('/')
       : null;
   }
+  if (q.type === 'phone') {
+    const compact = text.replace(/[\s()-]/g, '');
+    return /^\+?\d{10,15}$/.test(compact) ? compact : null;
+  }
+  if (q.type === 'duration') return canonicalDurationValue(text);
+  if (['location', 'person', 'name'].includes(q.type || '') && proposed === undefined) return null;
   if ((!q.type || q.type === 'text' || q.type === 'textarea') && proposed === undefined) return null;
   const value = proposed?.trim() || text;
   if (!value || (q.minLength != null && value.length < q.minLength) || (q.maxLength != null && value.length > q.maxLength)) return null;
@@ -109,16 +120,24 @@ export async function canonicalQuotationHistoryPrefill(
   questions: QuotationTurnQuestion[],
   messages: Array<{ senderType: string; content: string }>,
 ): Promise<Record<string, string>> {
-  const durationQuestions = questions.filter(question => /مدت|دوره|اعتبار/u.test(`${question.title} ${question.fieldName}`));
+  const durationQuestions = questions.filter(question => question.type === 'duration' || /مدت|دوره|اعتبار/u.test(question.title) || (() => {
+    const options = quotationQuestionOptions(question);
+    return options.length > 0 && options.every(option => canonicalDurationValue(option.value));
+  })());
   const customerMessages = messages.filter(message => message.senderType === 'CUSTOMER').map(message => message.content);
   for (const question of durationQuestions) {
     for (const message of [...customerMessages].reverse()) {
       const normalizedMessage = normalize(message);
-      const explicitDurations = normalizedMessage.match(/(?:\d+(?:[.,]\d+)?|یک|دو|سه|چهار|پنج|شش|هفت|هشت|نه|ده|یازده|دوازده)\s*(?:روز|ماهه?|ماه|ساله?|سال)/gu) || [];
-      for (const duration of [...explicitDurations].reverse()) {
-        const value = await canonicalQuotationAnswer(question, duration);
-        if (value !== null) return { [question.fieldName]: value };
+      if (!/(?:روز|ماهه?|ماه|هفته|ساله?|سال)/u.test(normalizedMessage)) continue;
+      const durationDays = canonicalDurationDays(normalizedMessage);
+      if (question.type === 'number' && durationDays !== null) {
+        if ((question.minVal == null || durationDays >= question.minVal) && (question.maxVal == null || durationDays <= question.maxVal)) {
+          return { [question.fieldName]: String(durationDays) };
+        }
+        continue;
       }
+      const value = await canonicalQuotationAnswer(question, normalizedMessage);
+      if (value !== null) return { [question.fieldName]: value };
     }
   }
   return {};
@@ -140,7 +159,8 @@ function parseClassification(raw: unknown, correction = false): QuotationClassif
     if (typeof candidate.fieldName !== 'string' || typeof candidate.value !== 'string' || typeof candidate.evidence !== 'string' || typeof candidate.confidence !== 'number') return [];
     return [{ fieldName: candidate.fieldName, value: candidate.value, evidence: candidate.evidence, confidence: candidate.confidence, selectedOptionId: typeof candidate.selectedOptionId === 'string' ? candidate.selectedOptionId : null, selectedOptionValue: typeof candidate.selectedOptionValue === 'string' ? candidate.selectedOptionValue : null }];
   }) : [];
-  return { status: value.status as QuotationResponseState, confidence, reason: typeof value.reason === 'string' ? value.reason : 'Classifier returned no reason', assignments, relatedFieldName: typeof value.relatedFieldName === 'string' ? value.relatedFieldName : null, relatedExplanation: typeof value.relatedExplanation === 'string' ? value.relatedExplanation : null, clarification: typeof value.clarification === 'string' ? value.clarification : null, behaviorRuntime: value.behaviorRuntime };
+  const telemetry = value.modelTelemetry && typeof value.modelTelemetry === 'object' ? value.modelTelemetry as Record<string, unknown> : null;
+  return { status: value.status as QuotationResponseState, confidence, reason: typeof value.reason === 'string' ? value.reason : 'Classifier returned no reason', assignments, relatedFieldName: typeof value.relatedFieldName === 'string' ? value.relatedFieldName : null, relatedExplanation: typeof value.relatedExplanation === 'string' ? value.relatedExplanation : null, clarification: typeof value.clarification === 'string' ? value.clarification : null, behaviorRuntime: value.behaviorRuntime, modelTelemetry: telemetry ? { durationMs: typeof telemetry.durationMs === 'number' ? telemetry.durationMs : undefined, inputChars: typeof telemetry.inputChars === 'number' ? telemetry.inputChars : undefined } : undefined };
 }
 
 async function safeFallbackClassification(current: QuotationTurnQuestion | null, message: string, correction: boolean): Promise<QuotationClassification> {
@@ -180,9 +200,31 @@ export async function advanceQuotationTurn(input: { sessionId: string; sessionSt
   const fallbackCorrection = isQuotationCorrection(input.message);
   const config = input.engine?.config || DEFAULT_QUOTATION_RESPONSE_ENGINE_CONFIG;
   let classification: QuotationClassification | null = null;
-  if (input.engine?.active !== false && input.model) {
-    try { classification = parseClassification(await input.model({ message: normalize(input.message), currentQuestion: current, questions: sortQuotationQuestions(input.questions), answers, correction: false, rule: config, validAnswerExamples: current?.id ? config.questionExamples[current.id] || [] : [], recentMessages: (input.recentMessages || []).slice(-8), session: { id: input.sessionId, status: input.sessionStatus || 'IN_PROGRESS', currentFieldName: current?.fieldName || null, answeredFieldNames: Object.keys(answers) }, grounding: { questionId: current?.id || null, questionText: current ? quotationQuestionReply(current) : null, fieldLabel: current?.title || null, fieldType: current?.type || null, options: current ? quotationQuestionOptions(current) : [], validation: { minVal: current?.minVal, maxVal: current?.maxVal, minLength: current?.minLength, maxLength: current?.maxLength }, helpText: current?.helpText?.trim() || null, productKnowledge: (input.productKnowledge || '').slice(0, 12000), categoryKnowledge: (input.categoryKnowledge || '').slice(0, 12000) }, behaviorContext: quotationBehaviorContext({ ...input.behaviorContext, quotationState: input.sessionStatus || 'IN_PROGRESS', currentField: current?.fieldName || null }) }), false); }
+  let modelCallCount = 0;
+  let classifierCallCount = 0;
+  let guidanceCallCount = 0;
+  let classifierMs = 0;
+  let guidanceMs = 0;
+  let guidanceInputChars = 0;
+  const normalizedMessage = normalize(input.message);
+  const messageLooksLikeInterruption = isQuotationInterruption(normalizedMessage);
+  const deterministicEvidence = fallbackCorrection
+    ? ''
+    : answerPortion(normalizedMessage, messageLooksLikeInterruption) || (messageLooksLikeInterruption ? '' : normalizedMessage);
+  const deterministicValue = current && deterministicEvidence ? await canonicalQuotationAnswer(current, deterministicEvidence) : null;
+  if (current && deterministicValue !== null) {
+    classification = {
+      status: 'VALID_ANSWER', confidence: 1,
+      reason: 'Typed answer engine produced a backend-validated canonical answer',
+      assignments: [{ fieldName: current.fieldName, value: deterministicValue, evidence: deterministicEvidence, confidence: 1 }],
+    };
+  } else if (input.engine?.active !== false && input.model) {
+    const classifierStartedAt = Date.now();
+    modelCallCount += 1;
+    classifierCallCount += 1;
+    try { classification = parseClassification(await input.model({ message: normalizedMessage, currentQuestion: current, questions: sortQuotationQuestions(input.questions), answers, correction: fallbackCorrection, rule: config, validAnswerExamples: current?.id ? config.questionExamples[current.id] || [] : [], recentMessages: (input.recentMessages || []).slice(-8), session: { id: input.sessionId, status: input.sessionStatus || 'IN_PROGRESS', currentFieldName: current?.fieldName || null, answeredFieldNames: Object.keys(answers) }, grounding: { questionId: current?.id || null, questionText: current ? quotationQuestionReply(current) : null, fieldLabel: current?.title || null, fieldType: current?.type || null, options: current ? quotationQuestionOptions(current) : [], validation: { minVal: current?.minVal, maxVal: current?.maxVal, minLength: current?.minLength, maxLength: current?.maxLength }, helpText: current?.helpText?.trim() || null, productKnowledge: (input.productKnowledge || '').slice(0, 12000), categoryKnowledge: (input.categoryKnowledge || '').slice(0, 12000) }, behaviorContext: quotationBehaviorContext({ ...input.behaviorContext, quotationState: input.sessionStatus || 'IN_PROGRESS', currentField: current?.fieldName || null }) }), fallbackCorrection); }
     catch { classification = null; }
+    finally { classifierMs = Date.now() - classifierStartedAt; }
   }
   if (!classification) classification = await safeFallbackClassification(current, normalize(input.message), fallbackCorrection);
   if (current && classification.status !== 'CORRECTION' && !['VALID_ANSWER', 'ANSWER_AND_QUESTION', 'MULTI_FIELD_ANSWER'].includes(classification.status)) {
@@ -229,6 +271,7 @@ export async function advanceQuotationTurn(input: { sessionId: string; sessionSt
   let helpResponse = current ? quotationQuestionHelp(current) : '';
   let guidanceSource: QuotationGuidanceSource | null = null;
   if (current && ['QUESTION_ABOUT_CURRENT_FIELD', 'ANSWER_AND_QUESTION'].includes(classification.status)) {
+    const guidanceStartedAt = Date.now();
     const guidance = await resolveQuotationGuidance({
       message: input.message,
       question: current,
@@ -240,6 +283,10 @@ export async function advanceQuotationTurn(input: { sessionId: string; sessionSt
     });
     helpResponse = guidance.text;
     guidanceSource = guidance.source;
+    modelCallCount += guidance.modelCallCount;
+    guidanceCallCount += guidance.modelCallCount;
+    guidanceInputChars += guidance.inputChars;
+    guidanceMs = Date.now() - guidanceStartedAt;
   }
   const clarification = safeClassifierText(classification.clarification) || (current ? genericClarification(current, classification.status, attemptCount, input.message) : '');
   const relatedQuestion = classification.relatedFieldName ? input.questions.find(question => question.fieldName === classification.relatedFieldName) : null;
@@ -255,5 +302,5 @@ export async function advanceQuotationTurn(input: { sessionId: string; sessionSt
   const ambiguity: QuotationTurnState['ambiguity'] = classification.status === 'QUESTION_ABOUT_CURRENT_FIELD' ? 'HELP' : ['AMBIGUOUS', 'RELATED_BUT_WRONG_CATEGORY', 'UNRELATED'].includes(classification.status) ? 'CLARIFY' : 'NONE';
   const state: QuotationTurnState = { version: 1, sessionId: input.sessionId, currentQuestion: next, answers, attempts, ambiguity, lastAnsweredField: Object.keys(updates).at(-1) || previous?.lastAnsweredField || null };
   const primaryDecision = decisions[0];
-  return { state, currentQuestionBefore: current, updates, decisions, classification, responseText, guidance: guidanceSource ? { source: guidanceSource, helpTextUsed: guidanceSource === 'HELP_TEXT' ? current?.helpText?.trim() || null : null, helpResponse, questionId: current?.id || null, questionText: current ? quotationQuestionReply(current) : null, productKnowledgeProvided: Boolean(input.productKnowledge?.trim()), categoryKnowledgeProvided: Boolean(input.categoryKnowledge?.trim()) } : null, appliedRule: input.engine ? { title: input.engine.title, priority: input.engine.priority, active: input.engine.active } : null, interruption, clarification: Object.keys(updates).length && classification.status !== 'ANSWER_AND_QUESTION' ? null : responseText, nextQuestionText: next ? quotationQuestionReply(next) : null, answerValidation: { status: primaryDecision?.outcome || 'CLARIFY', reason: primaryDecision?.reason || classification.reason, canonicalValue: primaryDecision?.fieldName ? updates[primaryDecision.fieldName] || null : null, confidence: primaryDecision?.confidence ?? classification.confidence, fieldName: primaryDecision?.fieldName || current?.fieldName || null }, decisionSource: input.model && input.engine?.active !== false ? 'AI_CLASSIFIER_WITH_BACKEND_VALIDATOR' : 'DETERMINISTIC_FALLBACK' };
+  return { state, currentQuestionBefore: current, updates, decisions, classification, responseText, guidance: guidanceSource ? { source: guidanceSource, helpTextUsed: guidanceSource === 'HELP_TEXT' ? current?.helpText?.trim() || null : null, helpResponse, questionId: current?.id || null, questionText: current ? quotationQuestionReply(current) : null, productKnowledgeProvided: Boolean(input.productKnowledge?.trim()), categoryKnowledgeProvided: Boolean(input.categoryKnowledge?.trim()) } : null, appliedRule: input.engine ? { title: input.engine.title, priority: input.engine.priority, active: input.engine.active } : null, interruption, clarification: Object.keys(updates).length && classification.status !== 'ANSWER_AND_QUESTION' ? null : responseText, nextQuestionText: next ? quotationQuestionReply(next) : null, answerValidation: { status: primaryDecision?.outcome || 'CLARIFY', reason: primaryDecision?.reason || classification.reason, canonicalValue: primaryDecision?.fieldName ? updates[primaryDecision.fieldName] || null : null, confidence: primaryDecision?.confidence ?? classification.confidence, fieldName: primaryDecision?.fieldName || current?.fieldName || null }, decisionSource: deterministicValue !== null ? 'TYPED_ANSWER_ENGINE' : input.model && input.engine?.active !== false ? 'AI_CLASSIFIER_WITH_BACKEND_VALIDATOR' : 'DETERMINISTIC_FALLBACK', performance: { modelCallCount, classifierCallCount, guidanceCallCount, classifierMs, guidanceMs, classifierInputChars: classification.modelTelemetry?.inputChars || 0, guidanceInputChars } };
 }

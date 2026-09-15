@@ -25,6 +25,12 @@ const NUMBER_UNITS: Record<string, number> = {
   ده: 10, یازده: 11, دوازده: 12, سیزده: 13, چهارده: 14, پانزده: 15, شانزده: 16, هفده: 17, هجده: 18, نوزده: 19,
   بیست: 20, سی: 30, چهل: 40, پنجاه: 50, شصت: 60, هفتاد: 70, هشتاد: 80, نود: 90, صد: 100,
 };
+const NUMBER_SCALES: Record<string, number> = { صد: 100, هزار: 1_000, میلیون: 1_000_000, میلیارد: 1_000_000_000 };
+const ANSWER_UNITS = new Set([
+  'سال', 'ساله', 'ماه', 'ماهه', 'هفته', 'هفته ای', 'روز', 'روزه',
+  'طبقه', 'دستگاه', 'واحد', 'نفر', 'متر', 'مترمربع', 'متر مربع',
+  'تومان', 'تومن', 'ریال', 'عدد',
+]);
 export function normalizeQuotationOptionText(value: unknown): string {
   return String(value || '')
     .replace(/[۰-۹٠-٩]/g, (digit) => {
@@ -72,30 +78,91 @@ export function numbersIn(value: string, requireAnswerShape = false): number[] {
   if (numeric.length > 0) return numeric.filter(Number.isFinite);
   const tokens = normalized.split(/[\s،,.!؟?؛:()\-_/]+/).filter(Boolean);
   if (requireAnswerShape) {
-    const hasUnit = /سال|ساله|طبقه|دستگاه|واحد|ماه|روز|نفر|متر/.test(normalized);
-    const allowedFillers = new Set(['و', 'حدود', 'حدودا', 'حدوداً', 'تقریبا', 'تقریباً']);
-    const isBareNumberPhrase = tokens.every((token) => NUMBER_UNITS[token] !== undefined || allowedFillers.has(token));
+    const hasUnit = [...ANSWER_UNITS].some(unit => normalized.includes(unit));
+    const allowedFillers = new Set(['و', 'نیم', 'حدود', 'حدودا', 'حدوداً', 'تقریبا', 'تقریباً']);
+    const isBareNumberPhrase = tokens.every((token) => NUMBER_UNITS[token] !== undefined || NUMBER_SCALES[token] !== undefined || allowedFillers.has(token));
     if (!hasUnit && !isBareNumberPhrase) return [];
   }
-  const found: number[] = [];
-  let aggregate: number | null = null;
-  for (const token of tokens) {
-    if (token === 'و' && aggregate !== null) continue;
-    const number = NUMBER_UNITS[token];
-    if (number === undefined) {
-      if (aggregate !== null) { found.push(aggregate); aggregate = null; }
+  const numericTokens = tokens.filter(token => NUMBER_UNITS[token] !== undefined || NUMBER_SCALES[token] !== undefined || token === 'و' || token === 'نیم');
+  if (!numericTokens.length) return [];
+  let total = 0;
+  let group = 0;
+  let sawNumber = false;
+  for (const token of numericTokens) {
+    if (token === 'و') continue;
+    if (token === 'نیم') { group += 0.5; sawNumber = true; continue; }
+    if (token === 'صد') { group = (group || 1) * 100; sawNumber = true; continue; }
+    const scale = NUMBER_SCALES[token];
+    if (scale && scale >= 1_000) {
+      total += (group || 1) * scale;
+      group = 0;
+      sawNumber = true;
       continue;
     }
-    aggregate = aggregate === null ? number : aggregate + number;
+    const number = NUMBER_UNITS[token];
+    if (number !== undefined) { group += number; sawNumber = true; }
   }
-  if (aggregate !== null) found.push(aggregate);
-  return found;
+  return sawNumber ? [total + group] : [];
 }
 
 export function isPlainQuotationNumber(value: string): boolean {
   const tokens = normalizeQuotationOptionText(value).replace(/-?\d+(?:[.,٫]\d+)?/g, ' ').split(/\s+/).filter(Boolean);
-  const units = new Set(['و', 'سال', 'ساله', 'طبقه', 'دستگاه', 'واحد', 'ماه', 'روز', 'نفر', 'متر', 'مترمربع', 'تا', 'حدود', 'حدودا', 'تقریبا', 'است', 'هست', 'دارم', 'داریم', 'عدد']);
-  return tokens.every(token => NUMBER_UNITS[token] !== undefined || units.has(token));
+  const units = new Set(['و', 'نیم', ...ANSWER_UNITS, 'تا', 'حدود', 'حدودا', 'تقریبا', 'است', 'هست', 'دارم', 'داریم']);
+  return tokens.every(token => NUMBER_UNITS[token] !== undefined || NUMBER_SCALES[token] !== undefined || units.has(token));
+}
+
+type CanonicalDuration = { days: number; sourceValue: number; unit: 'day' | 'week' | 'month' | 'year' };
+
+function durationIn(value: string): CanonicalDuration | null {
+  const normalized = normalizeQuotationOptionText(value);
+  const units: Array<{ pattern: RegExp; unit: CanonicalDuration['unit']; days: number }> = [
+    { pattern: /سال(?:ه)?/u, unit: 'year', days: 365 },
+    { pattern: /ماه(?:ه)?/u, unit: 'month', days: 30 },
+    { pattern: /هفته(?:\s*ای)?/u, unit: 'week', days: 7 },
+    { pattern: /روز(?:ه)?/u, unit: 'day', days: 1 },
+  ];
+  const matchedUnit = units.find(candidate => candidate.pattern.test(normalized));
+  if (!matchedUnit) return null;
+  const values = numbersIn(normalized, true);
+  if (values.length !== 1 || values[0] < 0) return null;
+  return { days: values[0] * matchedUnit.days, sourceValue: values[0], unit: matchedUnit.unit };
+}
+
+function durationOptionContains(option: string, duration: CanonicalDuration): boolean {
+  const normalized = normalizeQuotationOptionText(option);
+  const bound = durationIn(normalized);
+  if (!bound) return false;
+  if (/کمتر\s*از|زیر/u.test(normalized)) return duration.days < bound.days;
+  if (/بیش\s*از|بالاتر\s*از/u.test(normalized)) return duration.days > bound.days;
+  if (/حداکثر|^تا\s/u.test(normalized)) return duration.days <= bound.days;
+  if (/حداقل|به\s*بالا/u.test(normalized)) return duration.days >= bound.days;
+  return duration.days === bound.days;
+}
+
+export function canonicalDurationValue(value: string): string | null {
+  const duration = durationIn(value);
+  if (!duration) return null;
+  const suffix = duration.unit === 'year' ? 'Y' : duration.unit === 'month' ? 'M' : duration.unit === 'week' ? 'W' : 'D';
+  return `P${duration.sourceValue}${suffix}`;
+}
+
+/** Resolves one or more explicit duration expressions to a common day value.
+ * Equivalent expressions such as "three months / 90 days" are accepted, while
+ * conflicting durations remain ambiguous and are rejected. */
+export function canonicalDurationDays(value: string): number | null {
+  const normalized = normalizeQuotationOptionText(value);
+  const unitPattern = /سال(?:ه)?|ماه(?:ه)?|هفته(?:\s*ای)?|روز(?:ه)?/gu;
+  const expressions: string[] = [];
+  let start = 0;
+  let match: RegExpExecArray | null;
+  while ((match = unitPattern.exec(normalized)) !== null) {
+    expressions.push(normalized.slice(start, match.index + match[0].length));
+    start = match.index + match[0].length;
+  }
+  if (!expressions.length) return null;
+  const days = expressions.map(expression => durationIn(expression)?.days).filter((item): item is number => item !== undefined);
+  const unique = [...new Set(days)];
+  return unique.length === 1 ? unique[0] : null;
 }
 
 function optionContainsNumber(option: string, value: number): boolean {
@@ -138,6 +205,12 @@ function deterministicSelection(
     return false;
   });
   if (exact.length === 1) return matched(fieldName, exact[0], 0.99, 'DETERMINISTIC');
+
+  const answerDuration = durationIn(normalizedAnswer);
+  if (answerDuration && options.every(option => durationIn(option.value))) {
+    const durationMatches = options.filter(option => durationOptionContains(option.value, answerDuration));
+    if (durationMatches.length === 1) return matched(fieldName, durationMatches[0], 1, 'DETERMINISTIC');
+  }
 
   const answerNumbers = numbersIn(normalizedAnswer, true);
   if (answerNumbers.length === 1 || (answerNumbers.length === 2 && /تا|الی/.test(normalizedAnswer))) {

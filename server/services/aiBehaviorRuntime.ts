@@ -206,17 +206,20 @@ export async function runAiBehaviorStructuredModel<T>(input: {
   schemaName: string;
   schema: Record<string, unknown>;
   payload: unknown;
-}): Promise<{ output: T; resolution: AiBehaviorResolution; promptVersion: string; usage: { promptTokens: number; completionTokens: number }; model: string }> {
+}): Promise<{ output: T; resolution: AiBehaviorResolution; promptVersion: string; usage: { promptTokens: number; completionTokens: number }; model: string; telemetry: { durationMs: number; inputChars: number } }> {
   const resolution = await resolveAiBehaviorRules(input.context);
   const config = await getAiConfig();
   const apiKey = config.openaiApiKey || process.env.OPENAI_API_KEY || '';
   if (!apiKey) throw new Error('AI_PROVIDER_UNAVAILABLE');
+  const systemContent = buildAiBehaviorSystemPrompt(resolution, input.taskContract);
+  const userContent = JSON.stringify(input.payload);
+  const requestStartedAt = Date.now();
   const response = await new OpenAI({ apiKey }).chat.completions.create({
     model: config.openaiModel || 'gpt-5',
     response_format: { type: 'json_schema', json_schema: { name: input.schemaName, strict: true, schema: input.schema } },
     messages: [
-      { role: 'system', content: buildAiBehaviorSystemPrompt(resolution, input.taskContract) },
-      { role: 'user', content: JSON.stringify(input.payload) },
+      { role: 'system', content: systemContent },
+      { role: 'user', content: userContent },
     ],
   });
   return {
@@ -225,6 +228,7 @@ export async function runAiBehaviorStructuredModel<T>(input: {
     promptVersion: resolution.promptVersion,
     usage: { promptTokens: response.usage?.prompt_tokens || 0, completionTokens: response.usage?.completion_tokens || 0 },
     model: config.openaiModel || 'gpt-5',
+    telemetry: { durationMs: Date.now() - requestStartedAt, inputChars: systemContent.length + userContent.length },
   };
 }
 

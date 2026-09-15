@@ -3,6 +3,10 @@ export type QuotationTurnBinding = {
   productId: string;
   questionId: string | null;
   fieldName: string | null;
+  /** Revision of the administrator-authored question visible to the customer. */
+  questionRevision?: string | null;
+  /** Version of persisted session state at the moment the customer message arrived. */
+  stateVersion?: string | null;
 };
 
 export function isStaleQuotationTurn(
@@ -14,5 +18,7 @@ export function isStaleQuotationTurn(
   return received.sessionId !== current.sessionId
     || received.productId !== current.productId
     || received.questionId !== current.questionId
-    || received.fieldName !== current.fieldName;
+    || received.fieldName !== current.fieldName
+    || (received.questionRevision !== undefined && received.questionRevision !== current.questionRevision)
+    || (received.stateVersion !== undefined && received.stateVersion !== current.stateVersion);
 }

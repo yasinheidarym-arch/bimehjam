@@ -3381,6 +3381,10 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                     <option value="checkbox">چک‌باکس / چندانتخابی (Checkbox)</option>
                     <option value="boolean">بله / خیر (Yes / No)</option>
                     <option value="date">تاریخ (Date)</option>
+                    <option value="duration">مدت‌زمان (Duration)</option>
+                    <option value="location">مکان / شهر (Location)</option>
+                    <option value="phone">شماره تماس (Phone)</option>
+                    <option value="person">نام شخص (Person)</option>
                   </select>
                 </div>
               </div>

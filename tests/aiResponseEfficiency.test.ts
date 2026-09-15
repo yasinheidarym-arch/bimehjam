@@ -21,6 +21,7 @@ test('an already classified intent is reused without another classifier call', a
     promptVersion: 'ai-behavior-runtime-v1' as const,
     usage: { promptTokens: 1, completionTokens: 1 },
     model: 'test-model',
+    telemetry: { durationMs: 1, inputChars: 100 },
   };
 
   const result = await classifyConversationIntentOnce({

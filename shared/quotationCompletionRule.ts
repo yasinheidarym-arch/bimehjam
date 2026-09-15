@@ -55,21 +55,46 @@ export function serializeQuotationCompletionRule(value: QuotationCompletionRuleC
   return JSON.stringify(value, null, 2);
 }
 
-export function renderQuotationCompletionSuccess(template: string, slaMinutes: number | null, customerFullName?: string | null): string {
+export type CustomerDisplayIdentity = {
+  firstName?: string | null;
+  lastName?: string | null;
+  title?: string | null;
+  fullName?: string | null;
+};
+
+function safeCustomerIdentity(value?: string | null | CustomerDisplayIdentity): { title: string; name: string } {
+  const identity: CustomerDisplayIdentity = value !== null && typeof value === 'object'
+    ? value
+    : { fullName: typeof value === 'string' ? value : null };
+  const title = typeof identity.title === 'string' && /^(?:آقای|خانم)$/u.test(identity.title.trim())
+    ? identity.title.trim()
+    : '';
+  const structuredName = [identity.firstName, identity.lastName].map(part => String(part || '').trim()).filter(Boolean).join(' ');
+  const fullName = String(identity.fullName || '').trim();
+  return { title, name: title ? String(identity.lastName || structuredName || fullName || 'مشتری محترم').trim() : structuredName || fullName || 'مشتری گرامی' };
+}
+
+function stripUnresolvedTemplateTokens(value: string): string {
+  return value
+    .replace(/{{\s*[^{}]+\s*}}/g, '')
+    .replace(/[\[【]?\s*آقای\s*(?:\/|یا)\s*خانم\s*[\]】]?/gu, '')
+    .replace(/\[[^\[\]\n]{1,50}\]/g, '')
+    .replace(/\s+([.،؛])/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+export function renderQuotationCompletionSuccess(template: string, slaMinutes: number | null, customer?: string | null | CustomerDisplayIdentity): string {
   const safeMinutes = Number.isInteger(slaMinutes) && Number(slaMinutes) > 0 && Number(slaMinutes) <= 1440
     ? Number(slaMinutes)
     : null;
   const slaText = safeMinutes ? ` و حداکثر تا ${safeMinutes.toLocaleString('fa-IR')} دقیقهٔ دیگر` : '';
-  const nameParts = String(customerFullName || '').trim().split(/\s+/).filter(Boolean);
-  const customerLastName = nameParts.length > 1 ? nameParts.at(-1)! : nameParts[0] || 'محترم';
-  return template
+  const identity = safeCustomerIdentity(customer);
+  return stripUnresolvedTemplateTokens(template
     .replace(/{{\s*slaMinutes\s*}}/g, safeMinutes ? safeMinutes.toLocaleString('fa-IR') : '')
     .replace(/{{\s*slaText\s*}}/g, slaText)
-    .replace(/{{\s*customerTitle\s*}}/g, 'آقای/خانم')
-    .replace(/{{\s*customerLastName\s*}}/g, customerLastName)
-    .replace(/\s+([.،؛])/g, '$1')
-    .replace(/\s{2,}/g, ' ')
-    .trim();
+    .replace(/{{\s*customerTitle\s*}}/g, identity.title)
+    .replace(/{{\s*customerLastName\s*}}/g, identity.name));
 }
 
 export function renderQuotationSummaryTemplate(
