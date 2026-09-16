@@ -4,6 +4,34 @@ import { getTaskTypeCatalog } from './taskTypeCatalogService';
 
 export { FASTNOTIFY_SETTING_KEYS, normalizeIranianMobile } from './fastNotifySmsCore';
 
+function parseMetadata(value?: string | null): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(value || '{}');
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch { return {}; }
+}
+
+function normalizeShortId(value: unknown): string | null {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const normalized = String(value).trim()
+    .replace(/[۰-۹]/g, digit => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+    .replace(/[٠-٩]/g, digit => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)));
+  return /^\d{1,8}$/.test(normalized) ? normalized : null;
+}
+
+/** Use a real short display identifier only; never shorten or expose Goftino hashes. */
+export function resolveGoftinoDisplayId(input: { metadata?: string | null; goftinoUserId?: string | null; goftinoChatId?: string | null }): string | null {
+  const metadata = parseMetadata(input.metadata);
+  const candidates = [
+    ...Object.entries(metadata)
+      .filter(([key]) => /display.?id|short.?id|user.?number|display.?number|goftino.?number/i.test(key))
+      .map(([, value]) => value),
+    input.goftinoUserId,
+    input.goftinoChatId,
+  ];
+  return candidates.map(normalizeShortId).find(Boolean) || null;
+}
+
 export async function dispatchTaskCreatedSms(task: CreatedTaskForSms): Promise<SmsDispatchResult> {
   return dispatchTaskCreatedSmsCore(task, {
     settingFindMany: () => prisma.systemSetting.findMany({
@@ -19,29 +47,32 @@ export async function dispatchTaskCreatedSms(task: CreatedTaskForSms): Promise<S
         createdTask.customerId
           ? prisma.customer.findUnique({
               where: { id: createdTask.customerId },
-              select: { name: true, phone: true, goftinoUserId: true, interestedInsuranceTypes: true },
+              select: { name: true, phone: true, goftinoUserId: true, goftinoChatId: true, metadata: true },
             })
           : Promise.resolve(null),
         createdTask.conversationId
           ? prisma.conversation.findUnique({
               where: { id: createdTask.conversationId },
-              select: { currentProductName: true },
+              select: { currentProductId: true, currentProductName: true },
             })
           : Promise.resolve(null),
       ]);
+      const product = conversation?.currentProductId
+        ? await prisma.insuranceProduct.findUnique({ where: { id: conversation.currentProductId }, select: { name: true } })
+        : null;
+      const displayId = resolveGoftinoDisplayId({ metadata: customer?.metadata, goftinoUserId: customer?.goftinoUserId, goftinoChatId: customer?.goftinoChatId });
       const type = catalog.find((item) => item.id === createdTask.type);
-      let interestedInsuranceType: string | null = null;
-      try {
-        const values = JSON.parse(customer?.interestedInsuranceTypes || '[]');
-        interestedInsuranceType = Array.isArray(values) && typeof values[0] === 'string' ? values[0] : null;
-      } catch { /* Legacy malformed customer metadata has a safe fallback below. */ }
       return {
         taskTypeLabel: type?.label || createdTask.type,
         smsTemplate: type?.smsTemplate,
         customerFullName: customer?.name,
         customerMobile: customer?.phone,
-        goftinoUserId: customer?.goftinoUserId,
-        insuranceName: conversation?.currentProductName || interestedInsuranceType,
+        customerPhone: customer?.phone,
+        // Legacy field is kept display-safe for old templates.
+        goftinoUserId: displayId,
+        goftinoDisplayId: displayId,
+        confirmedProductName: product?.name,
+        insuranceName: product?.name || 'ثبت نشده',
         taskLink: `https://bimehjam.com/admin/tasks?taskId=${encodeURIComponent(createdTask.id)}`,
       };
     },

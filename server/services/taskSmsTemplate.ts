@@ -3,6 +3,9 @@ export const TASK_SMS_TEMPLATE_VARIABLES = [
   'taskTitle',
   'priority',
   'customerFullName',
+  'customerPhone',
+  'goftinoDisplayId',
+  'confirmedProductName',
   'customerMobile',
   'goftinoUserId',
   'insuranceName',
@@ -11,7 +14,7 @@ export const TASK_SMS_TEMPLATE_VARIABLES = [
 ] as const;
 
 export type TaskSmsTemplateVariable = typeof TASK_SMS_TEMPLATE_VARIABLES[number];
-export type TaskSmsTemplateValues = Record<TaskSmsTemplateVariable, string>;
+export type TaskSmsTemplateValues = Partial<Record<TaskSmsTemplateVariable, string>>;
 
 export const DEFAULT_TASK_SMS_TEMPLATE =
   'بیمه جم: وظیفه «{{taskType}}» برای {{customerFullName}} ثبت شد. عنوان: {{taskTitle}} | اولویت: {{priority}} | شناسه: {{taskId}} | {{taskLink}}';
@@ -35,5 +38,5 @@ export function validateTaskSmsTemplate(input: unknown): string {
 
 export function renderTaskSmsTemplate(templateInput: unknown, values: TaskSmsTemplateValues): string {
   const template = validateTaskSmsTemplate(templateInput) || DEFAULT_TASK_SMS_TEMPLATE;
-  return template.replace(TEMPLATE_TOKEN_PATTERN, (_token, key: TaskSmsTemplateVariable) => values[key]);
+  return template.replace(TEMPLATE_TOKEN_PATTERN, (_token, key: TaskSmsTemplateVariable) => values[key] ?? '');
 }

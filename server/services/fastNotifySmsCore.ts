@@ -19,6 +19,9 @@ export type TaskSmsMessageContext = {
   taskTypeLabel: string;
   smsTemplate?: string | null;
   customerFullName?: string | null;
+  customerPhone?: string | null;
+  goftinoDisplayId?: string | null;
+  confirmedProductName?: string | null;
   customerMobile?: string | null;
   goftinoUserId?: string | null;
   insuranceName?: string | null;
@@ -69,6 +72,9 @@ export async function dispatchTaskCreatedSmsCore(task: CreatedTaskForSms, deps: 
       taskTitle: task.title,
       priority: task.priority,
       customerFullName: context.customerFullName?.trim() || 'ثبت نشده',
+      customerPhone: context.customerPhone?.trim() || context.customerMobile?.trim() || 'ثبت نشده',
+      goftinoDisplayId: context.goftinoDisplayId?.trim() || 'ثبت نشده',
+      confirmedProductName: context.confirmedProductName?.trim() || 'ثبت نشده',
       customerMobile: context.customerMobile?.trim() || 'ثبت نشده',
       goftinoUserId: context.goftinoUserId?.trim() || 'ثبت نشده',
       insuranceName: context.insuranceName?.trim() || 'ثبت نشده',

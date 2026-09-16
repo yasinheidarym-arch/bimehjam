@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { dispatchTaskCreatedSmsCore } from '../server/services/fastNotifySmsCore';
 import { renderTaskSmsTemplate, validateTaskSmsTemplate } from '../server/services/taskSmsTemplate';
+import { resolveGoftinoDisplayId } from '../server/services/fastNotifySmsService';
 
 const task = {
   id: 'task-123',
@@ -139,10 +140,9 @@ test('price consultation and quotation task types render the configured customer
     'درخواست جدید مشاوره و اعلام قیمت بیمه جم',
     '',
     'نام مشتری: {{customerFullName}}',
-    'شماره همراه: {{customerMobile}}',
-    'شماره کاربر گفتینو: {{goftinoUserId}}',
-    'رشته بیمه‌ای: {{insuranceName}}',
-    'شماره تسک: {{taskId}}',
+    'شماره همراه: {{customerPhone}}',
+    'شماره کاربر گفتینو: {{goftinoDisplayId}}',
+    'بیمه موردنظر: {{confirmedProductName}}',
     '',
     'لطفاً در اولین فرصت پیگیری شود.',
   ].join('\n');
@@ -156,19 +156,27 @@ test('price consultation and quotation task types render the configured customer
       smsTemplate: template,
       customerFullName: 'یاسین حیدری',
       customerMobile: '09370000000',
+      customerPhone: '09370000000',
+      goftinoDisplayId: '4144',
+      confirmedProductName: 'بیمه مسئولیت احداث ساختمان',
       goftinoUserId: 'goftino-user-4144',
-      insuranceName: 'بیمه مسئولیت احداث ساختمان',
+      insuranceName: 'مسئولیت',
       taskLink: 'https://bimehjam.com/admin/tasks?taskId=task-123',
     });
     assert.equal(await dispatchTaskCreatedSmsCore({ ...task, type: taskType.id }, harness.dependencies), 'sent');
     const body = JSON.parse(String(harness.requests[0].init?.body));
     assert.equal(body.message, template
       .replace('{{customerFullName}}', 'یاسین حیدری')
-      .replace('{{customerMobile}}', '09370000000')
-      .replace('{{goftinoUserId}}', 'goftino-user-4144')
-      .replace('{{insuranceName}}', 'بیمه مسئولیت احداث ساختمان')
-      .replace('{{taskId}}', 'task-123'));
+      .replace('{{customerPhone}}', '09370000000')
+      .replace('{{goftinoDisplayId}}', '4144')
+      .replace('{{confirmedProductName}}', 'بیمه مسئولیت احداث ساختمان'));
   }
+});
+
+test('Goftino display id uses only a real short field and never a UUID-derived value', () => {
+  assert.equal(resolveGoftinoDisplayId({ metadata: JSON.stringify({ goftinoDisplayId: '۴۱۴۴' }), goftinoUserId: 'long-hash', goftinoChatId: 'chat-hash' }), '4144');
+  assert.equal(resolveGoftinoDisplayId({ metadata: '{}', goftinoUserId: '61225d87c0925903200fbc73b0423a29b1330017ea8498167e9a7c024d05c3c8', goftinoChatId: '61225d8fc0925903200fbc74' }), null);
+  assert.equal(resolveGoftinoDisplayId({ metadata: '{}', goftinoUserId: '4533', goftinoChatId: 'chat-hash' }), '4533');
 });
 
 test('provider failure is contained after task creation', async () => {
