@@ -3,6 +3,7 @@ import prisma from '../db/client';
 import { createTimelineEvent } from '../services/timelineService';
 import { sendGoftinoMessage } from '../services/aiPipelineService';
 import { buildConversationQuotationPresentation } from '../services/conversationQuotationPresentation';
+import { resolveConversationInsuranceDisplays } from '../services/conversationInsuranceDisplay';
 
 async function loadQuestionDefinitions(productIds: Array<string | null | undefined>) {
   const ids = [...new Set(productIds.filter((id): id is string => Boolean(id)))];
@@ -85,7 +86,7 @@ export async function getConversations(req: Request, res: Response) {
         orderBy: { updatedAt: 'desc' },
         include: {
           customer: {
-            select: { id: true, name: true, phone: true, city: true, avatar: true, leadScore: true, leadStatus: true },
+            select: { id: true, name: true, phone: true, city: true, avatar: true, leadScore: true, leadStatus: true, metadata: true },
           },
           assignedUser: {
             select: { id: true, name: true, avatar: true, email: true },
@@ -109,7 +110,15 @@ export async function getConversations(req: Request, res: Response) {
       }),
     ]);
 
-    const questionDefinitions = await loadQuestionDefinitions(rawConversations.map(c => c.currentProductId));
+    const [questionDefinitions, insuranceDisplays] = await Promise.all([
+      loadQuestionDefinitions(rawConversations.map(c => c.currentProductId)),
+      resolveConversationInsuranceDisplays(rawConversations.map((conversation) => ({
+        id: conversation.id,
+        currentProductId: conversation.currentProductId,
+        collectedData: conversation.collectedData,
+        customerMetadata: conversation.customer.metadata,
+      }))),
+    ]);
     // Format JSON fields safely
     const conversations = rawConversations.map((c) => {
       let parsedCollectedData = {};
@@ -131,6 +140,8 @@ export async function getConversations(req: Request, res: Response) {
       );
       return {
         ...c,
+        currentProductName: insuranceDisplays.get(c.id)?.name || 'بیمه عمومی',
+        insuranceDisplay: insuranceDisplays.get(c.id),
         collectedData: parsedCollectedData,
         quotationCollectedFields: quotationPresentation.fields,
         quotationTechnicalData: quotationPresentation.technical,
@@ -209,13 +220,23 @@ export async function getConversationById(req: Request, res: Response) {
       parsedRemainingQuestions = [];
     }
 
-    const questionDefinitions = await loadQuestionDefinitions([c.currentProductId]);
+    const [questionDefinitions, insuranceDisplays] = await Promise.all([
+      loadQuestionDefinitions([c.currentProductId]),
+      resolveConversationInsuranceDisplays([{
+        id: c.id,
+        currentProductId: c.currentProductId,
+        collectedData: c.collectedData,
+        customerMetadata: c.customer.metadata,
+      }]),
+    ]);
     const quotationPresentation = buildConversationQuotationPresentation(
       parsedCollectedData,
       questionDefinitions.get(c.currentProductId || '') || [],
     );
     const formattedConversation = {
       ...c,
+      currentProductName: insuranceDisplays.get(c.id)?.name || 'بیمه عمومی',
+      insuranceDisplay: insuranceDisplays.get(c.id),
       collectedData: parsedCollectedData,
       quotationCollectedFields: quotationPresentation.fields,
       quotationTechnicalData: quotationPresentation.technical,

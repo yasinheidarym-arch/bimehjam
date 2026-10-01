@@ -1282,6 +1282,10 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
                       <span className="font-bold text-slate-900">{activeConversation.customerCity}</span>
                     </div>
                     <div className="flex justify-between">
+                      <span className="text-slate-500">بیمه مرتبط:</span>
+                      <span className="font-bold text-slate-900">{activeConversation.currentProductName}</span>
+                    </div>
+                    <div className="flex justify-between">
                       <span className="text-slate-500">اپراتور مسئول:</span>
                       <span className="font-bold text-indigo-700">{activeConversation.assignedOperator}</span>
                     </div>

@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import prisma from '../db/client';
 import { createTimelineEvent } from '../services/timelineService';
+import { resolveConversationInsuranceDisplays } from '../services/conversationInsuranceDisplay';
 
 export async function getCustomers(req: Request, res: Response) {
   try {
@@ -48,7 +49,7 @@ export async function getCustomers(req: Request, res: Response) {
           conversations: {
             orderBy: { createdAt: 'desc' },
             take: 1,
-            select: { id: true, status: true, currentProductName: true, lastMessage: true, lastMessageAt: true },
+            select: { id: true, status: true, currentProductId: true, currentProductName: true, collectedData: true, lastMessage: true, lastMessageAt: true },
           },
           tasks: {
             where: { status: 'Pending' },
@@ -61,6 +62,15 @@ export async function getCustomers(req: Request, res: Response) {
         },
       }),
     ]);
+
+    const listInsuranceDisplays = await resolveConversationInsuranceDisplays(
+      rawCustomers.flatMap((customer) => customer.conversations.map((conversation) => ({
+        id: conversation.id,
+        currentProductId: conversation.currentProductId,
+        collectedData: conversation.collectedData,
+        customerMetadata: customer.metadata,
+      }))),
+    );
 
     const customers = rawCustomers.map((c) => {
       let parsedInterestedTypes: string[] = [];
@@ -94,6 +104,11 @@ export async function getCustomers(req: Request, res: Response) {
 
       return {
         ...c,
+        conversations: c.conversations.map((conversation) => ({
+          ...conversation,
+          currentProductName: listInsuranceDisplays.get(conversation.id)?.name || 'بیمه عمومی',
+          insuranceDisplay: listInsuranceDisplays.get(conversation.id),
+        })),
         interestedInsuranceTypes: parsedInterestedTypes,
         issuedPolicies: parsedIssuedPolicies,
         websiteActivity: parsedWebsiteActivity,
@@ -190,8 +205,22 @@ export async function getCustomerById(req: Request, res: Response) {
         ? (parsedWebsiteActivity[parsedWebsiteActivity.length - 1].date || parsedWebsiteActivity[parsedWebsiteActivity.length - 1].timestamp)
         : c.lastActivity;
 
+    const detailInsuranceDisplays = await resolveConversationInsuranceDisplays(
+      c.conversations.map((conversation) => ({
+        id: conversation.id,
+        currentProductId: conversation.currentProductId,
+        collectedData: conversation.collectedData,
+        customerMetadata: c.metadata,
+      })),
+    );
+
     const customer = {
       ...c,
+      conversations: c.conversations.map((conversation) => ({
+        ...conversation,
+        currentProductName: detailInsuranceDisplays.get(conversation.id)?.name || 'بیمه عمومی',
+        insuranceDisplay: detailInsuranceDisplays.get(conversation.id),
+      })),
       interestedInsuranceTypes: parsedInterestedTypes,
       issuedPolicies: parsedIssuedPolicies,
       websiteActivity: parsedWebsiteActivity,

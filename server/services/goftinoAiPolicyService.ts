@@ -78,6 +78,32 @@ export async function resolveGoftinoAiPolicy(goftinoTopicId?: string | null): Pr
   }, values.get(enabledSettingKey(topic.id)) === 'true');
 }
 
+/**
+ * Resolves the insurance category attached to Goftino topics independently of
+ * whether AI is enabled for that topic. Conversation presentation needs the
+ * configured category as context, not an AI allow/deny decision.
+ */
+export async function resolveGoftinoTopicCategories(topicIds: Array<string | null | undefined>) {
+  const uniqueTopicIds = [...new Set(topicIds.filter((id): id is string => Boolean(id)))];
+  const result = new Map<string, { id: string; name: string }>();
+  if (!uniqueTopicIds.length) return result;
+
+  const { categories, values } = await loadPolicyData();
+  for (const topicId of uniqueTopicIds) {
+    const topic = GOFTINO_TOPIC_CATALOG.find((item) => item.id === topicId);
+    if (!topic) continue;
+    const categoryKey = goftinoCategorySettingKey(topic.id);
+    const mapping = resolveGoftinoCategoryMapping(
+      topic,
+      categories,
+      values.get(categoryKey)?.trim() || null,
+      values.has(categoryKey),
+    );
+    if (mapping.category) result.set(topic.id, { id: mapping.category.id, name: mapping.category.name });
+  }
+  return result;
+}
+
 function policyRows(categories: ActiveCategory[], values: Map<string, string>) {
   return GOFTINO_TOPIC_CATALOG.map((topic) => {
     const categoryKey = goftinoCategorySettingKey(topic.id);
