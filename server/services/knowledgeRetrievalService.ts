@@ -2,6 +2,7 @@ import prisma from '../db/client';
 import { categoryKnowledgeScope, composeScopedKnowledge } from './categoryKnowledgeScope';
 import { hasProductGrounding } from '../../shared/productGrounding';
 import { selectConfirmedProductCandidate } from './productTaxonomyValidation';
+import { selectRelevantFaqsForCategory } from '../../shared/faqKnowledge';
 
 export function stripUnverifiedOperationalClaims(value: string): string {
   return String(value || '')
@@ -289,42 +290,7 @@ export async function ensureTrainingCenterSeeded() {
     });
   }
 
-  // 3. Check & Seed FAQs
-  const faqCount = await prisma.fAQ.count();
-  if (faqCount === 0) {
-    await prisma.fAQ.createMany({
-      data: [
-        {
-          question: 'قیمت بیمه شخص ثالث چگونه محاسبه می‌شود و چرا قیمت دقیق به سال ساخت بستگی دارد؟',
-          answer: 'نرخ پایه بیمه شخص ثالث بر اساس جدول مصوب بیمه مرکزی و تعداد سیلندر خودرو تعیین می‌شود؛ سپس بر اساس سال ساخت (جریمه کهنگی برای خودروهای بالای ۱۵ سال)، درصد تخفیف عدم خسارت (سالانه ۵٪ تا سقف ۷۰٪)، سوابق خسارت و سقف تعهد مالی انتخابی، قیمت دقیق محاسبه می‌گردد.',
-          insuranceType: 'بیمه خودرو',
-          keywords: 'قیمت, محاسبه, ثالث, سال ساخت, تخفیف',
-          priority: 10,
-        },
-        {
-          question: 'شرایط خرید اقساطی بیمه شخص ثالث در بیمه جم چگونه است؟',
-          answer: 'در بیمه جم می‌توانید بیمه‌نامه شخص ثالث را با پرداخت ۳۰٪ تا ۵۰٪ به صورت پیش‌پرداخت نقدی و مابقی را در ۲ الی ۴ قسط ماهانه بدون نیاز به چک و سفته و بدون کارمزد اضافی دریافت کنید. صدور و فعال‌سازی بیمه‌نامه آنی است.',
-          insuranceType: 'بیمه خودرو',
-          keywords: 'اقساط, بدون چک, پیش پرداخت, شخص ثالث',
-          priority: 9,
-        },
-        {
-          question: 'چگونه سوابق تخفیف عدم خسارت بیمه شخص ثالث را انتقال دهیم؟',
-          answer: 'سوابق تخفیف عدم خسارت متعلق به راننده/مالک است و می‌توان آن را به خودروی جدید شخص یا همسر، والدین و فرزندان انتقال داد. انتقال تخفیف با مدارک هویتی در نمایندگی‌های بیمه جم به صورت آنلاین انجام می‌شود.',
-          insuranceType: 'بیمه خودرو',
-          keywords: 'انتقال تخفیف, سابقه عدم خسارت, تعویض پلاک',
-          priority: 8,
-        },
-        {
-          question: 'حداکثر سقف تعهدات مالی بیمه شخص ثالث چقدر است؟',
-          answer: 'حداقل تعهد مالی قانونی اجباری ۴۰ میلیون تومان است؛ اما بیمه‌گذاران محترم می‌توانند برای جلوگیری از خسارات خودروهای گران‌قیمت، سقف تعهدات را تا ۱۰۰، ۲۰۰، ۴۰۰ یا ۸۰۰ میلیون تومان افزایش دهند.',
-          insuranceType: 'بیمه خودرو',
-          keywords: 'سقف تعهدات, پوشش مالی, خسارت ثالث',
-          priority: 7,
-        },
-      ],
-    });
-  }
+  // 3. FAQs are intentionally not seeded. The admin-managed collection may be empty.
 
   // 4. Check & Seed Customer Objections
   const objectionCount = await prisma.customerObjection.count();
@@ -723,40 +689,7 @@ ${params.customerContext?.interestedInsuranceTypes || ''}
     ? []
     : await prisma.fAQ.findMany({ where: { status: 'APPROVED' }, orderBy: { priority: 'desc' } });
 
-  const relevantFaqs = allFaqs
-    .filter((f) => {
-      const combined = `${f.question} ${f.answer} ${f.keywords} ${f.insuranceType}`.toLowerCase();
-      if (categoryFilter === 'خودرو' && (combined.includes('خودرو') || combined.includes('ثالث') || combined.includes('تخفیف') || combined.includes('اقساط'))) {
-        return true;
-      }
-      if (categoryFilter === 'درمان' && (combined.includes('درمان') || combined.includes('تکمیلی') || combined.includes('زایمان'))) {
-        return true;
-      }
-      if (categoryFilter === 'اموال' && (combined.includes('آتش') || combined.includes('زلزله') || combined.includes('اثاثیه'))) {
-        return true;
-      }
-
-      if (
-        categoryFilter === 'مسئولیت' &&
-        (
-          combined.includes('مسئولیت') ||
-          combined.includes('مدیر') ||
-          combined.includes('کارفرما') ||
-          combined.includes('مهندسی')
-        )
-      ) {
-        return true;
-      }
-
-      return false;
-    })
-    .slice(0, 2)
-    .map((f) => ({
-      id: f.id,
-      question: f.question,
-      answer: f.answer,
-      insuranceType: f.insuranceType,
-    }));
+  const relevantFaqs = selectRelevantFaqsForCategory(allFaqs, categoryFilter);
 
   // 5. Fetch Matched Customer Objections (if customer is hesitating / objecting)
   const allObjections = params.customerContext?.restrictToCategory

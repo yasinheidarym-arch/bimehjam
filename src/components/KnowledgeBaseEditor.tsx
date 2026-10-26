@@ -1889,10 +1889,15 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
             </button>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {faqs
-              .filter(f => !searchQuery || f.question.includes(searchQuery) || f.answer.includes(searchQuery))
-              .map((faq) => (
+          {moduleLoadState.faqs === 'ready' && faqs.filter(f => !searchQuery || f.question.includes(searchQuery) || f.answer.includes(searchQuery)).length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-white px-6 py-12 text-center text-sm text-slate-500">
+              هنوز پرسش و پاسخ متداولی ثبت نشده است.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {faqs
+                .filter(f => !searchQuery || f.question.includes(searchQuery) || f.answer.includes(searchQuery))
+                .map((faq) => (
                 <div key={faq.id} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-3 hover:border-indigo-300 transition-all flex flex-col justify-between">
                   <div className="space-y-2">
                     <div className="flex items-start justify-between gap-2">
@@ -1939,8 +1944,9 @@ export const KnowledgeBaseEditor: React.FC<KnowledgeBaseEditorProps> = () => {
                     </div>
                   </div>
                 </div>
-              ))}
-          </div>
+                ))}
+            </div>
+          )}
         </div>
       )}
 

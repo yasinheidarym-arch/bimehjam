@@ -22,6 +22,7 @@ import {
 } from '../services/productIntelligenceService';
 import { processBrainLayer } from '../services/brainLayerService';
 import { ensureTrainingCenterSeeded } from '../services/knowledgeRetrievalService';
+import { readFaqs } from '../services/faqReadService';
 import { categoryKnowledgeScope } from '../services/categoryKnowledgeScope';
 import {
   isValidOptionalProductPurchaseUrl,
@@ -270,43 +271,8 @@ async function ensureSeedKnowledgeData() {
       },
     });
 
-    // 2. Seed FAQs
-    await prisma.fAQ.createMany({
-      data: [
-        {
-          question: 'مدارک لازم برای خرید بیمه مسئولیت هیئت‌مدیره ساختمان چیست؟',
-          answer: 'ارائه متراژ، تعداد طبقات، تعداد آسانسور و مشخصات مدیر ساختمان کافی است. نیازی به کارت شناسایی تمام تک‌تک ساکنین نیست.',
-          insuranceType: 'بیمه مسئولیت',
-          keywords: 'مدارک, مسئولیت, هیئت مدیره, آسانسور',
-          priority: 10,
-          usageCount: 142,
-        },
-        {
-          question: 'تخفیف عدم خسارت بیمه شخص ثالث تا چند درصد اعمال می‌شود؟',
-          answer: 'تخفیف عدم خسارت سالانه ۵ درصد افزایش یافته و حداکثر تا ۷۰ درصد (معادل ۱۴ سال) محاسبه می‌شود.',
-          insuranceType: 'بیمه خودرو',
-          keywords: 'تخفیف, عدم خسارت, ثالث, ۷۰ درصد',
-          priority: 9,
-          usageCount: 215,
-        },
-        {
-          question: 'آیا خسارت زلزله هم در بیمه آتش‌سوزی پوشش داده می‌شود؟',
-          answer: 'بله، با افزودن کلوز خطرات اضافی زلزله و آتشفشان به بیمه‌نامه آتش‌سوزی، خسارت کامل سازه و اثاثیه پرداخت می‌شود.',
-          insuranceType: 'بیمه آتش‌سوزی',
-          keywords: 'زلزله, آتش سوزی, اثاثیه, پوشش',
-          priority: 8,
-          usageCount: 98,
-        },
-        {
-          question: 'فرآیند انتقال تخفیف بیمه ثالث به خودرو جدید چگونه است؟',
-          answer: 'انتقال تخفیف فقط به خودروی جدید خود فرد یا همسر، والدین و فرزندان مستقیم وی با ارائه مدارک احراز هویت امکان‌پذیر است.',
-          insuranceType: 'بیمه خودرو',
-          keywords: 'انتقال تخفیف, پلاک, اعضای خانواده',
-          priority: 7,
-          usageCount: 176,
-        },
-      ],
-    });
+    // 2. FAQs are managed exclusively through the admin panel. An empty FAQ
+    // collection is a valid state and must never be repopulated by a read path.
 
     // 3. Seed Response Templates
     await prisma.responseTemplate.createMany({
@@ -1213,23 +1179,7 @@ export async function reorderQuotationQuestions(req: Request, res: Response) {
 export async function getFaqs(req: Request, res: Response) {
   try {
     await ensureSeedKnowledgeData();
-    const { search, category } = req.query;
-
-    const faqs = await prisma.fAQ.findMany({
-      where: {
-        ...(category ? { insuranceType: String(category) } : {}),
-        ...(search
-          ? {
-              OR: [
-                { question: { contains: String(search) } },
-                { answer: { contains: String(search) } },
-                { keywords: { contains: String(search) } },
-              ],
-            }
-          : {}),
-      },
-      orderBy: { usageCount: 'desc' },
-    });
+    const faqs = await readFaqs(prisma, req.query) as Array<{ id: string }>;
 
     return res.status(200).json({ success: true, count: faqs.length, data: faqs });
   } catch (error: any) {
