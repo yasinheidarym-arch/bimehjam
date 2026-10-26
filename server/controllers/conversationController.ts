@@ -4,6 +4,7 @@ import { createTimelineEvent } from '../services/timelineService';
 import { sendGoftinoMessage } from '../services/aiPipelineService';
 import { buildConversationQuotationPresentation } from '../services/conversationQuotationPresentation';
 import { resolveConversationInsuranceDisplays } from '../services/conversationInsuranceDisplay';
+import { conversationPageIds } from '../../shared/conversationOrdering';
 
 async function loadQuestionDefinitions(productIds: Array<string | null | undefined>) {
   const ids = [...new Set(productIds.filter((id): id is string => Boolean(id)))];
@@ -56,8 +57,6 @@ export async function getConversations(req: Request, res: Response) {
     const search = (req.query.search as string) || '';
     const operatorId = (req.query.operatorId as string) || '';
 
-    const skip = (page - 1) * limit;
-
     const where: any = {};
 
     if (status) {
@@ -77,13 +76,35 @@ export async function getConversations(req: Request, res: Response) {
       ];
     }
 
-    const [total, rawConversations] = await Promise.all([
+    const [total, activityRows] = await Promise.all([
       prisma.conversation.count({ where }),
       prisma.conversation.findMany({
         where,
-        skip,
-        take: limit,
-        orderBy: { updatedAt: 'desc' },
+        select: {
+          id: true,
+          createdAt: true,
+          messages: {
+            take: 1,
+            orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+            select: { createdAt: true },
+          },
+        },
+      }),
+    ]);
+
+    const pageIds = conversationPageIds(
+      activityRows.map((conversation) => ({
+        id: conversation.id,
+        createdAt: conversation.createdAt,
+        lastMessageAt: conversation.messages[0]?.createdAt || null,
+      })),
+      page,
+      limit,
+    );
+    const pageOrder = new Map(pageIds.map((id, index) => [id, index]));
+    const rawConversations = pageIds.length
+      ? await prisma.conversation.findMany({
+        where: { id: { in: pageIds } },
         include: {
           customer: {
             select: { id: true, name: true, phone: true, city: true, avatar: true, leadScore: true, leadStatus: true, metadata: true },
@@ -107,8 +128,12 @@ export async function getConversations(req: Request, res: Response) {
             select: { messages: true, tasks: true, conversationNotes: true },
           },
         },
-      }),
-    ]);
+      })
+      : [];
+    rawConversations.sort((left, right) =>
+      (pageOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER)
+      - (pageOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+    );
 
     const [questionDefinitions, insuranceDisplays] = await Promise.all([
       loadQuestionDefinitions(rawConversations.map(c => c.currentProductId)),
@@ -138,8 +163,10 @@ export async function getConversations(req: Request, res: Response) {
         parsedCollectedData,
         questionDefinitions.get(c.currentProductId || '') || [],
       );
+      const actualLastMessageAt = c.messages[0]?.createdAt || c.createdAt;
       return {
         ...c,
+        lastMessageAt: actualLastMessageAt,
         currentProductName: insuranceDisplays.get(c.id)?.name || 'بیمه عمومی',
         insuranceDisplay: insuranceDisplays.get(c.id),
         collectedData: parsedCollectedData,

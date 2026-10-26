@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { conversationService, customerService, settingService } from '../services/api';
 import { AiMode } from '../types';
+import { sortConversationsByActivity } from '../../shared/conversationOrdering';
 
 export interface MessageData {
   id: string;
@@ -60,6 +61,8 @@ export interface ConversationItem {
   customerPhone?: string;
   customerCity?: string;
   lastMessage: string;
+  lastMessageAt: string;
+  createdAt: string;
   time: string;
   status: string;
   aiStatus: string;
@@ -451,11 +454,18 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
   };
 
   const formatConversationItem = (c: any): ConversationItem => {
-    const timeFormatted = c.lastMessageAt
-      ? new Date(c.lastMessageAt).toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
+    const rawMsgs = Array.isArray(c.messages) ? c.messages : [];
+    const latestMessageTime = rawMsgs.reduce((latest: number, message: any) => {
+      const current = message?.createdAt ? new Date(message.createdAt).getTime() : 0;
+      return Math.max(latest, Number.isFinite(current) ? current : 0);
+    }, 0);
+    const actualLastMessageAt = latestMessageTime
+      ? new Date(latestMessageTime).toISOString()
+      : (c.lastMessageAt || c.createdAt);
+    const timeFormatted = actualLastMessageAt
+      ? new Date(actualLastMessageAt).toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' })
       : 'هم‌اکنون';
 
-    const rawMsgs = Array.isArray(c.messages) ? c.messages : [];
     const mappedMessages: MessageData[] = rawMsgs
       .map(formatMessage)
       .sort((a, b) => (a.rawTime || 0) - (b.rawTime || 0));
@@ -481,6 +491,8 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
       customerPhone: c.customer?.phone || '',
       customerCity: c.customer?.city || 'نامشخص',
       lastMessage: c.lastMessage || '',
+      lastMessageAt: actualLastMessageAt || '',
+      createdAt: c.createdAt || actualLastMessageAt || '',
       time: timeFormatted,
       status: c.status || 'NEW',
       aiStatus: c.aiStatus || 'ACTIVE',
@@ -527,7 +539,9 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
       });
 
       if (res && res.data && Array.isArray(res.data)) {
-        const mappedList: ConversationItem[] = res.data.map(formatConversationItem);
+        const mappedList: ConversationItem[] = sortConversationsByActivity(
+          res.data.map(formatConversationItem),
+        );
         setConversations(mappedList);
 
         const currentSel = selectedConvIdRef.current;
@@ -609,6 +623,7 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
     if (!replyInput.trim() || !activeConversation || !selectedConvId) return;
 
     const text = replyInput.trim();
+    const sentAt = new Date().toISOString();
     setReplyInput('');
 
     const newMsg: MessageData = {
@@ -623,6 +638,7 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
       return {
         ...prev,
         lastMessage: text,
+        lastMessageAt: sentAt,
         time: 'هم‌اکنون',
         status: 'PRICE_SENT_TO_CUSTOMER',
         messages: [...prev.messages, newMsg],
@@ -630,11 +646,11 @@ export const ConversationManagementView: React.FC<ConversationManagementViewProp
     });
 
     setConversations((prev) =>
-      prev.map((c) =>
+      sortConversationsByActivity(prev.map((c) =>
         c.id === selectedConvId
-          ? { ...c, lastMessage: text, time: 'هم‌اکنون', status: 'PRICE_SENT_TO_CUSTOMER' }
+          ? { ...c, lastMessage: text, lastMessageAt: sentAt, time: 'هم‌اکنون', status: 'PRICE_SENT_TO_CUSTOMER' }
           : c
-      )
+      ))
     );
 
     try {
