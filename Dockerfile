@@ -1,12 +1,12 @@
 # Bimeh Jam - Production Dockerfile
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 
 WORKDIR /app
 
 RUN apk add --no-cache openssl libc6-compat
 
-COPY package.json ./
-RUN npm install
+COPY package.json package-lock.json ./
+RUN npm ci
 
 # Keep versioned migrations in the build context explicitly. Runtime migrations
 # are deliberately explicit-only, but Prisma must be able to see their files.
@@ -20,7 +20,7 @@ ENV NODE_OPTIONS="--max-old-space-size=2048"
 RUN npm run build
 
 
-FROM node:20-alpine AS production
+FROM node:22-alpine AS production
 
 WORKDIR /app
 
