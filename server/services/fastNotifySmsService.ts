@@ -33,6 +33,7 @@ export function resolveGoftinoDisplayId(input: { metadata?: string | null; gofti
 }
 
 export async function dispatchTaskCreatedSms(task: CreatedTaskForSms): Promise<SmsDispatchResult> {
+  if (!process.env.FASTNOTIFY_API_KEY || !process.env.FASTNOTIFY_FROM) return 'configuration-missing';
   return dispatchTaskCreatedSmsCore(task, {
     settingFindMany: () => prisma.systemSetting.findMany({
       where: { key: { in: Object.values(FASTNOTIFY_SETTING_KEYS) } },

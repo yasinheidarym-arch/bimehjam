@@ -64,9 +64,12 @@ let goftinoLogsStore: GoftinoLogEntry[] = [
 ];
 
 async function startServer() {
+  if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+    throw new Error('JWT_SECRET is required in production');
+  }
   // Ensure SQLite database is healthy and WAL mode is active
-  await ensureDbReady();
-  await ensureSystemAiBehaviorRules();
+  if (!(await ensureDbReady())) throw new Error('Database is unavailable');
+  if (process.env.NODE_ENV !== 'production') await ensureSystemAiBehaviorRules();
 
   const app = express();
   const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;

@@ -19,6 +19,9 @@ let testSessionState = {
 };
 
 export async function handleGoftinoWebhook(req: Request, res: Response) {
+  if (process.env.NODE_ENV === 'production' && !process.env.GOFTINO_API_KEY) {
+    return res.status(503).json({ status: 'integration_disabled' });
+  }
   const requestTimestamp = new Date().toISOString();
   const clientIp = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.ip || req.socket.remoteAddress || 'unknown';
 

@@ -55,6 +55,17 @@ export async function ensureDbReady(): Promise<boolean> {
     return true;
   }
 
+  if (process.env.NODE_ENV === 'production') {
+    try {
+      await prisma.user.count();
+      globalForPrisma.dbInitialized = true;
+      return true;
+    } catch (error) {
+      console.error('Production database readiness check failed');
+      return false;
+    }
+  }
+
   try {
     // 1. Enable WAL mode & busy timeout for corruption prevention and concurrent safety
     try {
